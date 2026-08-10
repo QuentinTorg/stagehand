@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    echo "usage: $0 <pane-id> <base-ref> [head-ref]" >&2
+    exit 2
+fi
+
+pane_id=$1
+base_ref=$2
+head_ref=${3:-HEAD}
+
+workspace_id=${pane_id%%:*}
+pane_part=${pane_id#*:}
+if [ "$workspace_id" = "$pane_id" ]; then
+    echo "invalid Herdr pane ID: $pane_id" >&2
+    exit 2
+fi
+
+case "$workspace_id" in
+    w?*) ;;
+    *) echo "invalid Herdr pane ID: $pane_id" >&2; exit 2 ;;
+esac
+case "$pane_part" in
+    p?*) ;;
+    *) echo "invalid Herdr pane ID: $pane_id" >&2; exit 2 ;;
+esac
+case "$workspace_id$pane_part" in
+    *[!A-Za-z0-9_-]*) echo "invalid Herdr pane ID: $pane_id" >&2; exit 2 ;;
+esac
+
+# Restrict refs to ordinary Git reference characters before composing the
+# command string that Herdr sends to the managed terminal.
+case "$base_ref$head_ref" in
+    ''|*[!A-Za-z0-9._/@+-]*) echo "invalid Git comparison" >&2; exit 2 ;;
+esac
+case "$base_ref" in
+    -*) echo "invalid base ref: $base_ref" >&2; exit 2 ;;
+esac
+case "$head_ref" in
+    -*) echo "invalid head ref: $head_ref" >&2; exit 2 ;;
+esac
+
+# The pane must be created in the exact repository that owns the comparison.
+# Preflighting both commits prevents a containing meta-repository pane from
+# receiving a submodule comparison through unrestricted terminal repair.
+if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required to validate the Herdr pane before launching Hunk" >&2
+    exit 1
+fi
+
+pane_json=$(herdr pane get "$pane_id")
+pane_cwd=$(printf '%s\n' "$pane_json" | jq -er '.result.pane.cwd | select(type == "string" and length > 0)') || {
+    echo "could not resolve cwd for Herdr pane $pane_id" >&2
+    exit 1
+}
+
+if ! git -C "$pane_cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Hunk pane cwd is not a Git worktree: $pane_cwd" >&2
+    echo "create the Hunk tab with --cwd set to the recorded development target" >&2
+    exit 1
+fi
+
+if ! git -C "$pane_cwd" cat-file -e "$base_ref^{commit}" 2>/dev/null; then
+    echo "base ref $base_ref is not a commit in Hunk pane cwd: $pane_cwd" >&2
+    echo "create the Hunk tab with --cwd set to the recorded development target; do not repair it with raw pane input" >&2
+    exit 1
+fi
+
+if ! git -C "$pane_cwd" cat-file -e "$head_ref^{commit}" 2>/dev/null; then
+    echo "head ref $head_ref is not a commit in Hunk pane cwd: $pane_cwd" >&2
+    echo "create the Hunk tab with --cwd set to the recorded development target; do not repair it with raw pane input" >&2
+    exit 1
+fi
+
+exec herdr pane run "$pane_id" "hunk diff $base_ref...$head_ref"

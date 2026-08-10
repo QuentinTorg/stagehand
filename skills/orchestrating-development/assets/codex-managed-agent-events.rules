@@ -1,0 +1,65 @@
+# Managed authors and reviewers may identify their own pane, deliver semantic
+# events, and use the bounded Hunk session API. Other Herdr control and
+# destructive Hunk comment operations retain their normal approval policy.
+prefix_rule(
+    pattern = ["herdr", "pane", "current"],
+    decision = "allow",
+    justification = "Identify the managed agent's current Herdr pane without changing it.",
+    match = [
+        "herdr pane current",
+        "herdr pane current --current",
+    ],
+    not_match = [
+        "herdr pane get w2:p1",
+        "herdr pane focus w2:p1",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "agent", "prompt", "workflow_orchestrator"],
+    decision = "allow",
+    justification = "Deliver workflow events to the designated Herdr orchestrator.",
+    match = [
+        "herdr agent prompt workflow_orchestrator workflow-event",
+        "herdr agent prompt workflow_orchestrator {\"kind\":\"workflow-event\",\"task\":\"example\"}",
+    ],
+    not_match = [
+        "herdr agent prompt task_author workflow-event",
+        "herdr agent send-keys workflow_orchestrator enter",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "hunk",
+        "session",
+        ["list", "get", "context", "review", "navigate", "reload"],
+    ],
+    decision = "allow",
+    justification = "Inspect and control the workflow's private Hunk review session.",
+    match = [
+        "hunk session list --json",
+        "hunk session review session-123 --include-patch --json",
+        "hunk session navigate session-123 --next-comment",
+        "hunk session reload session-123 -- diff origin/main...HEAD",
+    ],
+    not_match = [
+        "hunk diff origin/main...HEAD",
+        "hunk session comment clear session-123 --all --yes",
+    ],
+)
+
+prefix_rule(
+    pattern = ["hunk", "session", "comment", ["add", "apply", "list"]],
+    decision = "allow",
+    justification = "Read and record private findings in the workflow's Hunk session.",
+    match = [
+        "hunk session comment list session-123 --type all",
+        "hunk session comment add session-123 --file src/app.cpp --new-line 42 --summary finding",
+        "hunk session comment apply session-123 --stdin",
+    ],
+    not_match = [
+        "hunk session comment rm session-123 comment-1",
+        "hunk session comment clear session-123 --all --yes",
+    ],
+)

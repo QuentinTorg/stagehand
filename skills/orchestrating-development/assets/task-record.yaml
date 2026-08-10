@@ -1,0 +1,95 @@
+# This record preserves coordination state without copying the author's detailed plan.
+version: 1
+task_id: "<stable-task-id>"
+display_name: "<short-human-readable-work-item-name>"
+mode: "development|reviewer-only"
+source:
+  kind: "github-issue|direct-request"
+  reference: "<issue-url-or-concise-request-reference>"
+  issue:
+    repository: null
+    number: null
+    url: null
+objective: "<human-authorized-outcome>"
+repository:
+  name: "<configured-repository-name>"
+  root: "<absolute-configured-repository-path>"
+  remote: "origin"
+  base: "<base-branch>"
+  base_commit: null
+  branch: "<feature-branch>"
+  worktree: "<absolute-task-worktree-path>"
+development_target:
+  kind: "root|submodule"
+  path: "."
+  remote: "origin"
+  base: "<pull-request-base-branch>"
+  base_commit: null
+  branch: "<feature-branch>"
+  containing_repository_pointer_update: "not-applicable|not-planned|planned"
+  ready: false
+workspace:
+  id: "<herdr-workspace-id>"
+  label: "<exact-current-herdr-sidebar-label>"
+  topology:
+    agents_tab: null
+    author_pane: null
+    reviewer_pane: null
+    hunk_tab: null
+    hunk_pane: null
+agents:
+  orchestrator: "workflow_orchestrator"
+  author: null
+  reviewer: null
+hunk:
+  session_id: null
+  base: "<base-ref>"
+pull_request:
+  url: null
+  draft_creation_authorized: true
+  finalized_head: null
+  merged: false
+post_review:
+  feedback_ref: null
+  change_class: null
+  prior_reviewed_head: null
+  prior_finalized_head: null
+  draft_required: false
+  returned_to_draft: false
+external_review:
+  proposed_head: null
+  conclusion: null
+  proposal_ref: null
+  publication_authorized: false
+  published_url: null
+scope:
+  version: 1
+  brief_ref: "<authoritative-brief-reference>"
+  revision_count: 0
+review:
+  rounds_this_scope: 0
+  rounds_total: 0
+  last_reviewed_head: null
+  finding_policy: "human-selection"
+limits:
+  max_rounds_per_scope: 3
+  max_rounds_total: 6
+  scope_revision_check_after: 2
+state:
+  name: "queued"
+  prior: null
+  decision_reason: null
+  # Durable controller detail; status dashboards do not render this field.
+  waiting_on: "<specific-actor-event-decision-check-or-dependency>"
+  attention_required: false
+  attention_reason: null
+event_recovery:
+  expected_role: null
+  expected_events: []
+  attempts: 0
+  last_attempt_reason: null
+cleanup:
+  eligible: false
+  requested_by: null
+  completed: false
+last_event: null

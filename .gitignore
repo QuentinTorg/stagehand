@@ -1,0 +1,15 @@
+# Private workspace configuration and mutable orchestration state.
+.local/
+.orchestrator/
+
+# Installation-specific skill links may contain absolute local paths.
+.codex/skills/
+
+# Workspace approval rules may contain machine- or repository-specific policy.
+.codex/rules/
+
+# External repositories cloned only for design research.
+references/
+
+# Herdr may leave a local marker named for the reserved orchestrator.
+workflow_orchestrator
