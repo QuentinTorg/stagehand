@@ -20,19 +20,17 @@ git check-ignore .local/AGENTS.md
 
 The command must identify a repository ignore rule. Stop and repair `.gitignore` if it does not.
 
-The orchestration host must provide Git and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there.
+The orchestration host must provide Git and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there. A fresh checkout already contains the portable relative link `.codex/skills/orchestrating-development`; verify that it resolves to `skills/orchestrating-development` instead of replacing it with a machine-specific link.
 
 ```sh
 mkdir -p /path/to/orchestration-workspace/.codex/skills ~/.codex/rules
-ln -s /absolute/path/to/orchestrating-development \
-  /path/to/orchestration-workspace/.codex/skills/orchestrating-development
 ln -s /absolute/path/to/herdr-skill \
   /path/to/orchestration-workspace/.codex/skills/herdr
 ln -s /absolute/path/to/orchestrating-development/assets/codex-managed-agent-events.rules \
   ~/.codex/rules/orchestrating-development-events.rules
 ```
 
-Replace the example paths with the actual orchestration workspace, Herdr skill, and `skills/orchestrating-development` locations. Refuse to replace a destination when it already exists until its ownership and target have been inspected. Do not install `orchestrating-development` globally; its repository-local placement prevents product agents from assuming the orchestrator role.
+Replace the example paths with the actual orchestration workspace and Herdr skill locations. Refuse to replace a destination when it already exists until its ownership and target have been inspected. Do not install `orchestrating-development` globally; its tracked repository-local link prevents product agents from assuming the orchestrator role.
 
 Install the managed-role skills individually where product-worktree agents can discover them:
 

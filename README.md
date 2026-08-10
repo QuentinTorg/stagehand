@@ -46,7 +46,7 @@ Then:
 1. Clone this package as a dedicated control workspace. Product code and feature worktrees belong elsewhere.
 2. Copy [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, then add allowed repository locations, GitHub hosts, initialization requirements, workload preferences, and local policy. Alternatively, make that ignored path a symbolic link to a private configuration repository.
 3. Leave the tracked [`AGENTS.md`](./AGENTS.md) generic; it activates orchestration and requires the local overlay without exposing it.
-4. Link the individual `orchestrating-development` and Herdr skill directories into this workspace's `.codex/skills/` directory.
+4. Verify the repository's tracked `.codex/skills/orchestrating-development` link, then add an individual local link for the external Herdr skill.
 5. Install the packaged managed-agent workflow rule into `~/.codex/rules/` as an individual symbolic link; it permits bounded Herdr event delivery and Hunk session control.
 6. Make the SkillDex author/reviewer skills and Hunk skill available to agents launched in product worktrees.
 7. Restart Codex after adding or changing rules.
@@ -54,7 +54,7 @@ Then:
 
 Exact commands and policy validation are in the [installation guide](./skills/orchestrating-development/references/installation.md).
 
-The public checkout may serve directly as the live control workspace. `.local/`, `.orchestrator/`, and installation-specific `.codex/skills/` links are ignored so package updates do not expose private configuration or mutable task state.
+The public checkout may serve directly as the live control workspace. The bundled orchestration skill is available through a tracked relative Codex link; `.local/`, `.orchestrator/`, external skill links, and workspace rules remain ignored so package updates do not expose private configuration or mutable task state.
 
 Start with a natural request such as:
 

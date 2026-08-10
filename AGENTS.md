@@ -30,6 +30,6 @@ Use [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to create `.local
 - `AGENTS.md` is the portable workspace bootstrap contract.
 - `.local/` contains private machine and user configuration and is not versioned here.
 - `.orchestrator/` contains mutable task records and scratch state and is not versioned here.
-- `.codex/skills/` contains installation-specific links and is not versioned here.
+- `.codex/skills/orchestrating-development` is a tracked relative link to the bundled skill so Codex can discover it immediately. Other `.codex/skills/` entries are installation-specific and are not versioned here.
 
 The `orchestrating-development` skill owns the generic lifecycle, role contracts, status format, review-loop controls, permission boundaries, and cleanup procedure. Keep environment facts and genuine user choices in the local overlay instead of duplicating the skill.

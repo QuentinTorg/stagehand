@@ -2,8 +2,10 @@
 .local/
 .orchestrator/
 
-# Installation-specific skill links may contain absolute local paths.
-.codex/skills/
+# The bundled orchestration skill link is portable; other skill links may
+# contain absolute installation-specific paths.
+.codex/skills/*
+!.codex/skills/orchestrating-development
 
 # Workspace approval rules may contain machine- or repository-specific policy.
 .codex/rules/

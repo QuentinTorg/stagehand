@@ -14,6 +14,8 @@ Run these cases manually with and without the skill. Record the selected skill, 
 | “Review PR #42 in Hunk.” | Do not trigger |
 | “Explain how Herdr orchestration could work.” | Do not trigger execution |
 
+Clone the orchestration package into a new path and assert that its tracked relative `.codex/skills/orchestrating-development` link resolves to the bundled skill without setup or an absolute path. Assert that external Herdr and product-role skills remain explicit installation dependencies and that the orchestration skill is not exposed globally.
+
 ## Behavior cases
 
 ### Planning is not completion
