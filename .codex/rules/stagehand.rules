@@ -1,0 +1,177 @@
+# Routine Herdr inspection is safe and does not interrupt managed work.
+prefix_rule(
+    pattern = ["herdr", "workspace", ["list", "get"]],
+    decision = "allow",
+    justification = "Inspect Herdr workspaces without changing them.",
+    match = ["herdr workspace list", "herdr workspace get w2"],
+)
+
+prefix_rule(
+    pattern = ["herdr", "worktree", "list"],
+    decision = "allow",
+    justification = "Inspect registered Git worktrees without changing them.",
+    match = [
+        "herdr worktree list --cwd /tmp/stagehand-example",
+        "herdr worktree list --workspace w2 --json",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "tab", ["list", "get"]],
+    decision = "allow",
+    justification = "Inspect Herdr tabs without changing them.",
+    match = ["herdr tab list --workspace w2", "herdr tab get w2:t1"],
+)
+
+prefix_rule(
+    pattern = ["herdr", "pane", ["list", "current", "get", "layout", "process-info", "read", "wait-output"]],
+    decision = "allow",
+    justification = "Inspect pane topology, processes, and output for managed work.",
+    match = [
+        "herdr pane list --workspace w2",
+        "herdr pane current --current",
+        "herdr pane get w2:p1",
+        "herdr pane layout --pane w2:p1",
+        "herdr pane process-info --pane w2:p1",
+        "herdr pane read w2:p1 --source recent-unwrapped --lines 120",
+        "herdr pane wait-output w2:p1 --match ready --timeout 120000",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "agent", ["list", "get", "read", "wait", "explain"]],
+    decision = "allow",
+    justification = "Inspect and wait on named managed agents.",
+    match = [
+        "herdr agent list",
+        "herdr agent get task_author",
+        "herdr agent read task_author --source recent-unwrapped --lines 120",
+        "herdr agent wait task_author --timeout 120000",
+        "herdr agent explain task_author --json",
+    ],
+)
+
+# These mutations are the bounded primitives used to provision authorized task
+# topology. Destructive cleanup and arbitrary terminal input remain gated below.
+prefix_rule(
+    pattern = ["herdr", "workspace", ["create", "rename"]],
+    decision = "allow",
+    justification = "Create and label explicitly authorized orchestration workspaces.",
+    match = [
+        "herdr workspace create --cwd /tmp/stagehand-example --label example --no-focus",
+        "herdr workspace rename w2 example-task",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "worktree", ["create", "open"]],
+    decision = "allow",
+    justification = "Create or reopen a Herdr-managed worktree for an authorized task.",
+    match = [
+        "herdr worktree create --cwd /tmp/stagehand-example --branch example-task --base origin/main --label example-task --no-focus --json",
+        "herdr worktree open --cwd /tmp/stagehand-example --branch example-task --label example-task --no-focus --json",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "tab", ["create", "rename"]],
+    decision = "allow",
+    justification = "Create and label tabs inside an authorized task workspace.",
+    match = [
+        "herdr tab create --workspace w2 --label hunk --no-focus",
+        "herdr tab rename w2:t1 agents",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "pane", ["split", "rename"]],
+    decision = "allow",
+    justification = "Create and label panes inside an authorized task workspace.",
+    match = [
+        "herdr pane split --pane w2:p1 --direction right --cwd /tmp/stagehand-example --no-focus",
+        "herdr pane rename w2:p1 author",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "agent", ["start", "prompt", "rename"]],
+    decision = "allow",
+    justification = "Start, name, and coordinate authorized author and reviewer agents.",
+    match = [
+        "herdr agent start task_author --kind codex --pane w2:p1",
+        "herdr agent prompt task_author plan --wait --timeout 120000",
+        "herdr agent rename w2:p1 task_author",
+    ],
+)
+
+# Hunk launch and agent interruption use validated repository scripts rather
+# than granting arbitrary remote terminal execution or input.
+prefix_rule(
+    pattern = ["./scripts/herdr-hunk-diff"],
+    decision = "allow",
+    justification = "Launch a validated non-watching Hunk comparison in a managed task pane.",
+    match = [
+        "./scripts/herdr-hunk-diff w2:p3 origin/main HEAD",
+        "./scripts/herdr-hunk-diff w2:p3 origin/main",
+    ],
+    not_match = ["herdr pane run w2:p3 hunk diff origin/main...HEAD"],
+)
+
+prefix_rule(
+    pattern = ["./scripts/herdr-interrupt-agent"],
+    decision = "allow",
+    justification = "Interrupt a managed agent without granting arbitrary terminal input.",
+    match = ["./scripts/herdr-interrupt-agent task_author"],
+    not_match = [
+        "herdr agent send-keys task_author enter",
+        "herdr agent send-keys task_author ctrl+c",
+    ],
+)
+
+# Raw terminal input and cleanup retain a human checkpoint because they can run
+# arbitrary commands, answer approval prompts, terminate processes, or remove data.
+prefix_rule(
+    pattern = ["herdr", "pane", ["run", "send-text", "send-keys", "close"]],
+    decision = "prompt",
+    justification = "Review raw terminal input and pane termination before execution.",
+    match = [
+        "herdr pane run w2:p3 hunk",
+        "herdr pane send-text w2:p1 command",
+        "herdr pane send-keys w2:p1 enter",
+        "herdr pane close w2:p3",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "agent", ["send-keys", "attach"]],
+    decision = "prompt",
+    justification = "Review interactive agent control that could answer prompts or take over a session.",
+    match = [
+        "herdr agent send-keys task_author enter",
+        "herdr agent attach task_author --takeover",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "workspace", "close"],
+    decision = "prompt",
+    justification = "Confirm workspace termination after validating task ownership and process state.",
+    match = ["herdr workspace close w2"],
+)
+
+prefix_rule(
+    pattern = ["herdr", "worktree", "remove"],
+    decision = "prompt",
+    justification = "Confirm worktree removal after validating Git and submodule state.",
+    match = [
+        "herdr worktree remove --workspace w2 --json",
+        "herdr worktree remove --workspace w2 --force --json",
+    ],
+)
+
+prefix_rule(
+    pattern = ["herdr", "server", "stop"],
+    decision = "forbidden",
+    justification = "Do not stop the shared Herdr server from an orchestration agent.",
+    match = ["herdr server stop"],
+)
