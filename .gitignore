@@ -9,7 +9,7 @@
 .codex/rules/
 
 # External repositories cloned only for design research.
-references/
+/references/
 
 # Herdr may leave a local marker named for the reserved orchestrator.
 workflow_orchestrator
