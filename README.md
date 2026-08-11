@@ -1,4 +1,4 @@
-# Agentic Development Workflow
+# Stagehand
 
 This package helps one developer coordinate coding agents without replacing ordinary team practices. A persistent author implements one focused change, an independent reviewer audits the complete pull request, and the human retains control of scope, review disposition, pull-request readiness, and merge.
 
