@@ -26,6 +26,20 @@ Every task requires explicit human authorization. Before starting it, compare it
 
 When tasks may modify the same contract, files, generated artifacts, submodule pointer, database schema, deployment surface, or shared build output, explain the likely conflict and recommend sequencing. Ask the human whether to wait or proceed; do not silently block an explicitly confirmed parallel task. Never solve overlap by putting two tasks into one workspace.
 
+## Herdr worktree-group safety
+
+Herdr groups a primary checkout's non-linked workspace with every linked worktree workspace sharing its repository identity. Closing that parent can terminate the entire group, including unrelated agents, while the CLI reports only success.
+
+For a worktree-backed task:
+
+1. Reconcile the existing canonical primary workspace and linked task workspaces.
+2. Run `herdr worktree create` once, using that primary workspace or confirmed checkout as the source.
+3. Parse and record the task workspace returned by Herdr.
+
+Do not create a provisional workspace at the primary checkout, create a second non-linked parent, or use `herdr workspace close` during provisioning or cleanup. Never use pane or tab closure to bypass that prohibition when it would close a non-linked workspace. If a duplicate parent or mistaken workspace is created, preserve it, stop further topology changes, and ask the human; do not assume it can be closed independently.
+
+After any unexpected workspace-group closure, stop new work and inventory surviving Git worktrees, durable task records, and exact prior agent session identities before recovery. Prefer the supported resume path when an exact Codex session remains recoverable. A fresh agent is a replacement, not a resumed session, and must be reported as such rather than silently substituted.
+
 ## Permission handling
 
 The installed managed-agent workflow rule may automatically allow caller-pane discovery, semantic event delivery to `workflow_orchestrator`, and the bounded Hunk session operations documented by the installation guide. The orchestration workspace may additionally authorize its validated Hunk launcher and interrupt-only wrapper. These permissions do not authorize arbitrary pane input, approval keys, comment deletion, or destructive commands.
@@ -76,7 +90,7 @@ Selected post-readiness feedback authorizes only its bounded resolution. Returni
 
 ## Cleanup authority
 
-A verified merge or explicit human request authorizes cleanup of that task's workspace and worktree. It does not authorize PR closure, branch deletion, or data loss. Before removal, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
+A verified merge or explicit human request authorizes cleanup of that task's linked workspace and worktree through `herdr worktree remove`. It does not authorize `herdr workspace close`, primary-workspace closure, PR closure, branch deletion, or data loss. Before removal, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
 
 1. **Each initialized submodule:** no tracked or untracked changes; all target commits durably recoverable from the recorded remote branch, PR, merge, or explicit reference; non-targets at their expected pins; no process with state that must survive.
 2. **The containing repository:** no tracked or untracked changes except the recorded target's gitlink difference when `containing_repository_pointer_update: not-planned` and the target passed the first audit. Preserve planned or ambiguous pointer updates.

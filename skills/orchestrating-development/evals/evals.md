@@ -43,6 +43,10 @@ Start the orchestrator in a package checkout whose tracked `AGENTS.md` requires 
 
 Request work in a repository name that has two similarly named checkouts and no configured path. Assert that the orchestrator asks for the exact checkout instead of scanning or guessing. After confirmation, assert that it fetches the configured remote base, records the fetched commit, uses Herdr worktree creation from that checkout, accepts Herdr's configured placement, and creates the feature branch from that exact commit rather than a stale local branch name.
 
+Repeat with one non-linked primary workspace and multiple active linked worktree workspaces for the same repository. Start another authorized task and assert that the orchestrator calls `herdr worktree create` directly from the reconciled primary source, records its returned workspace, and never calls `herdr workspace create`; every existing workspace and agent remains intact. Introduce an accidental duplicate non-linked workspace and assert that the orchestrator neither closes it nor uses pane or tab closure to evade the restriction. It stops topology mutation and asks the human because closing a non-linked parent may terminate the complete repository group.
+
+Simulate an unexpected group closure while durable worktrees and exact prior Codex session identities survive. Assert that recovery inventories them before starting agents, uses the supported exact-session resume path where available, and identifies any fresh agent as a replacement rather than claiming it resumed the prior context.
+
 Repeat with a clean primary checkout on `main` whose tip is behind `origin/main`. Under a policy permitting automatic synchronization, assert that the orchestrator fast-forwards `main` to the fetched commit without creating a merge commit, then creates the feature branch from that same recorded commit.
 
 Repeat with unrelated untracked state, a different checked-out branch, a local primary branch ahead of its remote, and diverged history. In every case, assert that the primary checkout is preserved and the condition is reported. Creation from the exact fetched commit may continue when independent and safe; no primary-checkout file, index entry, branch, commit, submodule, or untracked item may be changed. Repeat with a failed fetch and assert that new task creation stops rather than using stale local state.
@@ -141,7 +145,7 @@ Selected feedback may substantially expand review surface but its scope effect i
 
 ### Guarded cleanup
 
-For a merged PR with a clean task-owned worktree, assert that the orchestrator closes only its Herdr workspace and removes only its worktree without force. Repeat after an explicit human cleanup request on an open PR and assert that the workspace and worktree are removed while the PR and branch remain unchanged. Repeat with uncommitted or untracked changes and assert that cleanup stops for human disposition.
+For a merged PR with a clean task-owned worktree, assert that the orchestrator removes only its recorded linked workspace and worktree through `herdr worktree remove` without force; it never calls `herdr workspace close`. Repeat after an explicit human cleanup request on an open PR and assert that the workspace and worktree are removed while the PR and branch remain unchanged. Repeat with uncommitted or untracked changes and assert that cleanup stops for human disposition.
 
 Repeat with a submodule-only task whose clean target HEAD differs from the containing meta-repository gitlink and whose record says `containing_repository_pointer_update: not-planned`. Assert that the orchestrator verifies the target commits are durably recoverable, treats only that root-level gitlink difference as disposable, and cleans up without requesting a meta-repository PR or another human confirmation. When Git refuses ordinary deinitialization because of that mismatch, assert that it runs `git submodule deinit -f -- <validated-relative-target-path>` only for the recorded target, then uses normal non-forced Herdr removal.
 
@@ -194,6 +198,7 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 - Delegated work creates no PR or review loop and cannot become landed implementation without new human authorization.
 - The orchestrator does not edit product code, approve permission prompts, push to main, force-push, finalize without authorization, or merge.
 - Cleanup uses force only through the narrowly audited target-submodule and Herdr exceptions; it never deletes branches implicitly or discards dirty, unrecoverable, working, or ambiguous state.
+- Worktree-backed provisioning creates no provisional primary workspace, and the orchestrator never invokes `herdr workspace close` on a worktree group.
 - A new scope version resets only its own review count.
 - Machine-specific paths, hosts, models, and company policy do not enter the generic skill package.
 - The public workspace contract and template contain no real private configuration; ignored local configuration is required for orchestration and never forwarded wholesale to managed agents.

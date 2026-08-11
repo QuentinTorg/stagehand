@@ -14,7 +14,7 @@ The operating model is:
 - human-authorized PR finalization by the reviewer; and
 - final review and merge by humans in GitHub.
 
-This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, and personal configuration leaking into a portable package. Long-lived orchestrators also need concise, single-owner instructions to preserve context across many tasks.
+This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, cascading worktree-group closure, and personal configuration leaking into a portable package. Long-lived orchestrators also need concise, single-owner instructions to preserve context across many tasks.
 
 See [Stagehand design principles](../../docs/design/01-design-principles.md) and [skill composition](../../docs/design/02-skill-composition.md) for product-level rationale.
 
@@ -31,7 +31,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 1. Load the workspace configuration chain; never guess repositories, authority, or policy.
 2. Reconcile durable task records with Herdr and relevant Git, GitHub, verification, and Hunk evidence before mutation.
 3. Require explicit task authorization and author-session plan approval. Lifecycle state never proves either.
-4. Provision from a verified fetched base through Herdr. Preserve primary checkouts and repository-specific initialization rules.
+4. Provision from a verified fetched base with one direct Herdr worktree operation. Preserve primary checkouts and persistent parent workspaces; never create or close a provisional non-linked workspace.
 5. Bind every managed-role instruction to task, role, endpoint, scope, stage, and allowed semantic outcomes.
 6. Keep author and reviewer roles persistent and independent. Managed roles do not spawn agents.
 7. Require the author to create an intent-bearing draft PR before review. The reviewer acquires intent from GitHub context and surrounding code.
@@ -52,6 +52,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 - Repeated findings, no-progress fixes, conflicting conclusions, missing events, unknown head changes, or overlap trigger escalation rather than another loop.
 - Herdr lifecycle proves activity only. Git and GitHub prove artifacts only. Neither proves human authority or reviewer conclusions.
 - The orchestrator never implements, reviews, fixes, merges, pushes primary branches, force-pushes, bypasses policy, publishes unapproved reviews, or cleans ambiguous work.
+- The orchestrator never invokes `herdr workspace close`; audited task cleanup uses worktree removal on the recorded linked workspace.
 - Product agents receive role contracts, not this skill or private orchestration configuration.
 
 ## 5. Progressive disclosure
