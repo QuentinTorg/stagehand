@@ -37,7 +37,9 @@ The two rule files have different consumers and installation scopes:
 - `.codex/rules/herdr.rules` is tracked in this workspace and grants the orchestrator bounded Herdr inspection and task-management operations.
 - `assets/codex-managed-agent-events.rules` is linked into `~/.codex/rules/` and grants managed authors and reviewers only event delivery, caller-pane discovery, and bounded Hunk operations.
 
-Install the managed-role skills individually where product-worktree agents can discover them:
+## Managed-role skills
+
+Stagehand does not vendor its managed-role skills. Clone [SkillDex](https://github.com/QuentinTorg/skilldex) and [Hunk](https://github.com/modem-dev/hunk), then install the required skill directories individually where product-worktree agents can discover them:
 
 ```sh
 mkdir -p ~/.codex/skills
@@ -47,7 +49,13 @@ ln -s /absolute/path/to/skilldex/skills/reviewing-code ~/.codex/skills/reviewing
 ln -s /absolute/path/to/hunk/skills/hunk-review ~/.codex/skills/hunk-review
 ```
 
-`writing-specifications` is optional for changes that benefit from architectural design before authoring. Do not install superseded feedback or review skills merely because they share the same source repository.
+The SkillDex `writing-specifications` skill is optional for changes that benefit from architectural design before authoring:
+
+```sh
+ln -s /absolute/path/to/skilldex/skills/writing-specifications ~/.codex/skills/writing-specifications
+```
+
+Refuse to replace an existing destination before inspecting it. Do not install superseded feedback or review skills merely because they share the same source repository.
 
 Reserve the Herdr name `workflow_orchestrator` for exactly one live orchestration agent. Before starting or naming it, run `herdr agent list` and inspect any existing owner. Reuse the intended live owner. If the name belongs to a stale, maintenance, or ambiguous session, inspect its pane, session identity, recent output, and active task records; obtain human direction before clearing or reassigning the name. Do not work around a collision by teaching managed agents a pane ID because pane IDs are session-local transport details rather than the stable endpoint.
 

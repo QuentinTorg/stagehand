@@ -21,16 +21,16 @@ Agents notify the orchestrator through small Herdr workflow events. The orchestr
 
 The workflow composes focused skills rather than loading one large instruction set into every agent:
 
-| Skill | Used by | Responsibility |
-| --- | --- | --- |
-| `orchestrating-development` | Orchestrator | Own task state, Herdr topology, handoffs, limits, and human checkpoints. |
-| `preparing-pull-requests` | Author or authorized reviewer | Create the intent-bearing draft or finalize an approved reviewed head. |
-| `reviewing-code` | Reviewer | Perform an independent phased review of the complete changeset. |
-| `resolving-findings` | Original author | Resolve only selected in-scope findings and return the change for rereview. |
-| `hunk-review` | Reviewer | Record and manage private inline feedback in Hunk. |
-| `writing-specifications` | Human and author, when useful | Develop architectural intent before implementation; it is not required for every change. |
+| Skill | Source | Used by | Responsibility |
+| --- | --- | --- | --- |
+| `orchestrating-development` | Bundled with Stagehand | Orchestrator | Own task state, Herdr topology, handoffs, limits, and human checkpoints. |
+| `preparing-pull-requests` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Author or authorized reviewer | Create the intent-bearing draft or finalize an approved reviewed head. |
+| `reviewing-code` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Reviewer | Perform an independent phased review of the complete changeset. |
+| `resolving-findings` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Original author | Resolve only selected in-scope findings and return the change for rereview. |
+| `hunk-review` | [Hunk](https://github.com/modem-dev/hunk) | Reviewer | Record and manage private inline feedback in Hunk. |
+| `writing-specifications` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Human and author, when useful | Develop architectural intent before implementation; it is not required for every change. |
 
-The companion author and reviewer skills live in [SkillDex](https://github.com/QuentinTorg/skilldex). This package owns `orchestrating-development` and its Herdr integration; keep those orchestration-only skills local to the dedicated control workspace so product agents do not assume the orchestrator role.
+Stagehand does not vendor the SkillDex or Hunk skills. Install their skill directories individually so agents in product worktrees can discover them; do not link either repository's entire skills directory. This package owns `orchestrating-development` and its Herdr integration, which remain local to the dedicated control workspace so product agents do not assume the orchestrator role.
 
 ## Quick setup
 
@@ -48,7 +48,7 @@ Then:
 3. Leave the tracked [`AGENTS.md`](./AGENTS.md) generic; it activates orchestration and requires the local overlay without exposing it.
 4. Keep the tracked repository-local `orchestrating-development` skill link and Herdr rule in place, and link the separately installed Herdr skill into this workspace's `.codex/skills/` directory.
 5. Install the packaged managed-agent workflow rule into `~/.codex/rules/` as an individual symbolic link; unlike the workspace rule, it permits authors and reviewers in product worktrees to deliver bounded events and use Hunk session controls.
-6. Make the SkillDex author/reviewer skills and Hunk skill available to agents launched in product worktrees.
+6. Install the individual [managed-role skills](./skills/orchestrating-development/references/installation.md#managed-role-skills) from SkillDex and Hunk for agents launched in product worktrees.
 7. Restart Codex after adding or changing rules.
 8. Check that no other live agent owns the reserved name, then start the single active orchestration controller as `workflow_orchestrator`. Maintenance agents in this repository must use another name or remain unnamed.
 
