@@ -1,6 +1,6 @@
-# Orchestrating Development Evals
+# Manual Acceptance Scenarios
 
-Run these cases manually with and without the skill. Record the selected skill, actions proposed or taken, spawned processes, state transitions, and whether every assertion passed. Keep baseline transcripts because the failures—not stylistic differences—should drive revisions.
+These scenarios are the skill's human-run evaluation suite, not an automated test harness. Run them manually with and without the skill. Record the selected skill, actions proposed or taken, spawned processes, state transitions, and whether every assertion passed. Keep baseline transcripts because the failures—not stylistic differences—should drive revisions.
 
 ## Trigger cases
 
