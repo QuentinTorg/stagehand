@@ -39,7 +39,7 @@ Prerequisites:
 - Codex, Git, `jq`, and GitHub CLI authentication;
 - Herdr installed and running;
 - Hunk installed; and
-- a SkillDex checkout containing the companion skills above.
+- a SkillDex checkout containing `preparing-pull-requests`, `reviewing-code`, and `resolving-findings`; `writing-specifications` is optional.
 
 Then:
 
