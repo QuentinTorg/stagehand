@@ -78,13 +78,9 @@ The orchestrator does not need the detailed plan. Retain only the task brief, ap
 
 Managed agents prompt `workflow_orchestrator` with semantic events. Validate every event against the task record, expected role, repository, branch, PR, scope version, and current head before transitioning.
 
-Every orchestrator-to-role instruction must begin with a newly rendered control block. Populate its stage and allowed events from the same task-record transition expectation used for validation. Never rely on the startup prompt, recent conversation, or the agent's memory to preserve routing identity across long turns.
+Every orchestrator-to-role instruction must begin with a newly rendered control block populated from the same task-record transition expectation used for event validation. Persist the expected role and allowed success or blocker events; never rely on conversational memory or permit a role to invent event names.
 
-For every agent-owned transition, persist the expected role and allowed success or blocker events in the task record. A role failure is itself an expected semantic outcome: authors send `needs-human`, reviewers send `review-needs-human`, and neither role invents stage-specific failure event names.
-
-Event delivery shares the orchestrator's interactive input with the human and may append event JSON to a human draft that is being typed. Apply the shared-input collision recovery procedure in [Workflow State and Events](references/workflow-state.md): separate complete trailing events from the human prefix, process both, and let conflicting human direction take precedence. Never advance from partial or ambiguously interleaved event JSON.
-
-Use Herdr state, recent output, and cheap durable-artifact checks to diagnose missing events, stage drift, and blockers. Apply the bounded furthest-proven-state reconciliation procedure in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Catch up atomically when every skipped authority gate and artifact invariant is proven; otherwise request one current-boundary event or return the ambiguity to the human. Never wait indefinitely, replay obsolete handoffs, repeatedly pump a role, or let lifecycle override contradictory durable evidence.
+Apply the shared-input collision and bounded furthest-proven-state reconciliation procedures in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Use Herdr lifecycle only to target investigation, validate every skipped authority and artifact boundary, and return ambiguity to the human rather than waiting indefinitely or replaying obsolete handoffs.
 
 Between active orchestrator turns, rely on explicit agent events plus Herdr's visible status and notifications; do not create an unbounded polling or cron loop inside the agent. A failed event delivery cannot wake an idle orchestrator, so this version detects silent failures on the orchestrator's next invocation. Use bounded waits only when the user explicitly asks the orchestrator to remain attached and monitor.
 
@@ -138,16 +134,9 @@ Never merge, enable auto-merge, begin another unauthorized task, or treat readin
 
 ### 11. Reenter review after human feedback
 
-Human-selected feedback after `review-passed` or `pull-request-finalized` returns the development task to the original author-reviewer loop. Accept feedback from Herdr, GitHub, or another recoverable surface only when the human identifies the selected set; visible comments alone are not authorization.
+Human-selected feedback after `review-passed` or `pull-request-finalized` returns the task to the original author-reviewer loop. Follow the post-review transition in [Workflow State and Events](references/workflow-state.md) and the role boundaries in [Managed Agent Contracts](references/agent-contracts.md): bind only the selected feedback, invalidate prior reviewed and finalized heads, classify the change as `small-fix` or `material`, and apply the configured draft-state policy without transferring readiness ownership to the orchestrator or author.
 
-If the human instructs the orchestrator, bind the feedback reference and prompt the author. If the human instructs the author directly, require `post-review-changes-started`. In either case, record the prior reviewed and finalized heads, clear both as current authority, reject any concurrently arriving finalization as stale, and classify the requested change:
-
-- `small-fix` preserves confirmed intent and creates limited review surface; keep review counters and follow any configured ready-state policy.
-- `material` changes feature behavior, scope, architecture, compatibility, or creates substantial new review surface; increment the scope version and reset only its review counter.
-
-Use a standing workspace policy for whether each class returns the pull request to draft; otherwise ask the human. When draft return is required, direct the persistent reviewer under that authority to change only draft state and require `pull-request-returned-to-draft` before author implementation proceeds. Do not make the orchestrator or author own pull-request readiness.
-
-Route the selected set to the original author under the finding-resolution contract. GitHub replies and thread resolution remain separate explicit actions. On validated `fixes-ready`, reload Hunk against the recorded base and new head, then require the same reviewer to perform a complete base-to-head rereview. A passing new head requires human-authorized finalization again, even if the pull request remained ready throughout the small fix.
+Route the selected set through the finding-resolution contract. Any new head requires a complete rereview by the same reviewer and new human-authorized finalization; GitHub replies and thread resolution remain separate explicit actions.
 
 ### 12. Clean up task resources
 
