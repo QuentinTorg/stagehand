@@ -1,4 +1,4 @@
-# Agentic Development Workflow
+# Stagehand
 
 This package helps one developer coordinate coding agents without replacing ordinary team practices. A persistent author implements one focused change, an independent reviewer audits the complete pull request, and the human retains control of scope, review disposition, pull-request readiness, and merge.
 
@@ -21,16 +21,16 @@ Agents notify the orchestrator through small Herdr workflow events. The orchestr
 
 The workflow composes focused skills rather than loading one large instruction set into every agent:
 
-| Skill | Used by | Responsibility |
-| --- | --- | --- |
-| `orchestrating-development` | Orchestrator | Own task state, Herdr topology, handoffs, limits, and human checkpoints. |
-| `preparing-pull-requests` | Author or authorized reviewer | Create the intent-bearing draft or finalize an approved reviewed head. |
-| `reviewing-code` | Reviewer | Perform an independent phased review of the complete changeset. |
-| `resolving-findings` | Original author | Resolve only selected in-scope findings and return the change for rereview. |
-| `hunk-review` | Reviewer | Record and manage private inline feedback in Hunk. |
-| `writing-specifications` | Human and author, when useful | Develop architectural intent before implementation; it is not required for every change. |
+| Skill | Source | Used by | Responsibility |
+| --- | --- | --- | --- |
+| `orchestrating-development` | Bundled with Stagehand | Orchestrator | Own task state, Herdr topology, handoffs, limits, and human checkpoints. |
+| `preparing-pull-requests` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Author or authorized reviewer | Create the intent-bearing draft or finalize an approved reviewed head. |
+| `reviewing-code` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Reviewer | Perform an independent phased review of the complete changeset. |
+| `resolving-findings` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Original author | Resolve only selected in-scope findings and return the change for rereview. |
+| `hunk-review` | [Hunk](https://github.com/modem-dev/hunk) | Reviewer | Record and manage private inline feedback in Hunk. |
+| `writing-specifications` | [SkillDex](https://github.com/QuentinTorg/skilldex) | Human and author, when useful | Develop architectural intent before implementation; it is not required for every change. |
 
-The companion author and reviewer skills live in [SkillDex](https://github.com/QuentinTorg/skilldex). This package owns `orchestrating-development` and its Herdr integration; keep those orchestration-only skills local to the dedicated control workspace so product agents do not assume the orchestrator role.
+Stagehand does not vendor the SkillDex or Hunk skills. Install their skill directories individually so agents in product worktrees can discover them; do not link either repository's entire skills directory. This package owns `orchestrating-development` and its Herdr integration, which remain local to the dedicated control workspace so product agents do not assume the orchestrator role.
 
 ## Quick setup
 
@@ -39,22 +39,22 @@ Prerequisites:
 - Codex, Git, `jq`, and GitHub CLI authentication;
 - Herdr installed and running;
 - Hunk installed; and
-- a SkillDex checkout containing the companion skills above.
+- a SkillDex checkout containing `preparing-pull-requests`, `reviewing-code`, and `resolving-findings`; `writing-specifications` is optional.
 
 Then:
 
 1. Clone this package as a dedicated control workspace. Product code and feature worktrees belong elsewhere.
 2. Copy [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, then add allowed repository locations, GitHub hosts, initialization requirements, workload preferences, and local policy. Alternatively, make that ignored path a symbolic link to a private configuration repository.
 3. Leave the tracked [`AGENTS.md`](./AGENTS.md) generic; it activates orchestration and requires the local overlay without exposing it.
-4. Link the individual `orchestrating-development` and Herdr skill directories into this workspace's `.codex/skills/` directory.
-5. Install the packaged managed-agent workflow rule into `~/.codex/rules/` as an individual symbolic link; it permits bounded Herdr event delivery and Hunk session control.
-6. Make the SkillDex author/reviewer skills and Hunk skill available to agents launched in product worktrees.
+4. Keep the tracked repository-local `orchestrating-development` skill link and Herdr rule in place, and link the separately installed Herdr skill into this workspace's `.codex/skills/` directory.
+5. Install the packaged managed-agent workflow rule into `~/.codex/rules/` as an individual symbolic link; unlike the workspace rule, it permits authors and reviewers in product worktrees to deliver bounded events and use Hunk session controls.
+6. Install the individual [managed-role skills](./skills/orchestrating-development/references/installation.md#managed-role-skills) from SkillDex and Hunk for agents launched in product worktrees.
 7. Restart Codex after adding or changing rules.
 8. Check that no other live agent owns the reserved name, then start the single active orchestration controller as `workflow_orchestrator`. Maintenance agents in this repository must use another name or remain unnamed.
 
 Exact commands and policy validation are in the [installation guide](./skills/orchestrating-development/references/installation.md).
 
-The public checkout may serve directly as the live control workspace. `.local/`, `.orchestrator/`, and installation-specific `.codex/skills/` links are ignored so package updates do not expose private configuration or mutable task state.
+The public checkout may serve directly as the live control workspace. `.local/`, `.orchestrator/`, and installation-specific Codex entries are ignored, while the portable orchestration skill link and workspace Herdr rule are tracked.
 
 Start with a natural request such as:
 
@@ -77,9 +77,9 @@ GitHub remains the collaboration boundary. The workflow never pushes to the prim
 
 ## More detail
 
-- [Workflow overview](./docs/design/01-workflow-overview.md)
-- [Human workflow](./docs/design/05-human-workflow.md)
+- [Design principles](./docs/design/01-design-principles.md)
+- [Skill composition](./docs/design/02-skill-composition.md)
 - [Orchestration skill](./skills/orchestrating-development/SKILL.md)
+- [Orchestration skill specification](./skills/.specs/orchestrating-development-spec.md)
 - [Workflow state and events](./skills/orchestrating-development/references/workflow-state.md)
 - [Safety and escalation](./skills/orchestrating-development/references/safety-and-escalation.md)
-- [Design decisions and open questions](./docs/design/90-decisions-and-open-questions.md)

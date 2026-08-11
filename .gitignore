@@ -2,14 +2,18 @@
 .local/
 .orchestrator/
 
-# Installation-specific skill links may contain absolute local paths.
-.codex/skills/
-
-# Workspace approval rules may contain machine- or repository-specific policy.
-.codex/rules/
+# Codex state is local by default. Track only Stagehand's portable skill link
+# and generic Herdr policy; the directory exceptions let Git reach those files.
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/orchestrating-development
+!.codex/rules/
+.codex/rules/*
+!.codex/rules/herdr.rules
 
 # External repositories cloned only for design research.
-references/
+/references/
 
 # Herdr may leave a local marker named for the reserved orchestrator.
 workflow_orchestrator

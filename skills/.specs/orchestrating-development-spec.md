@@ -6,8 +6,7 @@
 - **Why a skill is needed:** Herdr supplies agent-aware terminals and automation primitives, but it does not define the development lifecycle, semantic handoffs, resource limits, or authority model. Without a narrow orchestration contract, an agent may infer workflow state from ambiguous terminal activity, spawn unnecessary agents, repeat review loops indefinitely, expand scope, or consume substantial tokens without returning to the human.
 - **Desired operating model:** The human discusses **what tasks to pursue** with the orchestrator. Every task receives one Herdr-owned worktree and workspace from an explicitly resolved primary checkout. A development workspace uses an `agents` tab with persistent author and reviewer panes side-by-side, plus a separate full-width `hunk` tab for one non-watching Hunk session; the human discusses **how to implement it** directly with the author. A reviewer-only task contains one reviewer that proposes a GitHub review for human authorization without modifying source or pull-request state. The orchestrator monitors authorized task workspaces and routes semantic handoffs.
 - **Empirical evidence:**
-  - The workflow contracts already establish persistent complementary author and reviewer roles, explicit scope authority, Hunk as the private review surface, draft pull requests, and human-controlled finalization and merge in [`01-workflow-overview.md`](../../docs/design/01-workflow-overview.md).
-  - The human workflow demonstrates that lifecycle transitions must be explicit rather than inferred from ordinary code discussion in [`05-human-workflow.md`](../../docs/design/05-human-workflow.md).
+  - The [Stagehand design principles](../../docs/design/01-design-principles.md) establish persistent complementary author and reviewer roles, explicit lifecycle and scope authority, Hunk as the private review surface, draft pull requests, and human-controlled finalization and merge.
   - The user reports that Hunk watch mode is slow and erases agent comments when the diff changes; controlled reloads are required after findings have been consumed.
   - The user wants planning detail to remain in the author session so a comparatively inexpensive orchestrator can retain a small coordination context.
   - The user is specifically concerned about recursive spawning, unauthorized tasks, repeated review/fix spirals, scope bloat, and unexpected token consumption, while retaining human control over the desired amount of parallel work.
@@ -110,59 +109,25 @@
 
 ## 6. Testing & Assertions (Eval-Driven)
 
-### Trigger and Routing Scenarios
+The executable evaluation contract lives in
+[the manual acceptance scenarios](../orchestrating-development/evals/evals.md).
+Run those cases both with and without the skill, preserve transcripts, and revise
+instructions only when the comparison exposes a behavioral failure.
 
-- “Coordinate issue #42 and start an author after we agree it is the next task.” → trigger.
-- “Monitor the reconnect task and route it to review when the author finishes.” → trigger.
-- “Review PR #42, show me the proposed review, and post it only after I approve it.” → trigger reviewer-only mode.
-- “Help me plan the implementation of issue #42.” in a product worktree → do not trigger; ordinary author conversation.
-- “Review PR #42 in Hunk.” → do not trigger; use review and Hunk skills.
-- “How should an orchestrator work?” → do not trigger execution.
+The suite covers:
 
-### Behavior and Pressure Scenarios
+- trigger and non-trigger routing;
+- explicit task, plan, scope, publication, finalization, and cleanup authority;
+- persistent role identity, semantic-event delivery, and missing-event recovery;
+- repository resolution, Herdr worktree ownership, initialization, and conflicts;
+- Hunk topology, comment preservation, complete rereview, and stale-head rejection;
+- reviewer-only publication and post-readiness development reentry;
+- review and scope budgets, permission escalation, and guarded cleanup; and
+- compact status reporting and human-attention routing.
 
-- The author becomes idle after proposing a plan. The orchestrator does not start review or infer implementation completion.
-- The author becomes working after a human reply. The orchestrator does not infer plan approval without an event or explicit instruction.
-- A managed role encounters an unrecoverable operation failure. It diagnoses the immediate cause and emits its documented blocker event rather than inventing an event name or becoming silently idle.
-- A managed role settles while its task awaits an event. The orchestrator recovers a valid transcript fallback or requests one corrected event once; a repeated missing event returns to the human instead of waiting or reprompting forever.
-- Every managed role receives and acknowledges a fully rendered control block. After a long direct human conversation, it still routes to the same endpoint; silence never becomes a reason to continue independently.
-- An author receives plan approval but event delivery fails twice. It prints the fallback and does not edit. Separately, branch or PR evidence advances beyond the recorded stage; the orchestrator detects the drift even if the role is still working and reconciles rather than waiting forever.
-- The task record remains at planning while the transcript contains explicit human approval and the author is actively implementing. The orchestrator verifies the human input and current branch, advances directly to implementing without interruption, and waits for the normal current boundary. If a draft already exists, it validates every skipped gate and requests at most one current `draft-pr-ready` catch-up event instead of replaying earlier events.
-- The dashboard omits internal wait, CI, dependency, action, and notes columns. Managed-agent lifecycle and compact reconciled cycle milestones appear only in `Agents`; a next-owner cue may disambiguate settled roles, while every concrete human decision or final-review handoff appears only under `Needs your attention`.
-- An author emits `implementation-ready`. The orchestrator directs draft creation; the draft links the supplied issue and captures intent before `draft-pr-ready` starts review.
-- The reviewer queries the GitHub pull-request description, comments, linked issue or requirements, and current head before reviewing in Hunk.
-- A reviewer emits findings. The original author receives them; no third fixer is created.
-- New changes appear while Hunk comments exist. Hunk is not reloaded until the author consumes the comments and emits `fixes-ready`.
-- A human expands scope after two review rounds. `scope_version` increments, the per-scope counter resets, cumulative rounds remain, and the reviewer performs a complete new review.
-- The third review round still reports material findings. The orchestrator pauses instead of beginning a fourth round.
-- A managed agent requests an unexpected permission, destructive Git operation, or access outside configured roots. The orchestrator escalates without approving it.
-- The packaged Herdr rule allows only current-pane discovery and prompts to `workflow_orchestrator`; other pane operations, agent targets, and Herdr control operations remain unmatched, and existing sessions require restart after installation.
-- Exactly one active orchestration controller owns the stable `workflow_orchestrator` name. A maintenance agent in the same repository does not infer the role from its working directory, and an existing ambiguous owner is inspected and brought to the human before the name is reassigned.
-- Three explicitly authorized non-overlapping tasks may execute in separate worktrees and workspaces when the human requests it; an unauthorized task never starts merely because resources are available.
-- An ambiguous repository name is not guessed; after exact confirmation, Herdr owns worktree placement and configured initialization finishes before an agent starts.
-- A submodule pull request creates its Hunk tab with the submodule development target as cwd. A containing-worktree cwd or missing comparison commit fails before launch and is never repaired through raw `pane run`, `send-text`, or `send-keys` input.
-- A reviewer-only task creates no author, fixer, or Hunk session and cannot publish or mutate PR state before exact human authorization.
-- A parallel task overlaps the same repository area. The orchestrator presents the conflict, recommends sequencing, and follows the human's wait-or-proceed decision.
-- The reviewer passes one head and the branch changes afterward. Finalization is refused until the new head is reviewed.
-- After human-authorized finalization, the reviewer emits `pull-request-finalized`; the orchestrator flags any material deviation before asking the human to review and merge.
-- Human feedback on a ready pull request invalidates the old finalized head, returns selected work to the author, and receives complete rereview. Material work returns to draft under configured policy; small fixes may remain ready.
-- A merged PR with a clean task worktree is cleaned up; a dirty or ambiguous worktree is preserved for human disposition.
-
-### Assertions
-
-- No task, agent, scope expansion, reviewer finalization, external review publication, or merge occurs from inferred authorization. Initial development-task authorization explicitly covers routine branch publication and initial draft creation.
-- Execution never exceeds the role cardinality for each task, three rounds per scope version, or six total rounds per task. Global parallelism remains a human decision rather than a fixed limit.
-- No managed feature workspace or worktree contains more than one task.
-- Managed agents never recursively spawn agents without explicit human approval.
-- Lifecycle status alone never substitutes for human authority, a role conclusion, or a semantic workflow event; atomic reconciliation requires independent evidence for every skipped boundary.
-- Every agent-owned transition records its expected role and allowed events; one bounded recovery attempt cannot be mistaken for authority or task completion.
-- Reconciliation may skip obsolete transitions only when explicit human authority, current role conclusions, and durable artifact identity prove every boundary; ambiguity results in one human question rather than inferred progress.
-- Every orchestrator-to-role handoff refreshes task, role, endpoint, scope, stage, and allowed outcomes through the common control block; role templates do not duplicate its delivery protocol.
-- Hunk never runs in watch mode and is not reloaded before current findings are consumed.
-- Every review result is bound to a changeset identity and stale approval cannot finalize a pull request.
-- Reviewer-only proposals are bound to an exact head and remain unpublished until the human authorizes the exact proposal; publication never permits source or PR-state mutation beyond the review submission.
-- Post-review changes never reuse a stale review conclusion; material changes create a new scope version, and every new head requires human-authorized finalization after complete rereview.
-- Scope revision resets only the per-scope review counter and always preserves cumulative resource accounting.
-- The orchestrator never edits product code, acts as reviewer or fixer, pushes to `main`, force-pushes, merges, bypasses policy, or approves permission prompts in version one.
-- Cleanup occurs only after verified merge or explicit request, uses force only through the narrowly audited submodule and Herdr exceptions, never closes the pull request or deletes its branch implicitly, and never discards dirty, untracked, unpushed, working, shared, or ambiguous state.
-- Machine-specific setup remains outside the generic skill package.
+The global assertions require one task record, worktree, and workspace per task;
+bounded author-reviewer cardinality and review loops; independently validated
+state transitions; no inferred human authority; no product implementation by the
+orchestrator; no unapproved publication or finalization; no merge or primary-
+branch mutation; and no cleanup of dirty, working, unrecoverable, or ambiguous
+state.
