@@ -1,6 +1,6 @@
 # Installation
 
-Install the orchestration and Herdr skill directories only in the dedicated orchestration workspace. Install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
+The checkout already tracks a relative `.codex/skills/orchestrating-development` link to its bundled skill and a `.codex/rules/herdr.rules` policy for orchestrator-side Herdr operations. Keep both in place. Install the external Herdr skill only in the dedicated orchestration workspace. Separately install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
 
 Keep the tracked root `AGENTS.md` generic. Create the ignored local configuration before starting an orchestrator:
 
@@ -24,15 +24,18 @@ The orchestration host must provide Git and `jq`; the validated Hunk launcher us
 
 ```sh
 mkdir -p /path/to/orchestration-workspace/.codex/skills ~/.codex/rules
-ln -s /absolute/path/to/orchestrating-development \
-  /path/to/orchestration-workspace/.codex/skills/orchestrating-development
 ln -s /absolute/path/to/herdr-skill \
   /path/to/orchestration-workspace/.codex/skills/herdr
-ln -s /absolute/path/to/orchestrating-development/assets/codex-managed-agent-events.rules \
+ln -s /absolute/path/to/orchestration-workspace/skills/orchestrating-development/assets/codex-managed-agent-events.rules \
   ~/.codex/rules/orchestrating-development-events.rules
 ```
 
-Replace the example paths with the actual orchestration workspace, Herdr skill, and `skills/orchestrating-development` locations. Refuse to replace a destination when it already exists until its ownership and target have been inspected. Do not install `orchestrating-development` globally; its repository-local placement prevents product agents from assuming the orchestrator role.
+Replace the example paths with the actual orchestration workspace and Herdr skill locations. Refuse to replace a destination when it already exists until its ownership and target have been inspected. Do not replace the tracked orchestration link or install `orchestrating-development` globally; its repository-local placement prevents product agents from assuming the orchestrator role.
+
+The two rule files have different consumers and installation scopes:
+
+- `.codex/rules/herdr.rules` is tracked in this workspace and grants the orchestrator bounded Herdr inspection and task-management operations.
+- `assets/codex-managed-agent-events.rules` is linked into `~/.codex/rules/` and grants managed authors and reviewers only event delivery, caller-pane discovery, and bounded Hunk operations.
 
 Install the managed-role skills individually where product-worktree agents can discover them:
 
