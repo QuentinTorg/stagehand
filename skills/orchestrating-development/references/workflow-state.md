@@ -97,26 +97,26 @@ Do not discard the human prefix, treat the JSON as part of the human command, or
 
 ## Missing-event reconciliation
 
-The orchestrator is not a background daemon. It performs this bounded check whenever it is invoked to monitor or report and whenever a task is otherwise being reconciled. A silent delivery failure cannot wake the orchestrator by itself; hooks or an external controller would be required for immediate unattended detection.
+The orchestrator is not a daemon. Reconcile on monitoring, reporting, or task handling; silent delivery cannot wake it without an external controller.
 
-Reconciliation determines the **furthest proven state**, not merely the next missing event. Keep four evidence classes separate:
+Find the **furthest proven state** while keeping evidence classes distinct:
 
-- explicit human authority comes from the current instruction or an unambiguous human message visible in the managed-agent transcript;
-- role claims come from valid events, verified delivery output, transcript fallbacks, or a catch-up event requested during reconciliation;
-- Git, GitHub, verification artifacts, and Hunk prove observable work and changeset identity but never prove human authority or a review conclusion by themselves; and
-- Herdr lifecycle proves only runtime activity or settlement.
+- only current human instructions or unambiguous human transcript messages prove human authority;
+- valid events, verified delivery, fallbacks, or one requested catch-up event prove role conclusions;
+- Git, GitHub, verification, and Hunk prove artifacts and changeset identity, not authority or review conclusions;
+- Herdr lifecycle proves runtime activity or settlement only.
 
-For each task whose record, managed role, or durable artifacts may disagree:
+For a task with drift:
 
-1. Start with one bounded Herdr inventory and the task record. If lifecycle and recorded state agree and no drift signal exists, do not load transcripts or query every external artifact.
-2. When the role settles unexpectedly, an expected event is absent, or branch/PR/Hunk evidence is ahead of the record, inspect that role's recent transcript once and only the durable artifacts needed to identify a candidate state. Recover and validate any complete event or fallback first. A live permission request follows the permission procedure instead of receiving a queued recovery prompt.
-3. Identify every workflow boundary between the recorded state and candidate furthest state. Prove each human-authority gate from actual human input, each role-owned conclusion from role output or an event, and each changeset transition from durable artifacts. An agent's paraphrase that the human approved something is not authority.
-4. If every intervening boundary is proven, advance the record directly and atomically to the furthest proven state. Do not ask the agent to replay obsolete `implementation-started`, `implementation-ready`, or other historical handoffs. Record the reconciliation sources and skipped boundaries in `state.decision_reason`, normalize `last_event` when a recovered current-boundary event exists, and reset the expected role, events, wait condition, attention fields, and recovery attempts for the resulting state.
-5. If human authority and observable work are proven but the current role-owned conclusion is missing, record one recovery attempt and prompt that same role once with a rendered control block. Give the exact schema for the single existing event that describes its current boundary, even when accepting it will atomically catch the record up across older proven boundaries. Ask it to report current state, not redo work or emit a chain of historical events.
-6. If the role is still working and only bookkeeping lag is proven, update the record to the proven active state without interrupting authorized work, then wait for its normal next boundary. If the observed mutation lacks authority or continuing could compound risk, use the configured interrupt boundary and return to the human.
-7. If any skipped authority, role conclusion, task identity, scope version, or changeset identity remains ambiguous—or the one catch-up attempt settles without a valid result—enter `decision-required`, preserve all work, and ask one focused human question. Never infer the missing fact, repeatedly pump the role, spawn a replacement, or increment review counters.
+1. Inspect one bounded Herdr inventory and its record. Stop if they agree and no drift signal exists.
+2. For unexpected settlement, a missing event, or newer durable artifacts, inspect the role transcript once and only necessary artifacts. Recover a complete event or fallback first; route live permission requests through the permission procedure.
+3. Prove every intervening human gate, role conclusion, and changeset transition from its proper evidence class. An agent's paraphrase does not prove human authority.
+4. If all boundaries are proven, atomically advance to the furthest state without replaying historical events. Record sources and skipped boundaries in `state.decision_reason`; normalize `last_event`, expected role and events, wait and attention fields, and recovery attempts.
+5. If authority and artifacts are proven but the current role conclusion is missing, record one attempt and prompt that same role once with a fresh control block and the exact current-boundary event schema. Request current state, not repeated work or historical events.
+6. If authorized work continues and only bookkeeping lags, record the proven active state and await the normal boundary. Interrupt only when mutation lacks authority or continued work compounds risk.
+7. On unresolved identity, authority, conclusion, scope, or changeset ambiguity—or a failed catch-up attempt—preserve work, enter `decision-required`, and ask one focused question. Do not infer, reprompt, replace the role, or increment review counters.
 
-Reset `event_recovery.attempts` only after successful atomic reconciliation or when a valid event establishes a new expected handoff. A malformed, stale, wrong-role, or wrong-scope event does not reset it. If the task record and transcript disagree about human authority, preserve state and ask the human rather than choosing the more advanced account.
+Reset recovery attempts only after successful reconciliation or a valid event establishes a new handoff. Invalid events do not reset them. When the record and transcript disagree on authority, preserve state and ask the human.
 
 ## Event validation
 

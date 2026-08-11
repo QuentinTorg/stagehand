@@ -2,11 +2,11 @@
 
 ## General contract
 
-A development task receives one persistent author and, when review begins, one persistent independent reviewer. A reviewer-only task receives one persistent reviewer and no author. Reuse assigned roles across review rounds. Do not create a third fixer or replace a healthy role to obtain a different answer.
+A development task has one persistent author and one persistent independent reviewer; reviewer-only work has one reviewer. Reuse roles across rounds. Do not add a fixer or replace a healthy role for a different answer.
 
-The orchestrator starts agents with the corresponding role template and prepends the rendered managed workflow control block. It prepends a fresh block again for every later handoff so task identity, role, endpoint, scope, recorded stage, and allowed outcomes do not depend on conversational memory. Fill every placeholder from the validated task record. Do not send the orchestration skill or personal orchestration-repository instructions into product worktrees.
+Start each role with its template and a rendered managed workflow control block. Prepend a fresh block to every later handoff so identity, endpoint, scope, stage, and outcomes never depend on memory. Fill it from the validated record; never send orchestration instructions into product worktrees.
 
-The control block remains authoritative until the named orchestrator or human explicitly releases the role or the task is cleaned up. Direct human discussion can grant a documented human checkpoint, but it does not detach the role, change its endpoint, or waive its next semantic event. Both managed roles must:
+The block remains authoritative until explicit release or cleanup. Human discussion may grant a checkpoint but does not detach the role, change its endpoint, or waive its next event. Each role must:
 
 - follow the target repository's instructions and applicable task-specific skills;
 - remain within their assigned worktree and task;
@@ -16,49 +16,49 @@ The control block remains authoritative until the named orchestrator or human ex
 
 ## Signaling protocol
 
-A semantic event is required when a role reaches a documented workflow boundary or cannot reach the expected boundary inside its current authority. Ordinary plan discussion and progress updates do not require events. The role chooses only an event allowed by its current control block, verifies every required field from current state, diagnoses failures before classifying them as blockers, and follows the block's delivery and fallback procedure. A fallback is durable evidence for recovery, not permission to enter the next stage.
+Send an allowed semantic event at each workflow boundary or diagnosed blocker, with fields verified from current state. Plan discussion and progress need no event. Follow the block's delivery and fallback procedure; fallback enables recovery, not advancement.
 
-If work cannot proceed after proportionate diagnosis, authors use `needs-human` and reviewers use `review-needs-human`. The reason identifies the failed operation, observed error or ambiguity, and the decision or authority needed. Initialization, build, verification, GitHub, Hunk, finalization, and event-preparation failures are instances of these documented blocker outcomes; they are not new event names.
+After proportionate diagnosis, authors report `needs-human` and reviewers `review-needs-human`, naming the operation, error or ambiguity, and required decision. Initialization, build, verification, GitHub, Hunk, finalization, and event failures do not create new event names.
 
 ## Author contract
 
-Start the author with the author startup prompt asset loaded by the core workflow. The task brief tells the author what outcome is wanted, not how to implement it.
+The author startup prompt gives the desired outcome, not its implementation.
 
-Before human approval, the author may inspect repository instructions, status, code, tests, history, and relevant documentation. It may propose scope, implementation, and verification. It must not edit files, create commits, push, or create a pull request until the human explicitly approves implementation in that author session.
+Before approval, the author may inspect and propose scope, implementation, and verification, but may not edit, commit, push, or create a PR. Approval must occur in that author session.
 
-The author receives an already prepared development target. Before planning, it verifies the target path, feature branch, and recorded base ancestry. If they disagree, it diagnoses and emits `needs-human` with the mismatch rather than silently branching from incidental checkout state, repairing orchestration setup, inventing `initialization-failed`, or merely mentioning the problem in prose.
+Before planning, verify the prepared target path, feature branch, and recorded base ancestry. On mismatch, diagnose and emit `needs-human`; do not branch from incidental state, repair orchestration setup, invent events, or stop silently.
 
-After approval, the author must successfully deliver `implementation-started` before its first edit. A failed delivery fallback stops implementation until recovery. When implementation and verification are ready, it sends `implementation-ready` rather than publishing or starting review itself. Only a subsequent control-block handoff from the orchestrator permits it to use the preparing-pull-requests skill to publish the branch and create the initial draft. Initial task authorization includes this routine draft creation; no second human approval is required.
+After approval, deliver `implementation-started` before editing; failed delivery pauses for recovery. Send `implementation-ready` after implementation and verification. Only the orchestrator's later `drafting` handoff permits branch publication and initial draft creation; initial task authorization already covers it.
 
-When the task came from GitHub, the author receives the issue repository, number, and URL. The draft must link that issue using repository conventions. Use a closing keyword only when the pull request is intended to resolve the issue completely; otherwise preserve the relationship without claiming automatic closure.
+For GitHub tasks, link the supplied issue repository, number, and URL using repository conventions. Use a closing keyword only when the PR fully resolves it.
 
-The same author resolves selected findings. It must consume the current Hunk comments before editing because the later Hunk reload may clear them. It loads the finding-resolution skill only when explicitly asked to modify the selected set.
+The same author resolves only selected findings, using the finding-resolution skill when instructed. It must consume Hunk comments before editing because reload may clear them.
 
-When the human materially expands the task in the author session, the author sends `scope-revised` before treating the new requirement as ordinary implementation. Minor implementation-plan refinement that preserves the confirmed outcome is not a scope revision.
+Send `scope-revised` before implementing a human-directed material expansion. Intent-preserving plan refinement is not a revision.
 
-After a successful review or finalization, selected human feedback may arrive through Herdr or an identified GitHub review. The author sends `post-review-changes-started` before editing so the orchestrator invalidates stale review state. A small intent-preserving correction may proceed through the finding-resolution contract. A material revision includes a durable brief reference and waits for the orchestrator to advance the scope version and decide pull-request draft state before implementation. Both paths end with `fixes-ready` and a complete rereview by the same reviewer.
+For selected post-review feedback, send `post-review-changes-started` before editing. Small intent-preserving corrections follow finding resolution. Material revisions include a durable brief and wait for scope-version and draft-state handling. Both end with `fixes-ready` and complete rereview by the same reviewer.
 
 ## Reviewer contract
 
-Start the reviewer with the reviewer startup prompt asset loaded by the core workflow only after validating `draft-pr-ready`. The reviewer receives the draft pull request, linked issue when present, base, current head, scope version, review round, and Hunk session identity.
+Start the reviewer only after validating `draft-pr-ready`, supplying the draft PR, linked issue, base, head, scope, round, and Hunk session.
 
-The reviewer must query GitHub for the pull-request description, comments, linked issue or requirements, current head, and available checks before forming its understanding of intent. It then inspects surrounding code and performs the complete phased review defined by the reviewing-code skill. Hunk is the private delivery surface; it is not the source of intent or a substitute for review reasoning.
+The reviewer obtains intent from the GitHub PR description, comments, linked issue or requirements, current head, and available checks; inspects surrounding code; then performs the reviewing-code skill's complete phased review. Hunk delivers findings but neither defines intent nor replaces reasoning.
 
-The reviewer records only material actionable findings in Hunk. When changes are required it emits `review-findings`; when a decision blocks review it emits `review-needs-human`; and when the complete current-head review passes it emits `review-passed` without changing pull-request readiness.
+Record only material actionable findings in Hunk. Emit `review-findings`, `review-needs-human`, or `review-passed` as appropriate; passing never changes PR readiness.
 
-Use the same reviewer for rereview, but require a complete current base-to-head review after every fix round. A new scope version restarts review at phase zero rather than performing a narrow delta check.
+The same reviewer completely rereviews base-to-head after every fix. New scope restarts at phase zero, not a delta review.
 
-After `review-passed`, the orchestrator returns the readiness result to the human. Only a finalization handoff carrying explicit human authorization for that exact reviewed head allows the reviewer to use the preparing-pull-requests skill, reconcile reviewer-owned context, mark the pull request ready, and emit `pull-request-finalized`. Finalization does not include submitting a GitHub approval review or merging unless the human separately requests an allowed review publication; merge always remains human-executed.
+Only a finalization handoff with human authorization for the exact reviewed head permits the preparation skill, reviewer-owned context reconciliation, readiness change, and `pull-request-finalized`. Finalization never includes merge. A GitHub approval review requires a separate human request; merge remains human-executed.
 
-When post-readiness feedback is material, the orchestrator may direct the reviewer to return the pull request to draft under explicit human authority or a configured standing policy. The reviewer changes only draft state and emits `pull-request-returned-to-draft`. It does not implement feedback, rewrite intent, reply to comments, or resolve threads. Any changed head requires a complete rereview and new finalization authorization.
+For material post-readiness feedback, explicit authority or standing policy may direct the reviewer to change only draft state and emit `pull-request-returned-to-draft`. It never implements, rewrites intent, replies, or resolves threads. A changed head requires complete rereview and new finalization authorization.
 
 ## Reviewer-only contract
 
-Start a reviewer-only task with the external reviewer startup prompt. It receives the existing pull request, exact base and head, repository checkout, review round, and a task-owned proposal path. It has no author, fixer, Hunk requirement, draft-creation transition, or pull-request finalization authority.
+The external reviewer receives the existing PR, exact base and head, checkout, round, and task-owned proposal path. It has no author, fixer, Hunk, draft creation, or finalization authority.
 
-The reviewer performs the same complete phased inspection and GitHub-context acquisition as a development reviewer, but writes a proposed GitHub review without publishing it. Its `review-proposed` event identifies the exact head, conclusion, and recoverable proposal. The orchestrator presents that proposal to the human.
+It performs the same complete review and context acquisition, writes without publishing a proposed GitHub review, then emits `review-proposed` with exact head, conclusion, and recoverable proposal.
 
-Only explicit human authorization for the unchanged proposal and head permits the same reviewer to publish it. Publication must preserve the authorized conclusion and material content. The reviewer emits `review-published` afterward. It never modifies source, the pull-request branch, description, labels, draft state, readiness, or merge state. A changed head invalidates the proposal and requires a complete rereview.
+Only explicit authorization for the unchanged proposal and head permits publication by that reviewer. Preserve its conclusion and material content, then emit `review-published`. Never modify source, branch, description, labels, draft/readiness, or merge state. A changed head requires a new complete review.
 
 ## Replacement
 
