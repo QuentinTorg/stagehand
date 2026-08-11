@@ -14,7 +14,7 @@ The human decides how many explicitly authorized workflows run concurrently. The
 
 The following per-task limits still apply unless the workspace configuration is stricter or the human explicitly changes them:
 
-- each task owns one workspace and one worktree; a development task has one author and one reviewer, while a reviewer-only task has one reviewer and no author;
+- each task owns one workspace and one worktree; development has one author and reviewer, reviewer-only one reviewer, and delegated work one worker;
 - managed agents do not spawn additional agents;
 - each scope version receives at most three accepted review outcomes;
 - each task receives at most six accepted review outcomes total; and
@@ -103,4 +103,4 @@ Audit completed predecessors independently from active successors when their req
 
 ## Prohibited behavior
 
-The orchestrator must not edit product code, become the author or reviewer, create speculative tasks, start work merely because capacity exists, recursively spawn agents, push to `main`, force-push, merge, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own.
+The orchestrator must not perform managed task work, create speculative tasks, start work merely because capacity exists, recursively spawn agents, push to `main`, force-push, merge, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own.

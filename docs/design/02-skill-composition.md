@@ -54,6 +54,10 @@ For reviewer-only work on another developer's pull request, Stagehand invokes
 creates a proposal for the exact head and publishes it only after the human
 approves that proposal.
 
+Delegated work uses one worker and no workflow skill beyond Stagehand's compact
+routing contract. It returns investigation, diagnosis, planning, or research
+without creating a pull request or entering the development loop.
+
 ## Skill Ethos and Boundaries
 
 ### `orchestrating-development`

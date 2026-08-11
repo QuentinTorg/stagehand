@@ -2,7 +2,7 @@
 
 ## General contract
 
-A development task has one persistent author and one persistent independent reviewer; reviewer-only work has one reviewer. Reuse roles across rounds. Do not add a fixer or replace a healthy role for a different answer.
+A development task has one persistent author and one persistent independent reviewer; reviewer-only work has one reviewer; delegated work has one worker. Reuse roles across rounds. Do not add helpers or replace a healthy role for a different answer.
 
 Start each role with its template and a rendered managed workflow control block. Prepend a fresh block to every later handoff so identity, endpoint, scope, stage, and outcomes never depend on memory. Fill it from the validated record; never send orchestration instructions into product worktrees.
 
@@ -18,7 +18,7 @@ The block remains authoritative until explicit release or cleanup. Human discuss
 
 Send an allowed semantic event at each workflow boundary or diagnosed blocker, with fields verified from current state. Plan discussion and progress need no event. Follow the block's delivery and fallback procedure; fallback enables recovery, not advancement.
 
-After proportionate diagnosis, authors report `needs-human` and reviewers `review-needs-human`, naming the operation, error or ambiguity, and required decision. Initialization, build, verification, GitHub, Hunk, finalization, and event failures do not create new event names.
+After proportionate diagnosis, authors and workers report `needs-human`; reviewers report `review-needs-human`. Name the operation, error or ambiguity, and required decision. Initialization, build, verification, GitHub, Hunk, finalization, and event failures do not create new event names.
 
 ## Author contract
 
@@ -60,6 +60,10 @@ It performs the same complete review and context acquisition, writes without pub
 
 Only explicit authorization for the unchanged proposal and head permits publication by that reviewer. Preserve its conclusion and material content, then emit `review-published`. Never modify source, branch, description, labels, draft/readiness, or merge state. A changed head requires a new complete review.
 
+## Delegated worker contract
+
+The worker performs the bounded objective under its recorded mutation boundary. Tracked source is read-only unless the human explicitly changes that boundary; work intended to land requires the development workflow. The worker creates no PR, review, or additional agent. It emits `work-complete` with a concise summary and optional durable `resultRef`, or `needs-human` after diagnosing a blocker.
+
 ## Replacement
 
-Replace a role only when its process or session is lost, its context is unreliable, it participated in the incompatible role, or the human directs replacement. Before starting the replacement, verify the old process is no longer active or obtain human authority to stop it. Record the replacement agent name and give it durable task, PR, changeset, verification, and unresolved-finding context.
+Replace a role only when its process or session is lost, its context is unreliable, it participated in an incompatible role, or the human directs replacement. First verify the old process stopped or obtain authority to stop it. Record the replacement and provide only its mode-relevant durable context.

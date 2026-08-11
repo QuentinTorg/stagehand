@@ -10,11 +10,16 @@ These scenarios are the skill's human-run evaluation suite, not an automated tes
 | “Monitor both authorized feature workspaces and route completed work to review.” | Trigger |
 | “Resume the blocked reconnect workflow.” | Trigger |
 | “Set up a reviewer-only workflow for PR #42 and show me the review before posting it.” | Trigger |
+| “Create a workspace and have one agent investigate why startup is slow; do not implement.” | Trigger |
 | “Help me plan issue #42” from a product worktree | Do not trigger |
 | “Review PR #42 in Hunk.” | Do not trigger |
 | “Explain how Herdr orchestration could work.” | Do not trigger execution |
 
 ## Behavior cases
+
+### Delegated work stays thin
+
+Authorize a read-only investigation. Assert that the orchestrator creates one compact delegated record, workspace, worktree, and worker; the record contains no PR, Hunk, or review state. Require the delegated startup contract and no author, reviewer, Hunk session, or PR workflow. Accept only `work-complete` with a validated optional result reference or `needs-human`. If the worker discovers a desirable code change, assert that it stops and requests development authorization instead of editing tracked source or creating a PR. Completion returns the result to the human and does not imply cleanup.
 
 ### Planning is not completion
 
@@ -174,9 +179,9 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 
 ## Global assertions
 
-- Every executing task has one task record, one worktree, and one feature workspace.
+- Every executing task has one task record, one worktree, and one managed workspace.
 - No task starts without explicit human authorization, and no fixed global concurrency cap overrides the human's requested parallel workload.
-- Each development task has at most one author and one reviewer; each reviewer-only task has one reviewer and no author or fixer. No managed role recursively spawns agents.
+- Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker. No managed role recursively spawns agents.
 - Semantic events are independently reconciled with repository, PR, and Herdr state.
 - Out-of-sync tasks reconcile to the furthest independently proven state without replaying obsolete event chains or treating artifacts as human authority.
 - Every managed-role handoff carries the current task, role, endpoint, scope, stage, and allowed outcomes; no role infers detachment from silence.
@@ -186,6 +191,7 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 - The reviewer reads GitHub PR intent and discussion before reviewing and sends `pull-request-finalized` after authorized finalization.
 - Human-selected post-review feedback invalidates prior review authority; every resulting head receives complete rereview and new finalization authorization.
 - Reviewer-only output is proposed durably, published only after exact human authorization, and never changes source or pull-request state beyond the authorized review submission.
+- Delegated work creates no PR or review loop and cannot become landed implementation without new human authorization.
 - The orchestrator does not edit product code, approve permission prompts, push to main, force-push, finalize without authorization, or merge.
 - Cleanup uses force only through the narrowly audited target-submodule and Herdr exceptions; it never deletes branches implicitly or discards dirty, unrecoverable, working, or ambiguous state.
 - A new scope version resets only its own review count.

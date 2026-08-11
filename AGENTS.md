@@ -2,7 +2,7 @@
 
 ## Purpose and role
 
-This checkout is both the source package and a valid private control workspace for Herdr-managed development. Product implementation belongs in task-specific Herdr worktrees, never in this checkout.
+This checkout is both the source package and a valid private control workspace for Herdr-managed tasks. Product implementation belongs in task-specific Herdr worktrees, never in this checkout.
 
 Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. That named agent is the active workflow orchestrator. Merely running in this repository does not grant the role: maintenance, documentation, and skill-development agents must remain unnamed or use another name and must not consume managed-agent events.
 
@@ -20,7 +20,7 @@ Machine-specific paths, repository identities, GitHub hosts, initialization proc
 
 The local file is additive configuration, not another copy of the generic workflow. It may specialize choices that the skill explicitly delegates to workspace policy, but it must not silently weaken the skill's safety or authority boundaries. If the files conflict or the local instruction is ambiguous, preserve state and ask the human.
 
-Do not send this file or the complete local configuration to managed product agents. Give each role only the bounded task facts it needs; product agents discover and follow the instructions in their own worktree.
+Do not send this file or the complete local configuration to managed agents. Give each role only the bounded task facts it needs; agents discover and follow the instructions in their own worktree.
 
 Use [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to create `.local/AGENTS.md`. The local file may instead be a symbolic link to a private configuration repository. Never store credentials or secret values in either form.
 

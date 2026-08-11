@@ -15,7 +15,7 @@
 
 Herdr reports terminal and agent lifecycle. The task record reports workflow state. Keep them separate: an `idle` author may be awaiting plan approval, while a `done` reviewer may have findings rather than approval.
 
-The orchestrator owns one task record per authorized task. A task owns exactly one feature worktree and one managed Herdr workspace for its entire lifetime. A development task uses the fixed tab-and-pane topology in [Hunk Coordination](hunk-coordination.md): author and reviewer share the `agents` tab side-by-side, while Hunk occupies its own unsplit `hunk` tab. A reviewer-only task has only its reviewer pane.
+The orchestrator owns one task record per authorized task. A task owns exactly one worktree and one managed Herdr workspace for its lifetime. Development uses the topology in [Hunk Coordination](hunk-coordination.md); reviewer-only and delegated work use one reviewer or worker pane.
 
 Every state transition updates `state.waiting_on`, `state.attention_required`, and `state.attention_reason` together with the state name. `waiting_on` identifies the next actor, event, decision, check, dependency, or cleanup condition in plain language for controller recovery; it is not a dashboard field. Attention is true only when a concrete human action is currently required; ordinary agent work, CI, or an expected semantic event is a wait condition but not human attention.
 
@@ -33,6 +33,8 @@ When a managed role owns the next transition, also record `event_recovery.expect
 | `review-awaiting-publication` | Reviewer-only proposal is validated for the current head | Human disposition of the exact proposal |
 | `publishing-review` | Human authorized reviewer-only publication for the exact proposal and head | Validated `review-published` or `review-needs-human` event |
 | `review-complete` | Authorized reviewer-only review was published | Human-directed retention or cleanup |
+| `delegated-working` | Worker is performing bounded non-development work | Validated `work-complete` or `needs-human` event |
+| `delegated-complete` | Delegated result was validated and presented | Human-directed retention or cleanup |
 | `resolving` | Original author is resolving the selected current-change findings | Validated `fixes-ready` or `needs-human` event |
 | `decision-required` | Progress requires human scope, risk, permission, conflict, or budget judgment | Explicit human disposition |
 | `ready-candidate` | Reviewer passed the exact current head | Human finalization decision or selected post-review feedback |
@@ -77,10 +79,12 @@ Required events are:
 | Reviewer | `review-needs-human` | `base`, `head`, `round`, `reason` | Review requires a human decision |
 | Reviewer | `review-proposed` | `base`, `head`, `round`, `conclusion`, `proposalRef` | Reviewer-only output is ready for human inspection and is not published |
 | Reviewer | `review-published` | `base`, `head`, `round`, `pullRequest`, optional `reviewUrl` | Human-authorized reviewer-only output was published for the exact head |
+| Worker | `work-complete` | `summary`, optional `resultRef` | Bounded delegated work finished without entering development |
+| Worker | `needs-human` | `reason` | Worker cannot proceed inside its current objective or mutation boundary |
 
 Free-form summaries are supporting context, not transition authority. A managed role verifies delivery from a successful command result reporting `type: agent_prompted`. If direct delivery fails twice, the agent prints `WORKFLOW_EVENT_FALLBACK` and the complete event in its final response. The orchestrator may recover it with `herdr agent read`, validate it, and record that fallback source.
 
-Authors use `needs-human` and reviewers use `review-needs-human` for any diagnosed blocker that prevents their expected success event. These blocker events are valid from every active state owned by that role. Initialization, verification, Hunk, GitHub, publication, and finalization failures do not create new event names.
+Authors and workers use `needs-human`; reviewers use `review-needs-human`. These blocker events are valid from every active state owned by that role. Failures do not create new event names.
 
 ### Shared-input collision recovery
 
@@ -128,7 +132,7 @@ Before advancing state:
 4. Resolve the worktree, branch, base, pull request, and current head independently.
 5. Reject stale or contradictory events and move to `decision-required` when reconciliation could change behavior.
 
-An event is a claim, not proof. Validate the draft PR and head before development review, validate `review-passed.head` before asking for finalization authority, and validate that `pull-request-finalized.head` still equals the ready pull request's head before declaring development orchestration complete. For reviewer-only work, validate the proposal artifact, conclusion, and current head before requesting publication authority, then validate the published review before entering `review-complete`.
+An event is a claim, not proof. Validate the draft PR and head before development review, `review-passed.head` before finalization authority, and `pull-request-finalized.head` before declaring development complete. For reviewer-only work, validate proposal, conclusion, current head, and publication. For delegated work, validate any `resultRef` and confirm no unauthorized tracked change before entering `delegated-complete`.
 
 Accept `post-review-changes-started` only after a successful review or finalization and only for feedback explicitly selected by the human. Preserve the former reviewed and finalized heads as history, clear both as current authority, and bind the feedback reference before resolution. Reject a concurrently arriving finalization event as stale. A material event increments the scope version using its brief reference. If draft return is required, validate `pull-request-returned-to-draft` before author implementation proceeds. A small fix does not reset review counters; material scope revision resets only the per-scope count.
 
@@ -154,7 +158,7 @@ On orchestration restart, treat every cached lifecycle observation as stale. Rec
 2. worktree path, branch, base, status, and current head;
 3. draft pull request, description, state, and remote head;
 4. live Herdr workspace, panes, and named agents; and
-5. Hunk session source when a development task is in review, or the proposal artifact for reviewer-only work.
+5. Hunk session source for development review, proposal artifact for reviewer-only work, or result reference for delegated work.
 
 Resume only after these sources agree. Never repeat workspace creation, PR creation, comment publication, or finalization merely because the previous command result was lost.
 
