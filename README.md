@@ -78,6 +78,7 @@ GitHub remains the collaboration boundary. The workflow never pushes to the prim
 ## More detail
 
 - [Design principles](./docs/design/01-design-principles.md)
+- [Skill composition](./docs/design/02-skill-composition.md)
 - [Orchestration skill](./skills/orchestrating-development/SKILL.md)
 - [Orchestration skill specification](./skills/.specs/orchestrating-development-spec.md)
 - [Workflow state and events](./skills/orchestrating-development/references/workflow-state.md)
