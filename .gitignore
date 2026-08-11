@@ -10,7 +10,7 @@
 # Stagehand's generic orchestrator policy is tracked; other workspace rules may
 # contain machine- or repository-specific policy.
 .codex/rules/*
-!.codex/rules/stagehand.rules
+!.codex/rules/herdr.rules
 
 # External repositories cloned only for design research.
 /references/
