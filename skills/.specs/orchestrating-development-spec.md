@@ -2,12 +2,12 @@
 
 ## 1. Intent
 
-Coordinate Herdr-managed development and reviewer-only workflows while the human retains task, plan, scope, risk, publication, finalization, and merge authority. Herdr supplies runtime control; this skill supplies durable workflow state, bounded role handoffs, review loops, and recovery.
+Coordinate Herdr-managed development, reviewer-only, and delegated-work tasks while the human retains task, scope, risk, publication, finalization, and merge authority. Herdr supplies runtime control; this skill supplies durable workflow state, bounded role handoffs, review loops, and recovery.
 
 The operating model is:
 
 - one authorized task per Herdr workspace and worktree;
-- one persistent author and reviewer for development, or one reviewer for reviewer-only work;
+- one persistent author and reviewer for development, one reviewer for reviewer-only work, or one worker for delegated work;
 - implementation planning between the human and author;
 - a draft PR carrying intent before private Hunk review;
 - selected findings returned to the original author and completely rereviewed;
@@ -20,7 +20,7 @@ See [Stagehand design principles](../../docs/design/01-design-principles.md) and
 
 ## 2. Trigger contract
 
-Trigger only when the user explicitly asks the designated agent in a configured orchestration workspace to start, coordinate, monitor, resume, or report on Herdr-managed development or reviewer-only work.
+Trigger only when the user explicitly asks the designated agent in a configured orchestration workspace to start, coordinate, monitor, resume, or report on Herdr-managed development, reviewer-only, or bounded delegated work.
 
 Do not trigger for implementation, author planning, direct review, finding resolution, Hunk interaction alone, PR preparation alone, orchestration discussion, or work from a product repository. Repository-local installation aids routing but does not replace the activation checks in `SKILL.md`.
 
@@ -42,11 +42,12 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
 13. Report all open tasks with the fixed dashboard and a single human-action section.
 14. Clean only recorded, recoverable task resources through the guarded paths.
+15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
 
 ## 4. Guardrails
 
 - Human authorization, not available capacity, controls parallelism.
-- Each development task has at most one author and reviewer; reviewer-only work has one reviewer.
+- Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker.
 - Default limits are three accepted review outcomes per scope and six total. A third material scope revision requires a progress and cost check.
 - Repeated findings, no-progress fixes, conflicting conclusions, missing events, unknown head changes, or overlap trigger escalation rather than another loop.
 - Herdr lifecycle proves activity only. Git and GitHub prove artifacts only. Neither proves human authority or reviewer conclusions.
@@ -58,7 +59,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 `SKILL.md` owns activation, routing, the end-to-end procedure, and dashboard format. Load specialized details only when applicable:
 
 - [workflow-state.md](../orchestrating-development/references/workflow-state.md): states, events, reconciliation, counters, restart recovery, and cleanup eligibility;
-- [agent-contracts.md](../orchestrating-development/references/agent-contracts.md): persistent author and reviewer behavior;
+- [agent-contracts.md](../orchestrating-development/references/agent-contracts.md): persistent author, reviewer, and worker behavior;
 - [safety-and-escalation.md](../orchestrating-development/references/safety-and-escalation.md): limits, permissions, conflicts, human checkpoints, and cleanup authority;
 - [hunk-coordination.md](../orchestrating-development/references/hunk-coordination.md): pane topology, changeset identity, reload order, and recovery;
 - [installation.md](../orchestrating-development/references/installation.md): installation only;

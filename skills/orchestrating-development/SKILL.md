@@ -1,11 +1,11 @@
 ---
 name: orchestrating-development
-description: Use only when the user explicitly asks the designated agent in a repository configured as an orchestration workspace to start, coordinate, monitor, resume, or report on development or reviewer-only tasks through Herdr-managed sessions. Do not use for ordinary implementation, direct review, Hunk interaction, or orchestration discussion.
+description: Use only when the user explicitly asks the designated agent in a repository configured as an orchestration workspace to start, coordinate, monitor, resume, or report on development, reviewer-only, or delegated-work tasks through Herdr-managed sessions. Do not use for ordinary implementation, direct review, Hunk interaction, or orchestration discussion.
 ---
 
 # Orchestrating Development
 
-Coordinate authorized development and reviewer-only tasks without becoming their planner, author, reviewer, fixer, or merger. Herdr provides runtime control; this skill provides workflow state, role handoffs, conflict visibility, loop limits, and human authority boundaries.
+Coordinate authorized development, reviewer-only, and delegated-work tasks without performing their work. Herdr provides runtime control; this skill provides workflow state, role handoffs, conflict visibility, loop limits, and human authority boundaries.
 
 ## Activation gate
 
@@ -15,7 +15,7 @@ Before acting, verify all of the following:
 2. The current repository's `AGENTS.md` declares it to be an orchestration workspace.
 3. `AGENTS.md` and any local configuration file it requires identify allowed repositories or roots, repository-resolution rules, GitHub hosts, and current resource limits.
 4. This agent is inside Herdr (`HERDR_ENV=1`) and the repository-local Herdr skill is available.
-5. Target-repository agents will have the skills needed for their assigned mode: reviewing-code for every reviewer, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks.
+5. Target-repository agents have the skills required by their mode: reviewing-code for reviewers, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks. Delegated work requires none of these unless its bounded objective independently needs one.
 6. The orchestrator is named `workflow_orchestrator`, and the portable managed-agent Herdr rule from [Installation](references/installation.md) is installed for newly launched Codex sessions.
 
 If any gate fails, explain the missing prerequisite and stop before creating worktrees, workspaces, agents, or GitHub state. Do not search arbitrary filesystem locations to compensate for missing configuration.
@@ -24,15 +24,16 @@ If any gate fails, explain the missing prerequisite and stop before creating wor
 
 At activation, read the workspace's tracked `AGENTS.md` and every local configuration file it explicitly requires before inspecting or provisioning managed tasks. Then read [Workflow State and Events](references/workflow-state.md) completely. Read [Safety, Capacity, and Escalation](references/safety-and-escalation.md) before provisioning, overlap decisions, permission handling, budget escalation, or cleanup; do not load its cleanup details for an unrelated status-only turn.
 
-Before starting, replacing, or prompting an author or reviewer, read [Managed Agent Contracts](references/agent-contracts.md) and prepend the [Managed workflow control block](assets/managed-agent-control-block.md). Only when starting or replacing a role, follow that block with the applicable startup asset:
+Before starting, replacing, or prompting an author, reviewer, or worker, read [Managed Agent Contracts](references/agent-contracts.md) and prepend the [Managed workflow control block](assets/managed-agent-control-block.md). Only when starting or replacing a role, follow that block with the applicable startup asset:
 
 - [Author startup prompt](assets/author-startup-prompt.md)
 - [Reviewer startup prompt](assets/reviewer-startup-prompt.md)
 - [External reviewer startup prompt](assets/external-reviewer-startup-prompt.md)
+- [Delegated worker startup prompt](assets/delegated-worker-startup-prompt.md)
 
 Before starting, inspecting, or reloading Hunk, read [Hunk Coordination](references/hunk-coordination.md) and use the separately installed Hunk skill for command syntax.
 
-Use [task-record.yaml](assets/task-record.yaml) when creating a task record. Do not load eval cases during normal operation.
+Use [task-record.yaml](assets/task-record.yaml) for development and reviewer-only tasks; use [delegated-task-record.yaml](assets/delegated-task-record.yaml) for delegated work. Do not load eval cases during normal operation.
 
 ## Working checklist
 
@@ -60,17 +61,17 @@ Treat Herdr `working`, `idle`, `done`, `blocked`, and `unknown` as runtime obser
 
 The orchestrator may inspect authorized GitHub issues, direct requests, and repository context to help the human choose work. Present scope, dependencies, likely conflicts, and cost at task-selection depth. Do not develop the implementation plan; that discussion belongs in the author workspace.
 
-Create a task only after explicit human authorization. Record whether it is a development or reviewer-only task and capture the objective and boundaries compactly without copying the full conversation. Give every task a short, recognizable `display_name`, normally based on the GitHub issue or pull-request title when one exists; use it as the human-facing fallback until a Herdr workspace exists, while `task_id` remains the stable machine identity and the live workspace label becomes the primary human identity after provisioning. Record the containing checkout's verified remote, requested base, and fetched base commit. Record the exact development target separately: root repository or submodule path, verified remote, intended pull-request base, fetched base commit, and feature branch. For a submodule target, also record whether a containing-repository pointer update is `not-planned` or `planned`; do not infer this during cleanup from a modified gitlink. When the development source is GitHub, record and pass the issue repository, number, and URL so the author can link the draft correctly. Initial development-task authorization includes routine feature-branch publication and initial draft creation. Store the task record in the configured task-record directory, defaulting to `.orchestrator/tasks` inside this repository.
+Create a task only after explicit human authorization. Record its mode (`development`, `reviewer-only`, or `delegated-work`) and capture the objective and boundaries compactly without copying the full conversation. Give every task a short, recognizable `display_name`, normally based on the GitHub issue or pull-request title when one exists; use it as the human-facing fallback until a Herdr workspace exists, while `task_id` remains the stable machine identity and the live workspace label becomes the primary human identity after provisioning. Record the containing checkout's verified remote, requested base, and fetched base commit. Development and reviewer-only records also identify their exact development target; delegated records contain only their repository, mutation boundary, worker, result, and common state. When development originates on GitHub, pass its issue context so the author can link the draft. Store records in the configured task-record directory, defaulting to `.orchestrator/tasks` here.
 
 ### 3. Start authorized work with conflict visibility
 
-Read the safety reference and apply the configured overlap and repository policy. The human controls authorized parallelism; recommend sequencing for likely conflicts without imposing a fixed cap. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested remote-base commit, and create one Herdr-managed feature workspace from that exact commit. Run only initialization declared by the workspace configuration, validate the resulting root or submodule development target, and never start an author from a detached, stale, incidental, or ambiguous branch. Use the validated checkout as the command working directory and leave product instructions and builds to the managed role.
+Read the safety reference and apply the configured overlap and repository policy. The human controls authorized parallelism; recommend sequencing for likely conflicts without imposing a fixed cap. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested remote-base commit, and create one Herdr-managed task workspace from that exact commit. Run only initialization declared by the workspace configuration, validate the resulting root or submodule target, and never start a managed role from a detached, stale, incidental, or ambiguous branch. Use the validated checkout as the command working directory and leave product instructions and builds to the managed role.
 
-Load the Herdr skill and create the required layout without stealing user focus. For a development task, create the `agents` tab and start one named author there using the rendered control block followed by the filled author template; do not create the reviewer or `hunk` tab yet. Verify its first response contains the expected task, role, and orchestrator acknowledgement before directing the human to it. For a reviewer-only task, apply the same launch contract to its reviewer. The complete review topology is defined in [Hunk Coordination](references/hunk-coordination.md). Never start a fixer, helper, or speculative agent.
+Load the Herdr skill and create the required layout without stealing user focus. For development, start one author in the `agents` tab; do not create the reviewer or Hunk yet. For reviewer-only or delegated work, start its sole reviewer or worker. Prepend the rendered control block and applicable template, then verify the task, role, and orchestrator acknowledgement before directing the human to it. The complete review topology is defined in [Hunk Coordination](references/hunk-coordination.md). Never start a fixer, helper, or speculative agent.
 
 ### 4. Leave implementation planning with the author
 
-Set the task to `planning` and direct the human to the author pane. The author may explore read-only and propose its plan. It must receive approval in that session and successfully deliver `implementation-started` before editing. A fallback preserves the approval evidence but stops the author until the orchestrator recovers the event.
+For development tasks, set the task to `planning` and direct the human to the author pane. The author may explore read-only and propose its plan. It must receive approval in that session and successfully deliver `implementation-started` before editing. A fallback preserves the approval evidence but stops the author until the orchestrator recovers the event.
 
 The orchestrator does not need the detailed plan. Retain only the task brief, approved scope identity, constraints needed for coordination, and any conflict-relevant affected areas.
 
@@ -99,6 +100,12 @@ For an explicitly authorized reviewer-only task, resolve the existing pull reque
 On `review-proposed`, validate the proposal artifact, conclusion, pull request, and unchanged head, then present the exact proposed review to the human. Do not infer publication approval from task authorization or a favorable conclusion.
 
 Only after explicit human authorization for that exact proposal and head may the same reviewer publish it. Require `review-published`, verify the published review matches the authorization, and enter `review-complete`. If the head changes before publication, invalidate the proposal and require a complete rereview. Ask whether to retain the workspace for a later rereview or clean it up; do not modify the PR branch, description, labels, draft state, readiness, or merge state.
+
+### Delegated-work path
+
+Use delegated work for bounded investigation, diagnosis, planning, or research with no intended landed repository change. Start one worker at the recorded target with the authorized objective and mutation boundary; tracked source is read-only by default. It has no author, reviewer, Hunk, PR, or review loop.
+
+Accept only `work-complete` or `needs-human`. Validate any `resultRef`, present the result, and enter `delegated-complete`; cleanup remains human-directed. If the desired outcome becomes a landed change, stop and obtain authorization for a development task rather than silently expanding this mode.
 
 ### 7. Begin independent review
 
@@ -150,13 +157,13 @@ End every user-visible response with one row for each non-`cleaned` task; a newl
 | --- | --- | --- | --- |
 | 🟡 `settings-button-rows` · [example-app#772 Settings button rows](<issue-url>) | `<state>` | `Author idle · fixed r1; Reviewer idle · passed r2 → you` | `[#<pr>](<pr-url>) or —` |
 
-Above the table, show `🔴 needs you · 🟡 in progress · 🟢 orchestration complete`. Derive color after reconciliation: settled states (`ready-for-team-review`, `review-complete`, `merged`, `closed`) are green; other tasks with `attention_required` are red; all others are yellow. Do not persist color or inherit it from dependencies.
+Above the table, show `🔴 needs you · 🟡 in progress · 🟢 orchestration complete`. Derive color after reconciliation: settled states (`ready-for-team-review`, `review-complete`, `delegated-complete`, `merged`, `closed`) are green; other tasks with `attention_required` are red; all others are yellow. Do not persist color or inherit it from dependencies.
 
 Formatting rules:
 
 - Lead provisioned tasks with the exact live Herdr sidebar label in code, followed when useful by a short repository-qualified issue link and title. Reuse that label throughout the response. Before provisioning, use `<display name> (workspace not created)`. Derive and persist a missing legacy `display_name` once; do not query GitHub only to render it. Disambiguate duplicate live labels with the workspace ID.
 - Show workflow state in `Stage`; add scope after version 1 and review usage only when relevant.
-- In `Agents`, pair each role's current Herdr lifecycle with only the latest accepted milestone needed to disambiguate the cycle: `implementing`, `reviewing r2`, `findings r2`, `fixing r2`, `fixed r2`, or `passed r3`. Rounds are per scope; `fixing r2` answers findings from round 2. When settled roles obscure ownership, append `→ Author`, `→ Reviewer`, or `→ you`. Use `—` for roles not yet created.
+- In `Agents`, pair each role's current Herdr lifecycle with only the latest accepted milestone needed to disambiguate the cycle: `implementing`, `reviewing r2`, `findings r2`, `fixing r2`, `fixed r2`, `passed r3`, or `work complete`. Rounds are per scope; `fixing r2` answers findings from round 2. When settled roles obscure ownership, append `→ Author`, `→ Reviewer`, or `→ you`. Use `—` for roles not yet created.
 - Link the PR when known. Keep CI, dependencies, internal wait state, and notes out of the table unless they require human disposition.
 - Preserve task order. Use one bounded Herdr inventory for live labels and lifecycle, and durable records for workflow state. Persist renamed workspace labels; flag missing live workspaces instead of substituting issue numbers.
 

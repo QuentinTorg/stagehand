@@ -1,0 +1,47 @@
+version: 1
+task_id: "<stable-task-id>"
+display_name: "<short-human-readable-work-item-name>"
+mode: "delegated-work"
+source:
+  kind: "github-issue|direct-request"
+  reference: "<issue-url-or-concise-request-reference>"
+objective: "<human-authorized-outcome>"
+mutation_boundary: "tracked-source-read-only"
+repository:
+  name: "<configured-repository-name>"
+  root: "<absolute-configured-repository-path>"
+  remote: "origin"
+  base: "<base-branch>"
+  base_commit: null
+  branch: "<task-branch>"
+  worktree: "<absolute-task-worktree-path>"
+  target: "<relative-target-path-or-.>"
+workspace:
+  id: "<herdr-workspace-id>"
+  label: "<exact-current-herdr-sidebar-label>"
+  agents_tab: null
+  worker_pane: null
+agents:
+  orchestrator: "workflow_orchestrator"
+  worker: null
+scope:
+  version: 1
+state:
+  name: "queued"
+  prior: null
+  decision_reason: null
+  waiting_on: "<specific-actor-event-decision-or-cleanup>"
+  attention_required: false
+  attention_reason: null
+event_recovery:
+  expected_role: null
+  expected_events: []
+  attempts: 0
+  last_attempt_reason: null
+result:
+  summary: null
+  ref: null
+cleanup:
+  requested_by: null
+  completed: false
+last_event: null

@@ -1,6 +1,6 @@
 # Managed workflow control block
 
-Prepend this rendered block to every prompt the orchestrator sends a managed author or reviewer, including startup, recovery, draft creation, finding resolution, rereview, finalization, and post-review work.
+Prepend this rendered block to every prompt the orchestrator sends a managed author, reviewer, or worker, including startup, recovery, and later handoffs.
 
 ```text
 WORKFLOW task={{task_id}} role={{role}} orchestrator={{orchestrator_agent}} scope={{scope_version}} stage={{workflow_state}} allowed={{allowed_events}}
