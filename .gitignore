@@ -2,13 +2,13 @@
 .local/
 .orchestrator/
 
-# The bundled orchestration skill link is portable; other skill links may
-# contain absolute installation-specific paths.
+# Codex state is local by default. Track only Stagehand's portable skill link
+# and generic Herdr policy; the directory exceptions let Git reach those files.
+.codex/*
+!.codex/skills/
 .codex/skills/*
 !.codex/skills/orchestrating-development
-
-# Stagehand's generic orchestrator policy is tracked; other workspace rules may
-# contain machine- or repository-specific policy.
+!.codex/rules/
 .codex/rules/*
 !.codex/rules/herdr.rules
 
