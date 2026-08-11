@@ -38,7 +38,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 8. Keep Hunk non-watching, task-local, rooted in the repository owning the PR, and unchanged until findings are consumed.
 9. Return only human-selected material findings to the author. Every changed head receives a complete rereview by the same reviewer.
 10. Treat material scope change as human-owned, versioned, and subject to a new phase-zero review.
-11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Humans always merge.
+11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans always merge.
 12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
 13. Report all open tasks with the fixed dashboard and a single human-action section.
 14. Clean only recorded, recoverable task resources through the guarded paths.

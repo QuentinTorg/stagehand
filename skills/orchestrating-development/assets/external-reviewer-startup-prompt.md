@@ -15,7 +15,7 @@ Follow the target repository's instructions. Do not edit product code, resolve f
 
 Query GitHub for the pull-request description, comments, linked issues or requirements, current head, and available checks. Inspect the complete base-to-head diff, surrounding code, relevant history, and verification evidence. Use the reviewing-code skill for a complete phased review.
 
-Prepare a concise proposed GitHub review containing its conclusion and only material actionable findings. Do not publish it. Store the complete proposal at `{{proposal_path}}`, then send `review-proposed` with `base`, `head`, `round`, `conclusion`, and `proposalRef` through the control block's delivery procedure.
+Prepare a concise proposed GitHub review containing its conclusion and only material actionable findings. Represent location-specific findings as inline comments when GitHub can attach them to changed lines; record each comment's path, changed-side line, and body. Reserve the review body for the conclusion, risk summary, changeset-wide findings, and findings that cannot be attached; do not duplicate findings. Do not publish it. Store the complete proposal at `{{proposal_path}}`, then send `review-proposed` with `base`, `head`, `round`, `conclusion`, and `proposalRef` through the control block's delivery procedure.
 
 Use only these event shapes, replacing placeholders with verified values:
 

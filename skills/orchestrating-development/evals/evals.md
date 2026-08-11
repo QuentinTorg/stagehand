@@ -93,7 +93,7 @@ The PR description and comments contain constraints absent from the abbreviated 
 
 ### Reviewer-only proposal and publication
 
-Authorize review of a human-authored pull request. Assert that the orchestrator creates one Herdr worktree and one reviewer, but no author, fixer, or Hunk session. The reviewer reads GitHub context, reviews the exact head without modifying source or PR state, and emits a recoverable `review-proposed`. Assert that nothing is published until the human approves the exact proposal and head. After approval, validate `review-published`. Repeat with a changed head and assert that publication is rejected pending complete rereview.
+Authorize review of a human-authored pull request. Assert that the orchestrator creates one Herdr worktree and one reviewer, but no author, fixer, or Hunk session. The reviewer reads GitHub context, reviews the exact head without modifying source or PR state, and emits a recoverable `review-proposed`. Require attachable code-specific findings as inline review comments, with the body limited to summary and non-attachable or changeset-wide findings; findings are not duplicated. Assert that nothing is published until the human approves the exact proposal and head. After approval, validate `review-published`. Repeat with a changed head and assert that publication is rejected pending complete rereview.
 
 ### Scope revision
 
