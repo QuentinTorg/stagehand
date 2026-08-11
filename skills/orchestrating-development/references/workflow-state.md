@@ -111,12 +111,12 @@ For a task with drift:
 1. Inspect one bounded Herdr inventory and its record. Stop if they agree and no drift signal exists.
 2. For unexpected settlement, a missing event, or newer durable artifacts, inspect the role transcript once and only necessary artifacts. Recover a complete event or fallback first; route live permission requests through the permission procedure.
 3. Prove every intervening human gate, role conclusion, and changeset transition from its proper evidence class. An agent's paraphrase does not prove human authority.
-4. If all boundaries are proven, atomically advance to the furthest state without replaying historical events. Record sources and skipped boundaries in `state.decision_reason`; normalize current event, ownership, waits, attention, and recovery fields.
+4. If all boundaries are proven, atomically advance to the furthest state without replaying historical events. Record sources and skipped boundaries in `state.decision_reason`; normalize `last_event`, expected role and events, wait and attention fields, and recovery attempts.
 5. If authority and artifacts are proven but the current role conclusion is missing, record one attempt and prompt that same role once with a fresh control block and the exact current-boundary event schema. Request current state, not repeated work or historical events.
 6. If authorized work continues and only bookkeeping lags, record the proven active state and await the normal boundary. Interrupt only when mutation lacks authority or continued work compounds risk.
 7. On unresolved identity, authority, conclusion, scope, or changeset ambiguity—or a failed catch-up attempt—preserve work, enter `decision-required`, and ask one focused question. Do not infer, reprompt, replace the role, or increment review counters.
 
-Reset recovery attempts only after successful reconciliation or a valid event establishes a new handoff. Invalid events do not reset them. When the record and transcript disagree on authority, ask the human.
+Reset recovery attempts only after successful reconciliation or a valid event establishes a new handoff. Invalid events do not reset them. When the record and transcript disagree on authority, preserve state and ask the human.
 
 ## Event validation
 

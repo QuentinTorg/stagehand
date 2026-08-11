@@ -154,9 +154,9 @@ Above the table, show `🔴 needs you · 🟡 in progress · 🟢 orchestration 
 
 Formatting rules:
 
-- Lead provisioned tasks with the exact live Herdr sidebar label in code, followed when useful by a short repository-qualified issue link and title. Reuse that label throughout the response. Before provisioning, use `<display name> (workspace not created)`. Use internal IDs only to resolve ambiguity.
+- Lead provisioned tasks with the exact live Herdr sidebar label in code, followed when useful by a short repository-qualified issue link and title. Reuse that label throughout the response. Before provisioning, use `<display name> (workspace not created)`. Derive and persist a missing legacy `display_name` once; do not query GitHub only to render it. Disambiguate duplicate live labels with the workspace ID.
 - Show workflow state in `Stage`; add scope after version 1 and review usage only when relevant.
-- In `Agents`, pair each role's current Herdr lifecycle with only the latest accepted milestone needed to disambiguate the cycle: `implementing`, `reviewing r2`, `findings r2`, `fixing r2`, `fixed r2`, or `passed r3`. When settled roles obscure ownership, append `→ Author`, `→ Reviewer`, or `→ you`. Use `—` for roles not yet created.
+- In `Agents`, pair each role's current Herdr lifecycle with only the latest accepted milestone needed to disambiguate the cycle: `implementing`, `reviewing r2`, `findings r2`, `fixing r2`, `fixed r2`, or `passed r3`. Rounds are per scope; `fixing r2` answers findings from round 2. When settled roles obscure ownership, append `→ Author`, `→ Reviewer`, or `→ you`. Use `—` for roles not yet created.
 - Link the PR when known. Keep CI, dependencies, internal wait state, and notes out of the table unless they require human disposition.
 - Preserve task order. Use one bounded Herdr inventory for live labels and lifecycle, and durable records for workflow state. Persist renamed workspace labels; flag missing live workspaces instead of substituting issue numbers.
 

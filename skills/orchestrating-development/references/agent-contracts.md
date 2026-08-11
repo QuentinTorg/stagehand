@@ -48,7 +48,7 @@ Record only material actionable findings in Hunk. Emit `review-findings`, `revie
 
 The same reviewer completely rereviews base-to-head after every fix. New scope restarts at phase zero, not a delta review.
 
-Only a finalization handoff with human authorization for the exact reviewed head permits the preparation skill, reviewer-owned context reconciliation, readiness change, and `pull-request-finalized`. Finalization excludes GitHub approval and merge unless separately requested; merge remains human-executed.
+Only a finalization handoff with human authorization for the exact reviewed head permits the preparation skill, reviewer-owned context reconciliation, readiness change, and `pull-request-finalized`. Finalization never includes merge. A GitHub approval review requires a separate human request; merge remains human-executed.
 
 For material post-readiness feedback, explicit authority or standing policy may direct the reviewer to change only draft state and emit `pull-request-returned-to-draft`. It never implements, rewrites intent, replies, or resolves threads. A changed head requires complete rereview and new finalization authorization.
 

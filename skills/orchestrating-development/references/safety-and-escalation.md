@@ -83,13 +83,13 @@ A verified merge or explicit human request authorizes cleanup of that task's wor
 
 For legacy records, derive the pointer disposition once only from explicit scope or standing policy; otherwise ask and persist the answer. An allowed gitlink difference is neither dirty product work nor a reason to reset the target or require an excluded meta-repository PR.
 
-After both audits pass, deinitialize clean pinned submodules normally, then request normal Herdr removal. If ordinary deinitialization refuses only the expected target gitlink mismatch, standing authority permits this exact task-owned path:
+After both audits pass, deinitialize clean pinned submodules normally, then request normal Herdr removal. If ordinary deinitialization refuses only the expected target gitlink mismatch, standing authority permits this exact path from the task-owned containing worktree:
 
 ```text
 git submodule deinit -f -- <validated-relative-target-path>
 ```
 
-Never use this exception with `--all`, the primary checkout, an unrecorded target, internal changes, untracked or unrecoverable commits, or active work. Preserve and diagnose any other failure.
+Never use this exception with `--all`, the primary checkout, an unrecorded or ambiguous target, internal changes, untracked or unrecoverable commits, or active work. Preserve ambiguous state and ask the human; diagnose other failures without broadening force.
 
 If every submodule is deinitialized and normal removal fails solely because Git prohibits removing a linked worktree from a repository containing submodules, immediately revalidate task ownership, workspace ID, recoverability, settled agents, and absence of blocked interaction or independent process state. Idle or done agents, completed Hunk sessions, and ordinary task shells need not make the process list empty. Standing authority then permits:
 
