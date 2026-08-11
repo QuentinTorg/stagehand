@@ -32,7 +32,7 @@ The installed managed-agent workflow rule may automatically allow caller-pane di
 
 Use `./scripts/herdr-interrupt-agent <agent-name>` only for a task-owned agent whose current work has been invalidated by a newer human instruction, or when interruption is needed to prevent an external mutation that is no longer authorized. Inspect the named agent and its recent output first. The wrapper sends only Escape; it does not authorize Enter, Ctrl+C, approval responses, or arbitrary keys.
 
-Version one never interacts with an agent's permission UI. When Herdr reports `blocked` or a request is visible for another operation:
+The orchestrator never interacts with an agent's permission UI. When Herdr reports `blocked` or a request is visible for another operation:
 
 1. identify the exact task, role, command or action, target, and stated reason;
 2. determine whether the request is still current;

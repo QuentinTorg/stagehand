@@ -84,7 +84,7 @@ Apply the shared-input collision and bounded furthest-proven-state reconciliatio
 
 Between active orchestrator turns, rely on explicit agent events plus Herdr's visible status and notifications; do not create an unbounded polling or cron loop inside the agent. A failed event delivery cannot wake an idle orchestrator, so this version detects silent failures on the orchestrator's next invocation. Use bounded waits only when the user explicitly asks the orchestrator to remain attached and monitor.
 
-When an agent is blocked on permission, follow the version-one escalation procedure. Never send approval input on the human's behalf.
+When an agent is blocked on permission, follow the permission-escalation procedure. Never send approval input on the human's behalf.
 
 ### 6. Direct initial draft creation
 
