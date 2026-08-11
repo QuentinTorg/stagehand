@@ -76,36 +76,30 @@ Selected post-readiness feedback authorizes only its bounded resolution. Returni
 
 ## Cleanup authority
 
-A verified merged pull request implicitly authorizes cleanup of that task's Herdr workspace and worktree. The human may also explicitly request cleanup before merge. Neither condition alone authorizes force removal, pull-request closure, branch deletion, or loss of local work; only the narrowly audited force paths below extend ordinary cleanup authority.
+A verified merge or explicit human request authorizes cleanup of that task's workspace and worktree. It does not authorize PR closure, branch deletion, or data loss. Before removal, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
 
-Before cleanup, verify task ownership, PR state when applicable, and agent/process state, then audit a meta-repository worktree at two distinct layers:
+1. **Each initialized submodule:** no tracked or untracked changes; all target commits durably recoverable from the recorded remote branch, PR, merge, or explicit reference; non-targets at their expected pins; no process with state that must survive.
+2. **The containing repository:** no tracked or untracked changes except the recorded target's gitlink difference when `containing_repository_pointer_update: not-planned` and the target passed the first audit. Preserve planned or ambiguous pointer updates.
 
-1. **Inside every initialized submodule:** require no internal tracked modifications or untracked files. For the development target, prove every task commit is recoverable from the recorded remote branch, pull-request head, merged pull request, or another explicit durable reference. For non-target submodules, also require their expected pinned identity. Internal product changes, commits whose recoverability is uncertain, or an active process whose work must survive always block cleanup.
-2. **In the containing repository:** require no tracked or untracked changes except an expected gitlink difference for the recorded development target. That one difference is disposable without another human decision only when the task record says `containing_repository_pointer_update: not-planned` and the target passed the internal recoverability audit. A planned or ambiguous pointer update remains work that must be preserved.
+For legacy records, derive the pointer disposition once only from explicit scope or standing policy; otherwise ask and persist the answer. An allowed gitlink difference is neither dirty product work nor a reason to reset the target or require an excluded meta-repository PR.
 
-For a legacy task without the pointer-update field, reconcile it once from an explicit recorded scope statement or standing workspace policy. Persist `not-planned` only when that authority clearly excludes a containing-repository update; otherwise ask the human and persist the answer. Do not repeatedly ask after the disposition is durable.
+After both audits pass, deinitialize clean pinned submodules normally, then request normal Herdr removal. If ordinary deinitialization refuses only the expected target gitlink mismatch, standing authority permits this exact task-owned path:
 
-Do not describe an allowed target gitlink difference as a dirty or out-of-date submodule, reset the target to the containing repository's pin, or require a containing-repository pull request that the task explicitly excludes.
+```text
+git submodule deinit -f -- <validated-relative-target-path>
+```
 
-After both audit layers pass:
+Never use this exception with `--all`, the primary checkout, an unrecorded target, internal changes, untracked or unrecoverable commits, or active work. Preserve and diagnose any other failure.
 
-1. deinitialize clean pinned submodules normally;
-2. when the recorded target alone differs from its containing gitlink and its pointer update is `not-planned`, run `git submodule deinit -f -- <validated-relative-target-path>` from the task-owned containing worktree if ordinary deinitialization would refuse that expected mismatch; and
-3. ask Herdr to remove the task workspace and worktree normally.
-
-The `-f` exception applies only to the exact recorded target after its internal cleanliness and remote recoverability were proven. Never combine it with `--all`, use it on an unrecorded or ambiguous path, use it in the primary checkout, or use it to dispose of internal modifications, untracked files, unpushed commits, or running work. If scoped deinitialization fails, or normal Herdr removal fails for any reason other than the specific linked-worktree submodule prohibition handled below, preserve the worktree and diagnose rather than broadening force.
-
-When every submodule is deinitialized and normal Herdr removal fails solely with Git's prohibition on removing a linked worktree from a repository containing submodules, revalidate immediately that the workspace ID and checkout belong to the task, every managed agent is settled, no blocked interaction or independent build/test/server/editor process has state that must survive, no submodule remains initialized, and no unrecoverable file or commit remains. Do not require an empty process list: idle or done Codex agents, completed Hunk sessions, and ordinary shells are task-owned workspace runtimes that Herdr force is designed to shut down. Standing cleanup authority then permits:
+If every submodule is deinitialized and normal removal fails solely because Git prohibits removing a linked worktree from a repository containing submodules, immediately revalidate task ownership, workspace ID, recoverability, settled agents, and absence of blocked interaction or independent process state. Idle or done agents, completed Hunk sessions, and ordinary task shells need not make the process list empty. Standing authority then permits:
 
 ```text
 herdr worktree remove --workspace <recorded-workspace-id> --force --json
 ```
 
-Herdr's force path shuts down the selected workspace's terminal runtimes and invokes `git worktree remove --force` for that recorded checkout. Settled agents and disposable Hunk or shell processes are not an `active workspace` for this purpose; a working agent, blocked human interaction, or independent process with state that must survive is active. The force path does not authorize another workspace, the primary checkout, a dirty or active workspace, branch deletion, manual recursive deletion, or a second broader force operation. If the audited command fails, preserve the remaining state and diagnose the exact failure.
+This force path may stop only that workspace's disposable runtimes and remove only its recorded checkout. It never authorizes another or primary workspace, dirty or active work, branch deletion, manual recursive deletion, or broader force. Preserve and diagnose a failed audited removal.
 
-A successor or follow-up task does not keep its predecessor workspace alive merely because the new work remains active. When the tasks have distinct recorded worktrees and every predecessor change that must survive is recoverable in the successor's remote branch, pull request, or another durable reference, audit and clean the predecessor independently. Preserve it only when unique predecessor-local work, a shared process, or ambiguous ownership remains.
-
-Preserve the workspace and ask the human when internal product work, unexpected containing-repository changes, unpushed commits, an active process has state that must survive, ownership is shared, or ambiguity remains. Settled task-owned terminal runtimes are disposed through the audited Herdr path above. Close and remove only resources recorded for that task.
+Audit completed predecessors independently from active successors when their required work is durable elsewhere. Preserve any workspace with internal product work, unexpected containing changes, unrecoverable commits, stateful active processes, shared ownership, or ambiguity.
 
 ## Prohibited behavior
 

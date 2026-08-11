@@ -1,133 +1,74 @@
 # Skill Specification: orchestrating-development
 
-## 1. Background & Intent
+## 1. Intent
 
-- **Goal:** Let a dedicated orchestration agent coordinate isolated development and reviewer-only workflows through Herdr while the human retains control of task selection, implementation intent, scope, risky actions, pull-request readiness, external review publication, and merge.
-- **Why a skill is needed:** Herdr supplies agent-aware terminals and automation primitives, but it does not define the development lifecycle, semantic handoffs, resource limits, or authority model. Without a narrow orchestration contract, an agent may infer workflow state from ambiguous terminal activity, spawn unnecessary agents, repeat review loops indefinitely, expand scope, or consume substantial tokens without returning to the human.
-- **Desired operating model:** The human discusses **what tasks to pursue** with the orchestrator. Every task receives one Herdr-owned worktree and workspace from an explicitly resolved primary checkout. A development workspace uses an `agents` tab with persistent author and reviewer panes side-by-side, plus a separate full-width `hunk` tab for one non-watching Hunk session; the human discusses **how to implement it** directly with the author. A reviewer-only task contains one reviewer that proposes a GitHub review for human authorization without modifying source or pull-request state. The orchestrator monitors authorized task workspaces and routes semantic handoffs.
-- **Empirical evidence:**
-  - The [Stagehand design principles](../../docs/design/01-design-principles.md) establish persistent complementary author and reviewer roles, explicit lifecycle and scope authority, Hunk as the private review surface, draft pull requests, and human-controlled finalization and merge.
-  - The user reports that Hunk watch mode is slow and erases agent comments when the diff changes; controlled reloads are required after findings have been consumed.
-  - The user wants planning detail to remain in the author session so a comparatively inexpensive orchestrator can retain a small coordination context.
-  - The user is specifically concerned about recursive spawning, unauthorized tasks, repeated review/fix spirals, scope bloat, and unexpected token consumption, while retaining human control over the desired amount of parallel work.
-  - A managed-agent event arrived while the human was typing to the orchestrator, causing Herdr to submit the human draft with workflow-event JSON appended. The orchestrator must recover both logical inputs without losing human intent or accepting an ambiguous event.
-  - Multiple managed authors completed implementation or opened draft pull requests without delivering valid events; one concluded that no orchestrator was attached, and another began implementation while the durable record still awaited plan approval. Routing identity and allowed transitions therefore need to be refreshed at every handoff and checked against durable Git and GitHub evidence.
-  - A Hunk tab for a submodule pull request was created at the containing meta-repository root. The comparison failed, and the orchestrator requested approval for raw `herdr pane run ... cd` input to repair it. Review topology must bind the Hunk pane to the recorded development target at creation, and the validated launcher must reject mismatched repository identity before terminal injection.
-  - Dashboard `Waiting on` entries such as pending CI, CodeQL, component squash commits, and dependencies obscured the few items the human could actually act on. Internal wait state should remain durable controller data, while the human dashboard shows only task identity, stage, managed-agent activity, pull request, and one consolidated attention list.
-  - In later review cycles, lifecycle-only agent summaries such as two idle roles did not reveal whether fixes, rereview, or human disposition came next. The existing Agents cell should carry compact reconciled role milestones and, only when needed, a next-owner cue without adding another column.
-  - Direct human work with a managed agent and missed event delivery can leave the agent, GitHub artifacts, and task record at different stages. Sequentially replaying every omitted event is noisy and fragile; reconciliation should advance once to the furthest state whose authority, role conclusions, and artifacts are independently proven.
-  - A distributable orchestration package needs a tracked activation contract without publishing personal paths, company hosts, repository initialization, or model preferences. The live checkout therefore requires an ignored local configuration overlay, with a tracked value-free template and an optional symlink to private configuration.
+Coordinate Herdr-managed development and reviewer-only workflows while the human retains task, plan, scope, risk, publication, finalization, and merge authority. Herdr supplies runtime control; this skill supplies durable workflow state, bounded role handoffs, review loops, and recovery.
 
-## 2. Trigger Conditions (Metadata)
+The operating model is:
 
-- **Trigger:** Use only when the user explicitly asks the designated orchestration agent to identify, start, coordinate, monitor, resume, or report on a development or reviewer-only task using managed Herdr sessions.
-- **Designated environment:** The skill is installed repository-locally in an orchestration workspace. Its tracked `AGENTS.md` supplies the portable activation contract and may require an ignored local configuration overlay for machine paths, repositories, hosts, and user policy; feature worktrees remain outside its directory hierarchy.
-- **Do not trigger:** Ordinary implementation, planning with an author, formal code review, finding resolution, Hunk interaction alone, pull-request preparation alone, general questions about orchestration, or work performed from a product repository.
-- **Activation boundary:** Repository-local installation is the primary boundary. Trigger wording is routing, not access control; the skill must still verify that the current workspace declares itself as an orchestration workspace before acting.
+- one authorized task per Herdr workspace and worktree;
+- one persistent author and reviewer for development, or one reviewer for reviewer-only work;
+- implementation planning between the human and author;
+- a draft PR carrying intent before private Hunk review;
+- selected findings returned to the original author and completely rereviewed;
+- human-authorized PR finalization by the reviewer; and
+- final review and merge by humans in GitHub.
 
-## 3. Workflow & Procedures
+This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, and personal configuration leaking into a portable package. Long-lived orchestrators also need concise, single-owner instructions to preserve context across many tasks.
 
-1. **Load the environment contract.** Read the orchestration repository's tracked `AGENTS.md` and every local configuration file it requires, then confirm configured repository paths or resolution rules, initialization requirements, Herdr availability, locally installed Herdr skill, and resource limits. A missing required overlay stops activation. Do not scan arbitrary filesystem roots or guess among similarly named checkouts.
-2. **Discuss and select work.** Inspect user-provided tasks or authorized issue sources, explain relevant tradeoffs, and wait for explicit human selection. Never autonomously roll from one task into another.
-3. **Create the task record.** Record the task mode, stable machine identifier, short human-readable display name, source, GitHub issue repository/number/URL when present, objective, containing repository remote/base/fetched base commit, worktree, and the exact development target kind/path/remote/base/base commit/feature branch, plus the disposition of any containing-repository pointer update, workspace label, authority, scope version, review counters, and current state. Once provisioned, the exact current Herdr sidebar workspace label is the primary human-facing task identity; the display name remains the fallback before a workspace exists. The record contains coordination facts, not the author's detailed implementation plan. Initial development-task authorization covers routine branch publication and initial draft creation.
-4. **Provision one isolated workspace per task.** After task authorization and the requested start decision, resolve the exact primary checkout from configuration or human input. Inspect it by running ordinary Git commands with that validated checkout as the command working directory, preserving path-independent command policy. Verify its identity, branch, status, remote, and requested base while preserving all local state. Fetch and record the exact remote-base commit; a failed fetch stops new task creation rather than permitting stale work. Apply the configured primary-checkout synchronization policy only through a clean, on-primary-branch, ancestry-verified fast-forward. Preserve and report dirty, off-branch, ahead, or diverged primary state while allowing independent creation from the exact fetched commit when safe. Use Herdr worktree management with its configured placement and create the feature branch from that commit rather than a local primary-branch name. Run only configured checkout-initialization steps and validate them before starting a managed role. For a submodule target, prepare only that target on its feature branch from the exact fetched pull-request base while leaving supporting submodules pinned. Never place two tasks in one managed feature workspace or attach one task to multiple workspaces.
-5. **Bind every managed-role handoff.** Prepend a compact rendered control block to startup and every later role instruction. It carries task, role, stable orchestrator endpoint, scope version, recorded stage, and only the events valid for that operation. The contract persists through silence and direct human discussion until explicit release or cleanup. Validate the startup acknowledgement before handing the role to the human.
-6. **Enforce the planning gate.** The author may perform read-only repository exploration and propose a scope and plan, but it must discuss that plan with the human, receive explicit approval, and successfully deliver `implementation-started` before editing. The orchestrator does not participate in detailed implementation planning or infer approval from lifecycle state.
-7. **Monitor semantics and durable evidence.** Use Herdr lifecycle state to detect activity, settlement, and possible blockers, but compare the recorded stage with relevant transcript, Git, GitHub, verification, or Hunk evidence when a mutation gate, settlement, or suspected drift makes that useful. Reconcile atomically to the furthest proven state when every intervening human gate, role conclusion, and changeset identity is independently established. Otherwise request at most one current-boundary catch-up event or return one focused ambiguity to the human; do not replay obsolete event chains.
-8. **Create the draft handoff.** After implementation, the author emits `implementation-ready`. The orchestrator sends a fresh `drafting` control block and explicitly directs that author to use the preparation skill to create the initial draft containing confirmed intent and a proper link to the originating GitHub issue when present. A validated `draft-pr-ready` event permits review to begin without another human publication approval.
-9. **Prepare private review.** Start or reuse exactly one independent reviewer. Create the Hunk tab with its cwd set to the exact recorded development target that owns the pull request, which may be a submodule rather than the containing worktree. Verify the pane cwd and both comparison commits through the validated launcher before starting Hunk, without watch mode or raw terminal repair. Require the reviewer to acquire intent from the GitHub pull-request description, comments, linked issue or requirements, and current head before performing the complete review.
-10. **Route review outcomes.** A `review-findings` event returns selected in-scope findings to the original author. The author consumes the existing Hunk comments before editing and emits `fixes-ready` afterward. Only then reload Hunk explicitly and ask the same reviewer for a complete base-to-head rereview.
-11. **Handle scope revisions.** Only explicit human direction may expand or materially revise scope. The author emits `scope-revised`; the orchestrator increments `scope_version`, updates task and pull-request intent, resets the per-scope review counter, and requires the reviewer to restart with a full phase-zero review. Cumulative resource accounting does not reset.
-12. **Finalize through the human.** A current-head `review-passed` event produces a ready candidate. The orchestrator asks the human whether the reviewer may finalize. After authorization, the reviewer finalizes and emits `pull-request-finalized`; the orchestrator validates the ready PR against the task and flags deviations before asking the human to perform final GitHub review and merge.
-13. **Reenter after post-review feedback.** Human-selected Herdr or GitHub feedback invalidates the previous reviewed head and returns to the original author and reviewer. Small corrections preserve counters; material revisions create a new scope version and follow configured draft-return policy. Every changed head receives a complete rereview and new human-authorized finalization.
-14. **Support reviewer-only work without mutation.** For an existing human-authored pull request, start one reviewer and no author, fixer, or Hunk session. The reviewer produces a durable proposal for the exact head. Publication requires explicit human authorization of that proposal and head; a changed head requires complete rereview.
-15. **Report the whole open workflow set.** End every user-visible response with a four-column row for each non-cleaned task: primary human-facing identity, stage, agents, and pull request. Lead provisioned tasks with the exact current Herdr sidebar label and use it again in the attention section; repository and issue links are secondary context. Red means human-blocked orchestration, yellow means in progress or passively dependency-blocked, and green means orchestration reached a settled handoff or terminal outcome. In the Agents cell, pair lifecycle with compact current or latest accepted role milestones and review-round numbers when they disambiguate repeated cycles. When all roles are settled and ownership is otherwise unclear, append one next-owner cue for the author, reviewer, or human; omit it for passive waits. Keep pending CI, dependencies, and the task record's internal wait condition out of the table. Follow it with the sole human-action surface, `Needs your attention`, listing blocking decisions first and ready-for-final-review handoffs second, or `None.` when nothing is actionable.
-16. **Recover and clean up explicitly.** Reconcile stale state rather than replaying mutations. Audit submodule internals separately from containing-repository gitlinks. After a verified merge or explicit human cleanup request, allow an expected target gitlink difference when no containing-repository pointer update is planned and the target is internally clean and durably recoverable; otherwise preserve ambiguous or unpublished state. When Git refuses ordinary deinitialization solely because that recorded target differs from the gitlink, permit forced deinitialization of only the validated target path after the audit. If normal Herdr removal then fails solely on Git's linked-worktree submodule prohibition, permit forced removal of only the revalidated task workspace after every submodule is deinitialized and agents are settled; idle agents, completed Hunk sessions, and ordinary shells are expected runtimes Herdr will terminate, while working or stateful independent processes block removal. An active successor in a distinct worktree does not retain a predecessor whose necessary work is durable elsewhere. Cleanup does not imply branch deletion.
+See [Stagehand design principles](../../docs/design/01-design-principles.md) and [skill composition](../../docs/design/02-skill-composition.md) for product-level rationale.
 
-## 4. Edge Cases & Negative Boundaries
+## 2. Trigger contract
 
-### Conservative Initial Guardrails
+Trigger only when the user explicitly asks the designated agent in a configured orchestration workspace to start, coordinate, monitor, resume, or report on Herdr-managed development or reviewer-only work.
 
-- Track any number of explicitly authorized tasks and let the human decide how many execute concurrently. Available capacity never authorizes speculative tasks.
-- Report current workload and likely cost when useful, but do not enforce a fixed global task, worktree, or working-agent limit.
-- Enforce **one task per managed feature workspace and worktree** for the life of the task. Scope revisions remain part of that task rather than creating another task in the same workspace.
-- Permit at most **one author and one reviewer per development task**, or one reviewer and no author for reviewer-only work. Hunk, builds, and tests are processes, not additional agents.
-- Managed agents must not spawn further agents unless the human explicitly authorizes that exception.
-- Default to **three review rounds per scope version** and **six review rounds total**. Reaching either limit pauses for human disposition; a scope revision resets only the per-scope counter.
-- After two human-authorized scope revisions, require a progress and cost check before another expansion.
-- Repeated findings, no material diff change across a fix round, conflicting author/reviewer conclusions, or failure to produce a valid semantic event trigger escalation rather than another automatic loop.
-- Version one does **not** approve permission prompts on behalf of managed agents. A source-controlled Codex rule pre-authorizes only proven-safe workflow primitives: caller-pane discovery, semantic event delivery, and bounded Hunk session interaction. Other permission requests return to the human.
-- Resource limits may be configured by the workspace configuration chain. Relaxing the current limits requires explicit human direction; a task prompt cannot silently override them.
+Do not trigger for implementation, author planning, direct review, finding resolution, Hunk interaction alone, PR preparation alone, orchestration discussion, or work from a product repository. Repository-local installation aids routing but does not replace the activation checks in `SKILL.md`.
 
-### Hunk and Changeset Identity
+## 3. Behavioral contract
 
-- Hunk runs once per development task without watch mode. Reviewer-only tasks do not require it. Reload is explicit and occurs only after the author has consumed the current comments and reported fixes ready.
-- Every review outcome identifies the reviewed base, head or equivalent diff identity, scope version, and review round. A changed head invalidates `review-passed`.
-- Hunk comments are a private review surface, not the only durable workflow state. The review event preserves the outcome before comments can be cleared by reload or session loss.
+The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). Its critical invariants are:
 
-### Parallelism and Conflicts
+1. Load the workspace configuration chain; never guess repositories, authority, or policy.
+2. Reconcile durable task records with Herdr and relevant Git, GitHub, verification, and Hunk evidence before mutation.
+3. Require explicit task authorization and author-session plan approval. Lifecycle state never proves either.
+4. Provision from a verified fetched base through Herdr. Preserve primary checkouts and repository-specific initialization rules.
+5. Bind every managed-role instruction to task, role, endpoint, scope, stage, and allowed semantic outcomes.
+6. Keep author and reviewer roles persistent and independent. Managed roles do not spawn agents.
+7. Require the author to create an intent-bearing draft PR before review. The reviewer acquires intent from GitHub context and surrounding code.
+8. Keep Hunk non-watching, task-local, rooted in the repository owning the PR, and unchanged until findings are consumed.
+9. Return only human-selected material findings to the author. Every changed head receives a complete rereview by the same reviewer.
+10. Treat material scope change as human-owned, versioned, and subject to a new phase-zero review.
+11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Humans always merge.
+12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
+13. Report all open tasks with the fixed dashboard and a single human-action section.
+14. Clean only recorded, recoverable task resources through the guarded paths.
 
-- Before starting parallel tasks, compare repository, base, task briefs, known affected paths, submodules, current diffs, and shared build state. Explain likely overlap and recommend sequencing, but let the human decide whether separate worktrees proceed concurrently.
-- Meta-repositories and submodules require explicit child and parent revisions; the orchestrator must not treat a pointer update as proof that underlying code was reviewed.
+## 4. Guardrails
 
-### Authority and Mutation Boundaries
+- Human authorization, not available capacity, controls parallelism.
+- Each development task has at most one author and reviewer; reviewer-only work has one reviewer.
+- Default limits are three accepted review outcomes per scope and six total. A third material scope revision requires a progress and cost check.
+- Repeated findings, no-progress fixes, conflicting conclusions, missing events, unknown head changes, or overlap trigger escalation rather than another loop.
+- Herdr lifecycle proves activity only. Git and GitHub prove artifacts only. Neither proves human authority or reviewer conclusions.
+- The orchestrator never implements, reviews, fixes, merges, pushes primary branches, force-pushes, bypasses policy, publishes unapproved reviews, or cleans ambiguous work.
+- Product agents receive role contracts, not this skill or private orchestration configuration.
 
-- The orchestrator may operate only on configured repositories, configured worktree roots, its own task records, Herdr sessions it manages, and explicitly authorized GitHub artifacts.
-- Repository roots are location boundaries, not permission to scan or choose a checkout. Missing or ambiguous repository identity requires human confirmation.
-- It does not implement product code, resolve findings itself, rewrite implementation intent, publish an unapproved review, push to `main`, force-push, merge, enable auto-merge, bypass CI, change repository policy, access unrelated credentials, force cleanup, delete branches implicitly, or remove dirty or ambiguously owned resources.
-- The reviewer remains independent and never becomes the fixer. The original author remains the fixer unless the human explicitly replaces it.
-- Human-authored scope changes are allowed, but reviewer observations and agent discoveries do not become current work without human disposition.
-- Post-review comments do not become authorized changes merely because they are visible. Only the human-selected set returns to the author, and comment replies or thread resolution remain separate actions.
+## 5. Progressive disclosure
 
-### Failure Analysis
+`SKILL.md` owns activation, routing, the end-to-end procedure, and dashboard format. Load specialized details only when applicable:
 
-- **Reported failure risk:** An orchestrator repeatedly creates agents or review cycles, mistakes terminal settlement for task completion, approves unexpected operations, absorbs reviewer suggestions into an expanding pull request, or waits forever after a managed role becomes idle without delivering a valid event.
-- **Root cause:** Terminal lifecycle, workflow state, scope authority, resource policy, and event transport are different concepts. Treating Herdr status as a complete controller conflates them, while prose-only event instructions encourage missing fields and invented failure event names.
-- **Generalization:** Use Herdr for observable runtime state, exact role-specific semantic event schemas for workflow claims, durable task records for expected handoffs and bounded recovery, and explicit human checkpoints for authority. Treat diagnosed failure as a required blocker outcome, not as permission to end silently.
+- [workflow-state.md](../orchestrating-development/references/workflow-state.md): states, events, reconciliation, counters, restart recovery, and cleanup eligibility;
+- [agent-contracts.md](../orchestrating-development/references/agent-contracts.md): persistent author and reviewer behavior;
+- [safety-and-escalation.md](../orchestrating-development/references/safety-and-escalation.md): limits, permissions, conflicts, human checkpoints, and cleanup authority;
+- [hunk-coordination.md](../orchestrating-development/references/hunk-coordination.md): pane topology, changeset identity, reload order, and recovery;
+- [installation.md](../orchestrating-development/references/installation.md): installation only;
+- `assets/`: rendered role prompts, event controls, task-record schema, and Codex rules;
+- repository scripts: narrowly validated Hunk launch and agent interruption.
 
-## 5. Architecture & Progressive Disclosure Plan
+Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, hosts, models, initialization, and stricter limits belong in the ignored local overlay represented by `templates/AGENTS.local.md`. SkillDex supplies complementary author/reviewer skills; Herdr supplies terminal control.
 
-- **Repository `AGENTS.md`:** Portable workspace identity, reserved orchestrator role, skill activation, local-configuration loading contract, and source/runtime boundaries; it contains no machine or company configuration.
-- **Repository `templates/AGENTS.local.md`:** Value-free template for personal workflow preferences, repository resolution, initialization, agent defaults, and local command policy. The live `.local/AGENTS.md` is ignored and may be a symlink to private configuration.
-- **`SKILL.md`:** Explicit trigger and environment check; compact orchestration checklist; role and authority boundaries; task-state router; required resource loading; conservative stop conditions. It composes with the Herdr skill rather than duplicating Herdr commands.
-- **`references/workflow-state.md`:** Task state machine, development finalization, post-review reentry, reviewer-only publication transitions, scope versions, review counters, semantic events, shared-input collision recovery, furthest-proven-state reconciliation, changeset identity, recovery, guarded cleanup, and stale-event handling.
-- **`references/agent-contracts.md`:** Development author/reviewer and reviewer-only responsibilities, issue-aware draft handoff, GitHub intent acquisition, planning gate, persistent-session behavior, role replacement, and prohibition on recursive spawning. It delegates the shared delivery mechanics to the managed workflow control block.
-- **`assets/managed-agent-control-block.md`:** Compact rendered identity and transition envelope prepended at startup and every later role handoff. It centralizes endpoint persistence, allowed outcomes, delivery verification, fallback, and startup acknowledgement instead of repeating that protocol in each role template.
-- **`references/safety-and-escalation.md`:** Default resource budgets, permission handling, allowed targets, conflict detection, no-progress detection, human checkpoints, guarded cleanup, and prohibited mutations.
-- **`references/hunk-coordination.md`:** Canonical task layout with side-by-side author/reviewer panes in an `agents` tab and an unsplit full-width Hunk pane rooted at the exact development target in a separate `hunk` tab, plus repository/cwd validation, one-session-per-task identity, base selection, no-watch requirement, comment-preserving order of operations, explicit reload, and session-loss fallback. It delegates live-session command syntax to the installed Hunk skill.
-- **`assets/task-record.yaml`:** Portable mode-aware task-state template with no machine-specific paths or company policy, including a durable pre-provisioning display-name fallback, the Herdr workspace label used as the primary provisioned-task identity, wait and human-attention fields, and bounded expected-event recovery state.
-- **`assets/author-startup-prompt.md`:** Template that supplies the task brief, planning gate, role boundary, resource limits, and semantic events without loading the orchestration skill into the author.
-- **`assets/reviewer-startup-prompt.md`:** Template that supplies review identity, complete-review requirement, Hunk expectations, independence boundary, and semantic outcomes.
-- **`assets/external-reviewer-startup-prompt.md`:** Template for immutable review of an existing human-authored pull request, durable proposal creation, and human-authorized review publication.
-- **`assets/codex-managed-agent-events.rules`:** Portable Codex rule allowing managed roles to identify their current pane, notify only the stable `workflow_orchestrator` endpoint, and use bounded Hunk session inspection, navigation, reload, and finding operations without granting broader Herdr control or destructive comment operations.
-- **`references/installation.md`:** Individual skill and rule symlink installation, stable orchestrator naming, restart requirement, collision handling, and policy validation.
-- **`evals/evals.md`:** Trigger near misses and behavior scenarios for repository resolution, Herdr worktree ownership, configured initialization, task authorization, planning waits, issue-linked draft creation, GitHub intent acquisition, reviewer-only publication, review findings, post-review feedback, scope revision, stale heads, permission prompts, process limits, no-progress loops, conflict detection, human-routed finalization, and guarded cleanup.
-- **Repository `scripts/herdr-hunk-diff`:** Uses Herdr pane metadata and Git object checks to validate the pane ID, pane cwd, and both commits before launching the workflow's non-watching base-to-head Hunk comparison without granting arbitrary `herdr pane run` authority.
-- **Repository `scripts/herdr-interrupt-agent`:** Validates a managed agent name and sends only Escape when newer human direction invalidates the agent's current turn, without granting arbitrary terminal or approval input.
-- **Environment boundary:** The tracked root `AGENTS.md` contains only portable workspace activation. Personal repository paths, model choices, company hosts, worktree roots, and tighter limits belong in an ignored local overlay such as `.local/AGENTS.md`, not the generic skill or public workspace contract. A tracked template documents the local configuration shape without real values.
-- **Installation boundary:** The orchestrator is distributed as its own workflow package rather than as a SkillDex role skill. The package owns the orchestration skill, workflow documentation, rules, scripts, installation guide, and local-workspace template; SkillDex remains the source of the complementary author and reviewer skills. The official Herdr skill is installed separately and repository-locally. The managed-agent workflow rule remains source-controlled with the orchestration skill and is individually linked into the user's Codex rules so product-worktree agents can identify their pane, notify the stable `workflow_orchestrator` endpoint, and use the bounded Hunk session API.
+## 6. Evaluation
 
-## 6. Testing & Assertions (Eval-Driven)
+[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
-The executable evaluation contract lives in
-[the manual acceptance scenarios](../orchestrating-development/evals/evals.md).
-Run those cases both with and without the skill, preserve transcripts, and revise
-instructions only when the comparison exposes a behavioral failure.
-
-The suite covers:
-
-- trigger and non-trigger routing;
-- explicit task, plan, scope, publication, finalization, and cleanup authority;
-- persistent role identity, semantic-event delivery, and missing-event recovery;
-- repository resolution, Herdr worktree ownership, initialization, and conflicts;
-- Hunk topology, comment preservation, complete rereview, and stale-head rejection;
-- reviewer-only publication and post-readiness development reentry;
-- review and scope budgets, permission escalation, and guarded cleanup; and
-- compact status reporting and human-attention routing.
-
-The global assertions require one task record, worktree, and workspace per task;
-bounded author-reviewer cardinality and review loops; independently validated
-state transitions; no inferred human authority; no product implementation by the
-orchestrator; no unapproved publication or finalization; no merge or primary-
-branch mutation; and no cleanup of dirty, working, unrecoverable, or ambiguous
-state.
+Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.
