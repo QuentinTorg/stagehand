@@ -90,6 +90,8 @@ Selected post-readiness feedback authorizes only its bounded resolution. Returni
 
 ## Cleanup authority
 
+A human request to clean up a uniquely identified task, workspace, or review workspace means guarded cleanup of that task's recorded linked workspace and worktree. The human need not distinguish those implementation details. This wording never authorizes `herdr workspace close`; ask only when task identity or cleanup scope is ambiguous.
+
 A verified merge or explicit human request authorizes cleanup of that task's linked workspace and worktree through `herdr worktree remove`. It does not authorize `herdr workspace close`, primary-workspace closure, PR closure, branch deletion, or data loss. Before removal, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
 
 1. **Each initialized submodule:** no tracked or untracked changes; all target commits durably recoverable from the recorded remote branch, PR, merge, or explicit reference; non-targets at their expected pins; no process with state that must survive.

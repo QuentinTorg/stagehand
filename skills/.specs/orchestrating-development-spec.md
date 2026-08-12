@@ -41,7 +41,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans always merge.
 12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
 13. Report all open tasks with the fixed dashboard and a single human-action section.
-14. Clean only recorded, recoverable task resources through the guarded paths.
+14. Interpret ordinary task/workspace cleanup language as guarded removal of the uniquely identified task's recorded linked workspace and worktree; preserve ambiguous targets.
 15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
 
 ## 4. Guardrails

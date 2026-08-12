@@ -145,6 +145,8 @@ Selected feedback may substantially expand review surface but its scope effect i
 
 ### Guarded cleanup
 
+Ask the orchestrator to “clean up the PR review workspace” using a unique live workspace label. Assert that it resolves the owning task and applies the complete guarded cleanup to the recorded linked workspace and worktree without asking the human to restate Herdr terminology. Repeat with an ambiguous label or primary workspace and require clarification without invoking `herdr workspace close`.
+
 For a merged PR with a clean task-owned worktree, assert that the orchestrator removes only its recorded linked workspace and worktree through `herdr worktree remove` without force; it never calls `herdr workspace close`. Repeat after an explicit human cleanup request on an open PR and assert that the workspace and worktree are removed while the PR and branch remain unchanged. Repeat with uncommitted or untracked changes and assert that cleanup stops for human disposition.
 
 Repeat with a submodule-only task whose clean target HEAD differs from the containing meta-repository gitlink and whose record says `containing_repository_pointer_update: not-planned`. Assert that the orchestrator verifies the target commits are durably recoverable, treats only that root-level gitlink difference as disposable, and cleans up without requesting a meta-repository PR or another human confirmation. When Git refuses ordinary deinitialization because of that mismatch, assert that it runs `git submodule deinit -f -- <validated-relative-target-path>` only for the recorded target, then uses normal non-forced Herdr removal.
