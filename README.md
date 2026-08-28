@@ -1,6 +1,6 @@
 # Stagehand
 
-This package helps one developer coordinate coding agents without replacing ordinary team practices. It supports reviewed development, review of existing pull requests, and bounded delegated work such as investigation or planning.
+This package helps one developer coordinate coding agents without replacing ordinary team practices. It supports reviewed development, review of existing pull requests, bounded delegated work, and workspace-only exploration.
 
 [Herdr](https://github.com/ogulcancelik/herdr) supplies workspaces, worktrees, panes, and agent lifecycle management. [Hunk](https://github.com/modem-dev/hunk) provides the private local review surface. GitHub draft pull requests preserve intent and become the final handoff to human teammates and CI.
 
@@ -18,6 +18,8 @@ This package helps one developer coordinate coding agents without replacing ordi
 Agents notify the orchestrator through small Herdr workflow events. The orchestrator validates those events against durable task records instead of inferring progress from terminal activity. It does not implement product code, approve unexpected permissions, or merge pull requests.
 
 For investigation, diagnosis, planning, or research with no intended landed change, request a delegated-work task. Stagehand starts one worker in an isolated workspace and returns its result without creating a PR, reviewer, Hunk session, or review loop.
+
+For open-ended human-directed work, request a workspace-only task. If that work later becomes a pull request, Stagehand keeps the same workspace and agent when safe and promotes it into the development review workflow.
 
 ## Skills and responsibilities
 
@@ -73,7 +75,7 @@ Managed roles report completed handoffs and diagnosed blockers through exact sem
 
 ## Guardrails
 
-The human explicitly authorizes every task and decides how many workflows run concurrently. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation. The orchestrator warns about likely overlap and recommends sequencing, but fixed global concurrency caps are not imposed. Review rounds and material scope revisions remain bounded; unexpected permissions, stale heads, conflicts, and no-progress loops return to the human.
+The human explicitly authorizes every task and decides how many workflows run concurrently. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work has no managed role until promotion. The orchestrator warns about likely overlap and recommends sequencing, but fixed global concurrency caps are not imposed. Review rounds and material scope revisions remain bounded; unexpected permissions, stale heads, conflicts, and no-progress loops return to the human.
 
 GitHub remains the collaboration boundary. The workflow never pushes to the primary branch, bypasses CI, enables auto-merge, or performs the final merge.
 

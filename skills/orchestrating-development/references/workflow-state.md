@@ -26,6 +26,7 @@ When a managed role owns the next transition, also record `event_recovery.expect
 | State | Meaning | Normal exit |
 | --- | --- | --- |
 | `queued` | Authorized but intentionally waiting for a human decision, dependency, requested sequencing, or conflict resolution | Start the task when its waiting condition is cleared |
+| `human-working` | A workspace-only task is available for open-ended human-directed work | Human-requested promotion, retention, or cleanup |
 | `planning` | Author is exploring and discussing implementation with the human | Validated `implementation-started` or `needs-human` event |
 | `implementing` | Author is implementing or verifying the approved scope | Validated `implementation-ready` or `needs-human` event |
 | `drafting` | Orchestrator directed the author to create the initial draft PR | Validated `draft-pr-ready` or `needs-human` event |
@@ -166,4 +167,6 @@ Resume only after these sources agree. Never repeat workspace creation, PR creat
 
 A task becomes cleanup-eligible when GitHub confirms its pull request merged or the human explicitly requests cleanup. Before removal, verify that the worktree and workspace still belong to the task, no managed role is working, and apply the two-layer recoverability audit in [Safety, Capacity, and Escalation](safety-and-escalation.md). An expected containing-repository gitlink difference is allowed only for a clean, recoverable submodule target whose recorded pointer update is `not-planned`; it does not excuse changes inside that submodule.
 
-If any safety check fails, enter `decision-required` and preserve the workspace. Otherwise remove only the task-owned Herdr workspace and worktree through the normal path or the audited submodule-specific force exception, mark the record `cleaned`, and retain or archive the task record. Pull-request closure and branch deletion are separate actions and are not implied by workspace cleanup.
+If any safety check fails, enter `decision-required` and preserve the workspace. Otherwise remove only the task-owned Herdr workspace and worktree through the normal path or the audited submodule-specific force exception, mark the record `cleaned`, and move it from the active task-record directory to its sibling archive directory (default `.orchestrator/archive`). Normal reconciliation and status reporting inspect only active records; consult the archive only for explicit historical recovery or investigation. Pull-request closure and branch deletion are separate actions and are not implied by workspace cleanup.
+
+During reconciliation, archive legacy records already marked `cleaned` that remain in the active directory.

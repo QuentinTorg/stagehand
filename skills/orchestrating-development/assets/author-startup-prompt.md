@@ -46,7 +46,7 @@ Human-selected feedback may arrive after the pull request was finalized, either 
 
 After either class is implemented and verified, update the pull-request head and send `fixes-ready`. Do not reply to or resolve GitHub threads, change draft state, or assume the previous successful review still applies.
 
-If the human materially revises scope before finalization, send `scope-revised` with a concise `summary` and a recoverable `briefRef`. If progress requires authority or information you do not have, send `needs-human` with a short `reason`.
+If the human materially revises scope before a successful review, send `scope-revised` with a concise `summary` and a recoverable `briefRef`, then wait only for the orchestrator's updated scope control block. The direct instruction is sufficient authority; do not use `needs-human` to request duplicate approval. Use `needs-human` only when progress requires authority or information the human did not provide.
 
 ## Event reliability
 

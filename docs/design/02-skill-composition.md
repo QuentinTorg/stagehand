@@ -58,6 +58,10 @@ Delegated work uses one worker and no workflow skill beyond Stagehand's compact
 routing contract. It returns investigation, diagnosis, planning, or research
 without creating a pull request or entering the development loop.
 
+Workspace-only work provides an isolated checkout without a managed delivery
+loop. When it produces a pull request, Stagehand promotes the same-lineage task
+and preserves its workspace and agent unless reuse would mix or endanger work.
+
 ## Skill Ethos and Boundaries
 
 ### `orchestrating-development`

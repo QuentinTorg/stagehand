@@ -1,0 +1,37 @@
+version: 1
+task_id: "<stable-task-id>"
+display_name: "<short-human-readable-work-item-name>"
+mode: "workspace-only"
+source:
+  kind: "github-issue|direct-request"
+  reference: "<issue-url-or-concise-request-reference>"
+objective: "<human-authorized-purpose>"
+repository:
+  name: "<configured-repository-name>"
+  root: "<absolute-configured-repository-path>"
+  remote: "origin"
+  base: "<base-branch>"
+  base_commit: null
+  branch: "<workspace-branch>"
+  worktree: "<absolute-task-worktree-path>"
+workspace:
+  id: "<herdr-workspace-id>"
+  label: "<exact-current-herdr-sidebar-label>"
+  local_tab: null
+  local_pane: null
+agents:
+  orchestrator: "workflow_orchestrator"
+  workspace_agent: null
+pull_request:
+  url: null
+state:
+  name: "human-working"
+  prior: null
+  decision_reason: null
+  waiting_on: "Human-directed work, promotion, retention, or cleanup."
+  attention_required: false
+  attention_reason: null
+cleanup:
+  requested_by: null
+  completed: false
+last_event: null

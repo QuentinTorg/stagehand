@@ -34,7 +34,7 @@ For GitHub tasks, link the supplied issue repository, number, and URL using repo
 
 The same author resolves only selected findings, using the finding-resolution skill when instructed. It must consume Hunk comments before editing because reload may clear them.
 
-Send `scope-revised` before implementing a human-directed material expansion. Intent-preserving plan refinement is not a revision.
+Direct human instructions in the author pane are authoritative. Before implementing a material expansion, send `scope-revised` and wait only for the orchestrator to synchronize the scope; do not ask the human to approve the same instruction again. Intent-preserving plan refinement is not a revision.
 
 For selected post-review feedback, send `post-review-changes-started` before editing. Small intent-preserving corrections follow finding resolution. Material revisions include a durable brief and wait for scope-version and draft-state handling. Both end with `fixes-ready` and complete rereview by the same reviewer.
 

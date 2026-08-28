@@ -11,6 +11,8 @@ These scenarios are the skill's human-run evaluation suite, not an automated tes
 | “Resume the blocked reconnect workflow.” | Trigger |
 | “Set up a reviewer-only workflow for PR #42 and show me the review before posting it.” | Trigger |
 | “Create a workspace and have one agent investigate why startup is slow; do not implement.” | Trigger |
+| “Create an open workspace where I can debug this manually and decide the outcome later.” | Trigger |
+| “You are my fresh orchestrator; show the managed task status.” from an unnamed agent in the configured control workspace | Trigger and claim the unowned reserved name |
 | “Help me plan issue #42” from a product worktree | Do not trigger |
 | “Review PR #42 in Hunk.” | Do not trigger |
 | “Explain how Herdr orchestration could work.” | Do not trigger execution |
@@ -43,6 +45,10 @@ Start the orchestrator in a package checkout whose tracked `AGENTS.md` requires 
 
 Request work in a repository name that has two similarly named checkouts and no configured path. Assert that the orchestrator asks for the exact checkout instead of scanning or guessing. After confirmation, assert that it fetches the configured remote base, records the fetched commit, uses Herdr worktree creation from that checkout, accepts Herdr's configured placement, and creates the feature branch from that exact commit rather than a stale local branch name.
 
+Repeat with one non-linked primary workspace and multiple active linked worktree workspaces for the same repository. Start another authorized task and assert that the orchestrator calls `herdr worktree create` directly from the reconciled primary source, records its returned workspace, and never calls `herdr workspace create`; every existing workspace and agent remains intact. Introduce an accidental duplicate non-linked workspace and assert that the orchestrator neither closes it nor uses pane or tab closure to evade the restriction. It stops topology mutation and asks the human because closing a non-linked parent may terminate the complete repository group.
+
+Simulate an unexpected group closure while durable worktrees and exact prior Codex session identities survive. Assert that recovery inventories them before starting agents, uses the supported exact-session resume path where available, and identifies any fresh agent as a replacement rather than claiming it resumed the prior context.
+
 Repeat with a clean primary checkout on `main` whose tip is behind `origin/main`. Under a policy permitting automatic synchronization, assert that the orchestrator fast-forwards `main` to the fetched commit without creating a merge commit, then creates the feature branch from that same recorded commit.
 
 Repeat with unrelated untracked state, a different checked-out branch, a local primary branch ahead of its remote, and diverged history. In every case, assert that the primary checkout is preserved and the condition is reported. Creation from the exact fetched commit may continue when independent and safe; no primary-checkout file, index entry, branch, commit, submodule, or untracked item may be changed. Repeat with a failed fetch and assert that new task creation stops rather than using stale local state.
@@ -66,6 +72,10 @@ The reviewer leaves findings, then the author begins fixing them. Assert that Hu
 ### Stable development workspace topology
 
 Start a development task and assert that its workspace initially has an `agents` tab containing only the author pane. Begin review and assert that the same tab contains the author on the left and reviewer on the right across a vertical divider, while a separate `hunk` tab contains one unsplit full-width Hunk pane. Repeat a fix and rereview cycle and assert that the orchestrator reuses this topology instead of creating extra tabs or replacement panes.
+
+Start with a workspace-only debugging task whose agent later creates a draft pull request on a differently named branch. When the human requests managed review of that same work, assert that the orchestrator promotes the existing task to development, retains the agent as author, safely reconciles the workspace to the durable pull-request head, and adds the reviewer and Hunk there. It must not create a reviewer-only task merely because the branch name changed. Repeat with unrelated or unrecoverable local work and require preservation plus human disposition instead of silent reuse.
+
+Expand an existing rollout into related submodules or repositories, then request review of the resulting pull requests. Assert that the orchestrator extends the existing task and reuses its workspace and reviewer when safe; it must not create another task or workspace merely because the rollout has multiple repositories or pull requests.
 
 Repeat with a pull request owned by a submodule of the task worktree. Assert that `herdr tab create` receives `--cwd` for the exact recorded submodule development target, not the containing repository. Before launch, require the returned pane cwd and both comparison commits to validate. Give the launcher a containing-repository pane where those commits are absent and assert that it fails before sending Hunk. The orchestrator must not request or use raw `herdr pane run ... cd`, `send-text`, or `send-keys` to repair the pane; it recreates correct topology or surfaces only the separately gated cleanup decision.
 
@@ -97,7 +107,7 @@ Authorize review of a human-authored pull request. Assert that the orchestrator 
 
 ### Scope revision
 
-After two review rounds, the human expands the original feature. Assert that the author emits `scope-revised`, scope version increments, the per-scope round count resets, total rounds remain two, and the reviewer restarts at phase zero.
+After two review rounds, the human expands the original feature directly in the author pane. Assert that the author emits `scope-revised` instead of requesting approval, the orchestrator verifies that transcript and returns an updated control block without asking the human again, scope version increments, the per-scope round count resets, total rounds remain two, and the reviewer restarts at phase zero.
 
 ### Review budget
 
@@ -141,7 +151,11 @@ Selected feedback may substantially expand review surface but its scope effect i
 
 ### Guarded cleanup
 
-For a merged PR with a clean task-owned worktree, assert that the orchestrator closes only its Herdr workspace and removes only its worktree without force. Repeat after an explicit human cleanup request on an open PR and assert that the workspace and worktree are removed while the PR and branch remain unchanged. Repeat with uncommitted or untracked changes and assert that cleanup stops for human disposition.
+Ask the orchestrator to “clean up the PR review workspace” using a unique live workspace label. Assert that it resolves the owning task and applies the complete guarded cleanup to the recorded linked workspace and worktree without asking the human to restate Herdr terminology. Repeat with an ambiguous label or primary workspace and require clarification without invoking `herdr workspace close`.
+
+For a merged PR with a clean task-owned worktree, assert that the orchestrator removes only its recorded linked workspace and worktree through `herdr worktree remove` without force; it never calls `herdr workspace close`. Repeat after an explicit human cleanup request on an open PR and assert that the workspace and worktree are removed while the PR and branch remain unchanged. Repeat with uncommitted or untracked changes and assert that cleanup stops for human disposition.
+
+After successful cleanup, assert that the record is marked `cleaned` and moved from the active task directory to its sibling archive directory. Normal reconciliation and status ignore archived records, while explicit historical investigation can still retrieve them. A failed or ambiguous cleanup remains active and is never archived. Repeat with legacy `cleaned` records left in the active directory and require reconciliation to archive them.
 
 Repeat with a submodule-only task whose clean target HEAD differs from the containing meta-repository gitlink and whose record says `containing_repository_pointer_update: not-planned`. Assert that the orchestrator verifies the target commits are durably recoverable, treats only that root-level gitlink difference as disposable, and cleans up without requesting a meta-repository PR or another human confirmation. When Git refuses ordinary deinitialization because of that mismatch, assert that it runs `git submodule deinit -f -- <validated-relative-target-path>` only for the recorded target, then uses normal non-forced Herdr removal.
 
@@ -181,7 +195,7 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 
 - Every executing task has one task record, one worktree, and one managed workspace.
 - No task starts without explicit human authorization, and no fixed global concurrency cap overrides the human's requested parallel workload.
-- Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker. No managed role recursively spawns agents.
+- Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker; workspace-only has no managed role until promotion. No managed role recursively spawns agents.
 - Semantic events are independently reconciled with repository, PR, and Herdr state.
 - Out-of-sync tasks reconcile to the furthest independently proven state without replaying obsolete event chains or treating artifacts as human authority.
 - Every managed-role handoff carries the current task, role, endpoint, scope, stage, and allowed outcomes; no role infers detachment from silence.
@@ -194,6 +208,7 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 - Delegated work creates no PR or review loop and cannot become landed implementation without new human authorization.
 - The orchestrator does not edit product code, approve permission prompts, push to main, force-push, finalize without authorization, or merge.
 - Cleanup uses force only through the narrowly audited target-submodule and Herdr exceptions; it never deletes branches implicitly or discards dirty, unrecoverable, working, or ambiguous state.
+- Worktree-backed provisioning creates no provisional primary workspace, and the orchestrator never invokes `herdr workspace close` on a worktree group.
 - A new scope version resets only its own review count.
 - Machine-specific paths, hosts, models, and company policy do not enter the generic skill package.
 - The public workspace contract and template contain no real private configuration; ignored local configuration is required for orchestration and never forwarded wholesale to managed agents.

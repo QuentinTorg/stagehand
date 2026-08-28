@@ -54,13 +54,17 @@ prefix_rule(
 # These mutations are the bounded primitives used to provision authorized task
 # topology. Destructive cleanup and arbitrary terminal input remain gated below.
 prefix_rule(
-    pattern = ["herdr", "workspace", ["create", "rename"]],
+    pattern = ["herdr", "workspace", "rename"],
     decision = "allow",
-    justification = "Create and label explicitly authorized orchestration workspaces.",
-    match = [
-        "herdr workspace create --cwd /tmp/stagehand-example --label example --no-focus",
-        "herdr workspace rename w2 example-task",
-    ],
+    justification = "Label an explicitly authorized orchestration workspace.",
+    match = ["herdr workspace rename w2 example-task"],
+)
+
+prefix_rule(
+    pattern = ["herdr", "workspace", "create"],
+    decision = "prompt",
+    justification = "Confirm a missing canonical primary workspace after checking for duplicate repository parents.",
+    match = ["herdr workspace create --cwd /tmp/stagehand-example --label example --no-focus"],
 )
 
 prefix_rule(
@@ -154,8 +158,8 @@ prefix_rule(
 
 prefix_rule(
     pattern = ["herdr", "workspace", "close"],
-    decision = "prompt",
-    justification = "Confirm workspace termination after validating task ownership and process state.",
+    decision = "forbidden",
+    justification = "A non-linked workspace close can terminate an entire repository worktree group; use audited worktree removal for task cleanup.",
     match = ["herdr workspace close w2"],
 )
 
