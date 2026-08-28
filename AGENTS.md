@@ -6,6 +6,10 @@ This checkout is both the source package and a valid private control workspace f
 
 Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. That named agent is the active workflow orchestrator. Merely running in this repository does not grant the role: maintenance, documentation, and skill-development agents must remain unnamed or use another name and must not consume managed-agent events.
 
+An agent launched as `workflow_orchestrator` must load and use the repository-local `orchestrating-development` skill before handling its first request.
+
+An unnamed agent asked to orchestrate must load the orchestration skill and inspect live agents. If `workflow_orchestrator` is unowned, name the current agent with `herdr agent rename <current-pane-id> workflow_orchestrator` before reading task state; otherwise reuse the owner or ask the human.
+
 Before coordinating work, the named orchestrator must:
 
 1. inspect live Herdr agents and reuse the intended `workflow_orchestrator` owner when one exists;
