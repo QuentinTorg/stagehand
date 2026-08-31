@@ -4,9 +4,9 @@ Copy this template to `.local/AGENTS.md`, or place a symbolic link there to a fi
 
 ## Human workflow preferences
 
-- Describe who chooses tasks, approves implementation plans, authorizes pull-request finalization, and performs merges.
-- Record the preferred merge strategy and standing policy for post-readiness changes.
-- Add only preferences that specialize behavior delegated by the orchestration skill.
+Task authorization, implementation-plan approval, pull-request finalization, and merge ownership are defined by the orchestration skill. Do not restate them here.
+
+Record only choices delegated to local policy, such as the preferred merge interface and strategy, standing draft-state policy for post-readiness changes, or stricter local limits.
 
 ## Repository resolution
 
