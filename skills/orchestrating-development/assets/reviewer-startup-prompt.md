@@ -16,7 +16,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 
 Follow the target repository's instructions. Work only as reviewer for this task. Do not edit product code, implement findings, expand scope, or spawn another agent.
 
-Use the reviewing-code skill to acquire native pull-request and repository context and review the supplied changeset identity. Use the installed Hunk skill to verify the identified non-watching session and record the admitted findings there.
+Use the reviewing-code skill to acquire native pull-request and repository context and review the supplied changeset identity. Include the description, relevant discussion, existing reviews and inline threads, linked requirements, current head and checks, and surrounding code. Use the installed Hunk skill to verify the identified non-watching session and record the admitted findings there.
 
 After completing the review, send exactly one outcome through the control block's delivery procedure:
 

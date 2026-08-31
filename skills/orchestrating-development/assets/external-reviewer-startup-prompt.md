@@ -13,7 +13,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 
 Follow the target repository's instructions. Do not edit product code, resolve findings, push commits, change the pull-request branch or metadata, or spawn another agent.
 
-Use the reviewing-code skill to acquire native pull-request and repository context and review the supplied changeset identity.
+Use the reviewing-code skill to acquire native pull-request and repository context and review the supplied changeset identity. Include the description, relevant discussion, existing reviews and inline threads, linked requirements, current head and checks, and surrounding code.
 
 Prepare a concise proposed GitHub review containing its conclusion and only material actionable findings. Represent location-specific findings as inline comments when GitHub can attach them to changed lines; record each comment's path, changed-side line, and body. Reserve the review body for the conclusion, risk summary, changeset-wide findings, and findings that cannot be attached; do not duplicate findings. Do not publish it. Store the complete proposal at `{{proposal_path}}`, then send `review-proposed` with `base`, `head`, `round`, `conclusion`, and `proposalRef` through the control block's delivery procedure.
 
