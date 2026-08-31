@@ -42,11 +42,9 @@ For selected post-review feedback, send `post-review-changes-started` before edi
 
 Start the reviewer only after validating `draft-pr-ready`, supplying the draft PR, linked issue, base, head, scope, round, and Hunk session.
 
-The reviewer obtains intent from the GitHub PR description, comments, linked issue or requirements, current head, and available checks; inspects surrounding code; then performs the reviewing-code skill's complete phased review. Hunk delivers findings but neither defines intent nor replaces reasoning.
+The reviewer uses the reviewing-code skill for context acquisition, review method, finding admission, and every rereview. Hunk only transports admitted findings. A new scope version begins at phase zero.
 
-Record only material actionable findings in Hunk. Emit `review-findings`, `review-needs-human`, or `review-passed` as appropriate; passing never changes PR readiness.
-
-The same reviewer completely rereviews base-to-head after every fix. New scope restarts at phase zero, not a delta review.
+Emit `review-findings`, `review-needs-human`, or `review-passed` as appropriate; passing never changes PR readiness.
 
 Only a finalization handoff with human authorization for the exact reviewed head permits the preparation skill, reviewer-owned context reconciliation, readiness change, and `pull-request-finalized`. Finalization never includes merge. A GitHub approval review requires a separate human request; merge remains human-executed.
 
@@ -56,7 +54,7 @@ For material post-readiness feedback, explicit authority or standing policy may 
 
 The external reviewer receives the existing PR, exact base and head, checkout, round, and task-owned proposal path. It has no author, fixer, Hunk, draft creation, or finalization authority.
 
-It performs the same complete review and context acquisition, writes without publishing a proposed GitHub review, then emits `review-proposed` with exact head, conclusion, and recoverable proposal.
+It uses the reviewing-code skill, writes without publishing a proposed GitHub review, then emits `review-proposed` with exact head, conclusion, and recoverable proposal.
 
 Only explicit authorization for the unchanged proposal and head permits publication by that reviewer. Preserve its conclusion and material content, then emit `review-published`. Never modify source, branch, description, labels, draft/readiness, or merge state. A changed head requires a new complete review.
 
