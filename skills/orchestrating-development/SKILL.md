@@ -16,7 +16,7 @@ Before acting, verify all of the following:
 1. The user explicitly requested development orchestration rather than advice about orchestration.
 2. The current repository's `AGENTS.md` declares it to be an orchestration workspace.
 3. `AGENTS.md` and any local configuration file it requires identify allowed repositories or roots, repository-resolution rules, GitHub hosts, and current resource limits.
-4. This agent is inside Herdr (`HERDR_ENV=1`) and the repository-local Herdr skill is available.
+4. This agent is inside Herdr (`HERDR_ENV=1`) and has loaded Herdr guidance from a discovered skill or `herdr --skill`.
 5. Target-repository agents have the skills required by their mode: reviewing-code for reviewers, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks. Delegated and workspace-only tasks require none unless their bounded work independently needs one.
 6. The orchestrator is named `workflow_orchestrator`, and the portable managed-agent Herdr rule from [Installation](references/installation.md) is installed for newly launched Codex sessions.
 

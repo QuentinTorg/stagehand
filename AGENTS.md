@@ -8,6 +8,8 @@ Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. Th
 
 An agent launched as `workflow_orchestrator` must load and use the repository-local `orchestrating-development` skill before handling its first request.
 
+Before issuing a Herdr command, load the Herdr skill. If it is not discoverable, run `herdr --skill` and follow the returned version-matched instructions.
+
 An unnamed agent asked to orchestrate must load the orchestration skill and inspect live agents. If `workflow_orchestrator` is unowned, name the current agent with `herdr agent rename <current-pane-id> workflow_orchestrator` before reading task state; otherwise reuse the owner or ask the human.
 
 Before coordinating work, the named orchestrator must:

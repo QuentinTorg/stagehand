@@ -22,6 +22,8 @@ The command must identify a repository ignore rule. Stop and repair `.gitignore`
 
 The orchestration host must provide Git and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there.
 
+`herdr --skill` prints guidance matching the installed Herdr version. The tracked `AGENTS.md` directs a fresh orchestrator to use it when the Herdr skill is not yet discoverable; a workspace-local link remains preferred for automatic skill routing.
+
 ```sh
 mkdir -p /path/to/orchestration-workspace/.codex/skills ~/.codex/rules
 ln -s /absolute/path/to/herdr-skill \
