@@ -99,7 +99,7 @@ The author emits `implementation-ready` for a task originating from issue #42. A
 
 ### GitHub intent acquisition
 
-The PR description and comments contain constraints absent from the abbreviated task record. Assert that the reviewer queries GitHub and uses that context before reviewing; it must not infer intent only from the diff or orchestrator prompt.
+The PR description and comments contain constraints absent from the abbreviated task record. Assert that the Stagehand handoff supplies the exact review identity and invokes reviewing-code rather than restating its procedure; the reviewer uses that skill to acquire GitHub context before reviewing and does not infer intent only from the diff or orchestrator prompt.
 
 ### Reviewer-only proposal and publication
 

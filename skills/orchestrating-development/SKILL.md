@@ -123,9 +123,7 @@ When work from that workspace becomes a pull request or managed implementation, 
 
 Check review budgets before proceeding.
 
-Apply the fixed topology from [Hunk Coordination](references/hunk-coordination.md): split the author pane toward the right inside the existing `agents` tab and start or reuse the independent reviewer there; create the separate full-width `hunk` tab with `--cwd` set to the exact recorded development target, verify that cwd before launch, and start one non-watching session through the validated wrapper. Verify its repository, base, and head. Prompt the reviewer with a `reviewing` control block containing the exact allowed outcomes, followed by its role instructions. The reviewer must use the reviewing-code and Hunk skills and review the complete current changeset.
-
-The reviewer must obtain intent from the GitHub pull-request description, comments, linked issue or requirements, and current head before analyzing the code. Do not substitute the orchestrator's abbreviated task record for that GitHub context.
+Apply the fixed topology from [Hunk Coordination](references/hunk-coordination.md): split the author pane toward the right inside the existing `agents` tab and start or reuse the independent reviewer there; create the separate full-width `hunk` tab with `--cwd` set to the exact recorded development target, verify that cwd before launch, and start one non-watching session through the validated wrapper. Verify its repository, base, and head. Prompt the reviewer with a `reviewing` control block containing the exact allowed outcomes, followed by its role instructions. The reviewer uses the reviewing-code skill for review judgment and the Hunk skill as the private feedback surface; the abbreviated task record never replaces native pull-request context.
 
 ### 8. Route findings without expanding scope
 

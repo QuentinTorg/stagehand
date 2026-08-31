@@ -34,7 +34,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 4. Provision from a verified fetched base with one direct Herdr worktree operation. Preserve primary checkouts and persistent parent workspaces; never create or close a provisional non-linked workspace.
 5. Bind every managed-role instruction to task, role, endpoint, scope, stage, and allowed semantic outcomes.
 6. Keep author and reviewer roles persistent and independent. Managed roles do not spawn agents.
-7. Require the author to create an intent-bearing draft PR before review. The reviewer acquires intent from GitHub context and surrounding code.
+7. Require the author to use the preparation skill for an intent-bearing draft PR before review, and the reviewer to use the review skill for context, analysis, and finding policy.
 8. Keep Hunk non-watching, task-local, rooted in the repository owning the PR, and unchanged until findings are consumed.
 9. Return only human-selected material findings to the author. Every changed head receives a complete rereview by the same reviewer.
 10. Treat direct human scope changes in the author pane as sufficient authority, synchronize them through a versioned scope update without duplicate approval, and require a new phase-zero review.
@@ -58,7 +58,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 
 ## 5. Progressive disclosure
 
-`SKILL.md` owns activation, routing, the end-to-end procedure, and dashboard format. Load specialized details only when applicable:
+`SKILL.md` owns activation, routing, the end-to-end procedure, and dashboard format. SkillDex owns PR composition, review method, and finding-resolution procedure; Stagehand role prompts provide identity, authority, transport, and event boundaries without restating those procedures. Load specialized details only when applicable:
 
 - [workflow-state.md](../orchestrating-development/references/workflow-state.md): states, events, reconciliation, counters, restart recovery, and cleanup eligibility;
 - [agent-contracts.md](../orchestrating-development/references/agent-contracts.md): persistent author, reviewer, and worker behavior;

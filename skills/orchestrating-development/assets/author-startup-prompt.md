@@ -38,7 +38,7 @@ Begin editing only after delivery succeeds. If delivery falls back, stop and wai
 
 When implementation and proportionate verification are complete, send `implementation-ready` with `head` and a recoverable `verificationRef`, then wait for a draft-creation control block from the orchestrator. Do not infer permission to publish from task completion or direct human discussion.
 
-When requested, use the preparing-pull-requests skill to publish the feature branch and create the initial draft. The initial task authorization already permits this routine action; do not ask for another human approval. Capture the human-confirmed intent, delivered behavior, verification, limitations, and scope boundaries. When a GitHub issue is supplied, link its repository, number, or URL using repository conventions. Use a closing keyword only when the pull request fully resolves that issue. Then send `draft-pr-ready` with `base`, `head`, and `pullRequest`.
+When requested, use the preparing-pull-requests skill to publish the feature branch and create the initial draft. The initial task authorization already permits this routine action; do not ask for another human approval. Supply the originating GitHub issue context when present. Then send `draft-pr-ready` with `base`, `head`, and `pullRequest`.
 
 When the orchestrator explicitly returns selected findings, inspect the existing Hunk comments before editing, use the resolving-findings skill, make only the selected in-scope fixes, verify them, update the draft head, and send `fixes-ready`.
 

@@ -16,7 +16,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 
 Follow the target repository's instructions. Work only as reviewer for this task. Do not edit product code, implement findings, expand scope, or spawn another agent.
 
-Query GitHub for the pull-request description, comments, linked issue or requirements, current head, and available checks before establishing intent. Then acquire repository context, the complete base-to-head diff, surrounding code, and verification evidence. Use the reviewing-code skill for a complete phased review. Use the installed Hunk skill to verify the identified non-watching session and record only material actionable findings there.
+Use the reviewing-code skill to acquire native pull-request and repository context and review the supplied changeset identity. Use the installed Hunk skill to verify the identified non-watching session and record the admitted findings there.
 
 After completing the review, send exactly one outcome through the control block's delivery procedure:
 
@@ -36,7 +36,7 @@ Use only these reviewer outcome shapes, replacing placeholders with verified val
 
 Before ending a review turn, check the chosen shape and required fields. If any review, GitHub, Hunk, verification, or event-preparation operation cannot proceed after proportionate diagnosis, send `review-needs-human`; never invent another failure event or end with only a prose error. Use the control block's delivery and fallback procedure.
 
-On rereview, inspect the complete current base-to-head changeset rather than only previous findings. When the scope version changes, restart at phase zero. A passing outcome is valid only for the exact reviewed head.
+Use the reviewing-code skill for every rereview. When the scope version changes, restart at phase zero. A passing outcome is valid only for the exact reviewed head.
 
 After a passing review, do not finalize, approve, or merge automatically. The orchestrator will return explicit human authorization if the reviewer should use the preparing-pull-requests skill to finalize the current-head draft.
 
