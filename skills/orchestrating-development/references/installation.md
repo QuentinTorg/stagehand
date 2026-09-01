@@ -2,6 +2,14 @@
 
 The checkout already tracks a relative `.codex/skills/orchestrating-development` link to its bundled skill and a `.codex/rules/herdr.rules` policy for orchestrator-side Herdr operations. Keep both in place. Install the external Herdr skill only in the dedicated orchestration workspace. Separately install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
 
+## Guided setup
+
+When asked to check or prepare Stagehand, inspect the current installation before changing it. Report what is ready, what is missing or misconfigured, and any value the human must supply. Then preview the remaining work in order, naming each exact source and destination and whether it will be copied, linked, configured, validated, or require a Codex restart. Use the procedures below rather than inventing another installation method.
+
+Do not stop after listing missing components. If the user requested only an audit, offer to apply the proposed setup. If the user requested setup, carry out the previewed actions within that authorization and pause only for an unresolved choice, unsafe existing destination, credential interaction, or required external permission. Never replace an existing file or link without first showing what owns it and where it points.
+
+Afterward, validate every installed link and rule, distinguish completed setup from remaining human actions, and state whether existing Codex sessions must restart.
+
 Keep the tracked root `AGENTS.md` generic. Create the ignored local configuration before starting an orchestrator:
 
 ```sh

@@ -72,6 +72,6 @@ Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, h
 
 ## 6. Evaluation
 
-[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
+[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
 Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.
