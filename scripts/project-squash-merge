@@ -1,0 +1,327 @@
+#!/bin/sh
+set -eu
+
+script_path=$(realpath "$0")
+script_dir=$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)
+stagehand_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+
+usage() {
+    cat >&2 <<'EOF'
+usage: project-squash-merge \
+  --project-record <path> \
+  --package-record <path> \
+  --repository-key <key> \
+  --pr <number> \
+  --expected-base <branch> \
+  --expected-head <commit>
+
+Validates the charter, fresh merge-transition checkpoint, package evidence,
+pull-request identity, and required checks before squash-merging into the
+recorded project integration branch.
+EOF
+}
+
+project_record=
+package_record=
+repository_key=
+pr_number=
+expected_base=
+expected_head=
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --project-record) project_record=${2-}; shift 2 ;;
+        --package-record) package_record=${2-}; shift 2 ;;
+        --repository-key) repository_key=${2-}; shift 2 ;;
+        --pr) pr_number=${2-}; shift 2 ;;
+        --expected-base) expected_base=${2-}; shift 2 ;;
+        --expected-head) expected_head=${2-}; shift 2 ;;
+        --help|-h) usage; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+for required_value in "$project_record" "$package_record" "$repository_key" "$pr_number" "$expected_base" "$expected_head"; do
+    if [ -z "$required_value" ]; then
+        echo "all merge arguments are required" >&2
+        usage
+        exit 2
+    fi
+done
+
+if [ ! -f "$project_record" ]; then
+    echo "project record does not exist: $project_record" >&2
+    exit 2
+fi
+if [ ! -f "$package_record" ]; then
+    echo "package record does not exist: $package_record" >&2
+    exit 2
+fi
+case "$repository_key" in
+    *[!A-Za-z0-9._-]*|'') echo "invalid repository key: $repository_key" >&2; exit 2 ;;
+esac
+case "$pr_number" in
+    *[!0-9]*|'') echo "invalid pull-request number: $pr_number" >&2; exit 2 ;;
+esac
+case "$expected_base" in
+    main|master) echo "refusing forbidden integration target: $expected_base" >&2; exit 1 ;;
+    -*|*[!A-Za-z0-9._/-]*|'') echo "invalid expected base: $expected_base" >&2; exit 2 ;;
+esac
+case "$expected_head" in
+    *[!0-9A-Fa-f]*|'') echo "invalid expected head: $expected_head" >&2; exit 2 ;;
+esac
+if [ "${#expected_head}" -ne 40 ] && [ "${#expected_head}" -ne 64 ]; then
+    echo "expected head must be a full commit ID" >&2
+    exit 2
+fi
+
+for command_name in ruby jq gh git herdr realpath; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        echo "$command_name is required for guarded project merges" >&2
+        exit 1
+    fi
+done
+
+if [ "${HERDR_ENV:-}" != 1 ] || [ -z "${HERDR_PANE_ID:-}" ]; then
+    echo "guarded merges require the invoking Herdr pane identity" >&2
+    exit 1
+fi
+caller_json=$(herdr agent get "$HERDR_PANE_ID") || {
+    echo "could not resolve the invoking Herdr agent" >&2
+    exit 1
+}
+caller_name=$(printf '%s\n' "$caller_json" | jq -er '.result.agent.name') || {
+    echo "the invoking Herdr agent has no stable workflow identity" >&2
+    exit 1
+}
+if [ "$caller_name" != workflow_orchestrator ]; then
+    echo "only workflow_orchestrator may invoke guarded project merges" >&2
+    exit 1
+fi
+
+stagehand_commit=$(git -C "$stagehand_root" rev-parse HEAD) || {
+    echo "could not resolve the current Stagehand commit" >&2
+    exit 1
+}
+
+record_json=$(ruby -ryaml -rjson -rtime -e '
+  project = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
+  package_record = YAML.safe_load(File.read(ARGV.fetch(1)), permitted_classes: [], aliases: false)
+  key = ARGV.fetch(2)
+  repository = project.fetch("repositories").fetch(key)
+  delivery = package_record.fetch("deliveries").fetch(key)
+  rehydration = project.fetch("rehydration")
+  gate = rehydration.fetch("transition_gate")
+  interval = Integer(rehydration.fetch("full_interval_seconds"))
+  generation = Integer(rehydration.fetch("generation"))
+  completed_at = Time.iso8601(rehydration.fetch("last_completed_at")).utc
+  due_at = Time.iso8601(rehydration.fetch("next_full_due_at")).utc
+  now = Time.now.utc
+  package_id = package_record.fetch("package_id")
+  source_commit = rehydration.fetch("source_document_commit")
+  package_source_commit = package_record.fetch("source_authority").fetch("project_source_commit")
+  project_source_commit = project.fetch("source_documents").fetch("commit")
+  project_id = project.fetch("project_id")
+  graph_record = project.fetch("packages").fetch("graph").fetch(package_id).fetch("record")
+  result = {
+    project_id: project_id,
+    package_id: package_id,
+    package_project_id: package_record.fetch("project_id"),
+    package_graph_record: graph_record,
+    project_mode: project.fetch("mode"),
+    authority_status: project.fetch("authority").fetch("status"),
+    merge_role: project.fetch("authority").fetch("merge_role"),
+    main_mutation_forbidden: project.fetch("authority").fetch("main_mutation_forbidden"),
+    paused: project.fetch("scheduler").fetch("paused"),
+    github: repository.fetch("github"),
+    integration_branch: repository.fetch("integration_branch"),
+    merge_method: repository.fetch("merge_method"),
+    orchestrator_merge_only: repository.fetch("orchestrator_merge_only"),
+    rehydration_interval_valid: interval.positive? && interval <= 3600,
+    rehydration_generation_positive: generation.positive?,
+    rehydration_current: completed_at <= now && now < due_at &&
+      due_at > completed_at && (due_at - completed_at) <= interval,
+    stagehand_commit: rehydration.fetch("stagehand_commit"),
+    source_commit_matches: source_commit == package_source_commit &&
+      source_commit == project_source_commit &&
+      source_commit.match?(/\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\z/),
+    transition_action: gate.fetch("action"),
+    transition_package_matches: Array(gate.fetch("packages")).include?(package_id),
+    transition_repository_matches: Array(gate.fetch("repositories")).include?(key),
+    transition_head: gate.fetch("heads").fetch(key),
+    package_state: package_record.fetch("state").fetch("name"),
+    pull_request: delivery.fetch("pull_request"),
+    delivery_base: delivery.fetch("base"),
+    expected_head: delivery.fetch("expected_head"),
+    reviewed_head: delivery.fetch("reviewed_head"),
+    review_conclusion: delivery.fetch("review_conclusion"),
+    verification_status: delivery.fetch("verification_status"),
+    completion_criteria_satisfied: delivery.fetch("completion_criteria_satisfied"),
+    specification_aligned: delivery.fetch("specification_aligned"),
+    decision_records_complete: delivery.fetch("decision_records_complete")
+  }
+  puts JSON.generate(result)
+' "$project_record" "$package_record" "$repository_key") || {
+    echo "could not read the project/package merge contract" >&2
+    exit 1
+}
+
+require_record_value() {
+    field=$1
+    expected=$2
+    actual=$(printf '%s\n' "$record_json" | jq -r --arg field "$field" \
+        'if has($field) then .[$field] | tostring else error("missing") end') || {
+        echo "missing merge contract field: $field" >&2
+        exit 1
+    }
+    if [ "$actual" != "$expected" ]; then
+        echo "merge contract mismatch for $field: expected $expected, found $actual" >&2
+        exit 1
+    fi
+}
+
+project_id=$(printf '%s\n' "$record_json" | jq -er '.project_id')
+package_id=$(printf '%s\n' "$record_json" | jq -er '.package_id')
+case "$project_id" in
+    *[!A-Za-z0-9._-]*|'') echo "invalid project ID in project record" >&2; exit 1 ;;
+esac
+case "$package_id" in
+    *[!A-Za-z0-9._-]*|'') echo "invalid package ID in package record" >&2; exit 1 ;;
+esac
+canonical_project_record=$(realpath "$project_record")
+canonical_package_record=$(realpath "$package_record")
+expected_project_record="$stagehand_root/.orchestrator/projects/$project_id/project.yaml"
+if [ "$canonical_project_record" != "$expected_project_record" ]; then
+    echo "project record is outside its canonical Stagehand project path" >&2
+    exit 1
+fi
+package_graph_record=$(printf '%s\n' "$record_json" | jq -er '.package_graph_record')
+case "$package_graph_record" in
+    packages/*.yaml) ;;
+    *) echo "project graph contains an invalid package-record path" >&2; exit 1 ;;
+esac
+case "/$package_graph_record/" in
+    */../*|*/./*) echo "project graph package-record path is not canonical" >&2; exit 1 ;;
+esac
+expected_package_record=$(realpath "$stagehand_root/.orchestrator/projects/$project_id/$package_graph_record")
+if [ "$canonical_package_record" != "$expected_package_record" ]; then
+    echo "package record is outside its canonical Stagehand package path" >&2
+    exit 1
+fi
+require_record_value package_project_id "$project_id"
+require_record_value project_mode autonomous-project
+require_record_value authority_status active
+require_record_value merge_role workflow_orchestrator
+require_record_value main_mutation_forbidden true
+require_record_value paused false
+require_record_value integration_branch "$expected_base"
+require_record_value delivery_base "$expected_base"
+require_record_value merge_method squash
+require_record_value orchestrator_merge_only true
+require_record_value rehydration_interval_valid true
+require_record_value rehydration_generation_positive true
+require_record_value rehydration_current true
+require_record_value stagehand_commit "$stagehand_commit"
+require_record_value source_commit_matches true
+require_record_value transition_action guarded-merge
+require_record_value transition_package_matches true
+require_record_value transition_repository_matches true
+require_record_value transition_head "$expected_head"
+require_record_value package_state merge-ready
+require_record_value pull_request "$pr_number"
+require_record_value expected_head "$expected_head"
+require_record_value reviewed_head "$expected_head"
+require_record_value review_conclusion passed
+require_record_value verification_status passed
+require_record_value completion_criteria_satisfied true
+require_record_value specification_aligned true
+require_record_value decision_records_complete true
+
+github_repository=$(printf '%s\n' "$record_json" | jq -er '.github')
+case "$github_repository" in
+    *[!A-Za-z0-9._/-]*|*//*|/*|*/|'') echo "invalid GitHub repository in project record" >&2; exit 1 ;;
+esac
+github_host=${github_repository%%/*}
+github_path=${github_repository#*/}
+github_owner=${github_path%%/*}
+github_name=${github_path#*/}
+if [ "$github_path" = "$github_repository" ] || [ "$github_name" = "$github_path" ]; then
+    echo "GitHub repository must include host, owner, and repository" >&2
+    exit 1
+fi
+encoded_base=$(printf '%s' "$expected_base" | jq -sRr @uri)
+branch_rules=$(gh api --paginate --slurp --method GET --hostname "$github_host" \
+    -H "Accept: application/vnd.github+json" \
+    -f per_page=100 \
+    "repos/$github_owner/$github_name/rules/branches/$encoded_base") || {
+    echo "could not prove that the integration branch is free of merge-queue rules" >&2
+    exit 1
+}
+if ! printf '%s\n' "$branch_rules" | jq -e \
+    'type == "array" and all(.[]; type == "array")' >/dev/null; then
+    echo "GitHub returned an invalid active-branch-rules response" >&2
+    exit 1
+fi
+if printf '%s\n' "$branch_rules" | jq -e \
+    'any(.[][]; .type == "merge_queue")' >/dev/null; then
+    echo "refusing integration branch governed by a merge queue" >&2
+    exit 1
+fi
+
+pr_json=$(gh pr view "$pr_number" -R "$github_repository" \
+    --json state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,url) || {
+    echo "could not resolve pull request $pr_number in $github_repository" >&2
+    exit 1
+}
+
+pr_state=$(printf '%s\n' "$pr_json" | jq -er '.state')
+pr_draft=$(printf '%s\n' "$pr_json" | jq -r '.isDraft | tostring')
+pr_base=$(printf '%s\n' "$pr_json" | jq -er '.baseRefName')
+pr_head_name=$(printf '%s\n' "$pr_json" | jq -er '.headRefName')
+pr_head=$(printf '%s\n' "$pr_json" | jq -er '.headRefOid')
+pr_merge_state=$(printf '%s\n' "$pr_json" | jq -er '.mergeStateStatus')
+
+if [ "$pr_state" != OPEN ] || [ "$pr_draft" != false ]; then
+    echo "pull request must be open and ready before merge" >&2
+    exit 1
+fi
+if [ "$pr_base" != "$expected_base" ] || [ "$pr_head" != "$expected_head" ]; then
+    echo "pull-request base or head changed after validation" >&2
+    exit 1
+fi
+if [ "$pr_head_name" = main ] || [ "$pr_head_name" = master ] || [ "$pr_head_name" = "$expected_base" ]; then
+    echo "pull-request head is not a permitted author task branch: $pr_head_name" >&2
+    exit 1
+fi
+if [ "$pr_merge_state" != CLEAN ]; then
+    echo "pull request is not immediately mergeable without a queue or bypass: $pr_merge_state" >&2
+    exit 1
+fi
+
+# GitHub's required-check result is independent evidence; never ask merge to
+# wait automatically because autonomous authority excludes auto-merge.
+if ! gh pr checks "$pr_number" -R "$github_repository" --required >/dev/null; then
+    echo "required pull-request checks are not successful" >&2
+    exit 1
+fi
+
+gh pr merge "$pr_number" -R "$github_repository" \
+    --squash --match-head-commit "$expected_head"
+
+merged_json=$(gh pr view "$pr_number" -R "$github_repository" \
+    --json state,mergedAt,mergeCommit,url)
+merged_state=$(printf '%s\n' "$merged_json" | jq -er '.state')
+merge_commit=$(printf '%s\n' "$merged_json" | jq -er '.mergeCommit.oid')
+if [ "$merged_state" != MERGED ] || [ -z "$merge_commit" ]; then
+    echo "GitHub did not confirm the squash merge" >&2
+    exit 1
+fi
+
+# Structured output lets the orchestrator persist the exact integration commit
+# before it unlocks any dependent work package.
+printf '%s\n' "$merged_json" | jq -c --arg project "$project_id" \
+    --arg package "$(printf '%s\n' "$package_record" | sed 's#.*/##')" \
+    --arg repository "$repository_key" \
+    --arg base "$expected_base" \
+    --arg head "$expected_head" \
+    '{status:"merged",project:$project,package_record:$package,repository:$repository,base:$base,head:$head,merge_commit:.mergeCommit.oid,pull_request:.url,merged_at:.mergedAt}'

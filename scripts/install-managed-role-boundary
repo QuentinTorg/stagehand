@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+script_path=$(realpath "$0")
+script_dir=$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)
+stagehand_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+rule_source="$stagehand_root/skills/orchestrating-development/assets/codex-managed-role.rules"
+
+if [ "$#" -ne 1 ] || [ -z "${1-}" ]; then
+    echo "usage: install-managed-role-boundary <managed-worktree-root>" >&2
+    exit 2
+fi
+if [ ! -f "$rule_source" ]; then
+    echo "managed-role rule source is missing: $rule_source" >&2
+    exit 1
+fi
+
+worktree=$(realpath "$1")
+git_root=$(git -C "$worktree" rev-parse --show-toplevel) || {
+    echo "managed role target is not a Git worktree: $worktree" >&2
+    exit 1
+}
+if [ "$(realpath "$git_root")" != "$worktree" ]; then
+    echo "managed role boundary must be installed at the complete worktree root" >&2
+    exit 1
+fi
+
+destination="$worktree/.codex/rules/stagehand-managed-role.rules"
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+    if [ ! -L "$destination" ] || [ "$(realpath "$destination")" != "$(realpath "$rule_source")" ]; then
+        echo "refusing to replace an existing managed-role rule: $destination" >&2
+        exit 1
+    fi
+else
+    mkdir -p "$worktree/.codex/rules"
+    ln -s "$rule_source" "$destination"
+fi
+
+# Worktree-local exclusion keeps the runtime policy out of product changes
+# without requiring or modifying a repository-wide .gitignore contract.
+exclude_file=$(git -C "$worktree" rev-parse --git-path info/exclude)
+case "$exclude_file" in
+    /*) ;;
+    *) exclude_file="$worktree/$exclude_file" ;;
+esac
+exclude_pattern='/.codex/rules/stagehand-managed-role.rules'
+if ! grep -Fqx "$exclude_pattern" "$exclude_file"; then
+    printf '%s\n' "$exclude_pattern" >>"$exclude_file"
+fi
+if ! git -C "$worktree" check-ignore -q .codex/rules/stagehand-managed-role.rules; then
+    echo "managed-role rule is not ignored by the task worktree" >&2
+    exit 1
+fi
+
+printf '%s\n' "$destination"

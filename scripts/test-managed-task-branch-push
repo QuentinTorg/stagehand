@@ -1,0 +1,248 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+stagehand_source=$(CDPATH= cd -- "$script_dir/.." && pwd)
+test_root=$(mktemp -d)
+trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+
+test_stagehand="$test_root/stagehand"
+guard_script="$test_stagehand/scripts/managed-task-branch-push"
+task_dir="$test_stagehand/state/custom-tasks"
+task_record="$task_dir/task-1.yaml"
+target="$test_root/worktree/vehicle-comms"
+mkdir -p "$test_root/bin" "$test_stagehand/scripts" "$task_dir" "$target"
+cp "$script_dir/managed-task-branch-push" "$guard_script"
+chmod +x "$guard_script"
+mkdir -p "$test_stagehand/.local"
+cat >"$test_stagehand/.local/workspace.yaml" <<EOF
+version: 1
+task_records_directory: "$task_dir"
+trusted_command_path: "$test_root/bin:/usr/bin:/bin"
+EOF
+
+installer="$test_stagehand/scripts/install-managed-role-boundary"
+mkdir -p "$test_stagehand/skills/orchestrating-development/assets"
+cp "$script_dir/install-managed-role-boundary" "$installer"
+cp "$stagehand_source/skills/orchestrating-development/assets/codex-managed-role.rules" \
+    "$test_stagehand/skills/orchestrating-development/assets/codex-managed-role.rules"
+chmod +x "$installer"
+install_worktree="$test_root/install-worktree"
+git init -q "$install_worktree"
+installed_rule=$("$installer" "$install_worktree")
+test -L "$installed_rule"
+git -C "$install_worktree" check-ignore -q \
+    .codex/rules/stagehand-managed-role.rules
+
+cat >"$task_record" <<EOF
+version: 1
+task_id: task-1
+mode: development
+project:
+  authority_profile: autonomous-project
+development_target:
+  path: "$target"
+  remote: origin
+  push_url: git@github.example.test:GEARS/gears-vehicle-comms.git
+  github: github.example.test/GEARS/gears-vehicle-comms
+  branch: qtorgerson/task-1
+  ready: true
+integration:
+  branch: qtorgerson/gears-vehicle-comms
+agents:
+  author: task_author
+pull_request:
+  draft_creation_authorized: true
+publication:
+  authorized: true
+  role: author
+  expected_head: "0123456789012345678901234567890123456789"
+  remote: origin
+  branch: qtorgerson/task-1
+state:
+  name: drafting
+EOF
+
+cat >"$test_root/bin/herdr" <<'EOF'
+#!/bin/sh
+set -eu
+test "$1 $2" = "agent get"
+printf '{"result":{"agent":{"name":"%s"}}}\n' "${TASK_PUSH_TEST_CALLER:-task_author}"
+EOF
+chmod +x "$test_root/bin/herdr"
+
+cat >"$test_root/bin/git" <<'EOF'
+#!/bin/sh
+set -eu
+case "$*" in
+    *" branch --show-current") printf '%s\n' qtorgerson/task-1 ;;
+    *" rev-parse HEAD") printf '%s\n' 0123456789012345678901234567890123456789 ;;
+    *" remote get-url origin"|*" remote get-url --push origin")
+        printf '%s\n' git@github.example.test:GEARS/gears-vehicle-comms.git
+        ;;
+    *" bundle create "*) ;;
+    "init --bare "*) ;;
+    *" fetch "*) ;;
+    *" push git@github.example.test:GEARS/gears-vehicle-comms.git refs/heads/qtorgerson/task-1:refs/heads/qtorgerson/task-1") ;;
+    *" ls-remote --heads git@github.example.test:GEARS/gears-vehicle-comms.git refs/heads/qtorgerson/task-1")
+        printf '%s\t%s\n' 0123456789012345678901234567890123456789 refs/heads/qtorgerson/task-1
+        ;;
+    *) echo "unexpected git invocation: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$test_root/bin/git"
+
+cat >"$test_root/bin/gh" <<'EOF'
+#!/bin/sh
+set -eu
+case "$1 $2" in
+    "pr list") printf '%s\n' "${TASK_PUSH_TEST_EXISTING_PRS:-[]}" ;;
+    "pr create")
+        printf '%s\n' https://github.example.test/GEARS/gears-vehicle-comms/pull/17
+        ;;
+    "pr view")
+        printf '%s\n' '{"state":"OPEN","isDraft":true,"baseRefName":"qtorgerson/gears-vehicle-comms","headRefName":"qtorgerson/task-1","headRefOid":"0123456789012345678901234567890123456789","url":"https://github.example.test/GEARS/gears-vehicle-comms/pull/17"}'
+        ;;
+    *) echo "unexpected gh invocation: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$test_root/bin/gh"
+
+export HERDR_ENV=1
+export HERDR_PANE_ID=w1:p2
+export TASK_PUSH_TEST_STATE="$test_root/pushed"
+
+result=$(PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789)
+printf '%s\n' "$result" | jq -e \
+    '.status == "published" and .branch == "qtorgerson/task-1"' >/dev/null
+
+rm -f "$TASK_PUSH_TEST_STATE"
+result=$(PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 \
+    --create-draft-pr --title "Vehicle communications task" \
+    --body "Verified task implementation and reusable tests.")
+printf '%s\n' "$result" | jq -e \
+    '.pullRequest == "https://github.example.test/GEARS/gears-vehicle-comms/pull/17"' >/dev/null
+
+rm -f "$TASK_PUSH_TEST_STATE"
+if TASK_PUSH_TEST_EXISTING_PRS='[{"number":17}]' PATH="$test_root/bin:$PATH" \
+    "$guard_script" --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 \
+    --create-draft-pr --title "Duplicate" --body "Must be rejected." \
+    >/dev/null 2>&1; then
+    echo "publication guard accepted an existing pull request" >&2
+    exit 1
+fi
+
+cp "$task_record" "$test_root/task-authorized.yaml"
+sed 's/draft_creation_authorized: true/draft_creation_authorized: false/' \
+    "$test_root/task-authorized.yaml" >"$task_record"
+rm -f "$TASK_PUSH_TEST_STATE"
+if PATH="$test_root/bin:$PATH" "$guard_script" --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 \
+    --create-draft-pr --title "Unauthorized" --body "Must be rejected." \
+    >/dev/null 2>&1; then
+    echo "publication guard created a draft without draft authority" >&2
+    exit 1
+fi
+mv "$test_root/task-authorized.yaml" "$task_record"
+
+cp "$task_record" "$test_root/task-integration.yaml"
+sed 's#branch: qtorgerson/gears-vehicle-comms#branch: main#' \
+    "$test_root/task-integration.yaml" >"$task_record"
+rm -f "$TASK_PUSH_TEST_STATE"
+if PATH="$test_root/bin:$PATH" "$guard_script" --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 \
+    >/dev/null 2>&1; then
+    echo "publication guard accepted main as the integration branch" >&2
+    exit 1
+fi
+mv "$test_root/task-integration.yaml" "$task_record"
+
+cp "$task_record" "$test_root/task-drafting.yaml"
+sed 's/name: drafting/name: resolving/' \
+    "$test_root/task-drafting.yaml" >"$task_record"
+rm -f "$TASK_PUSH_TEST_STATE"
+PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null
+mv "$test_root/task-drafting.yaml" "$task_record"
+
+rm -f "$TASK_PUSH_TEST_STATE"
+TASK_PUSH_TEST_CALLER=other_author PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1 && {
+    echo "publication guard accepted the wrong author" >&2
+    exit 1
+}
+
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1; then
+    echo "publication guard accepted an unauthorized head" >&2
+    exit 1
+fi
+
+cp "$task_record" "$test_root/noncanonical-task.yaml"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$test_root/noncanonical-task.yaml" \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "publication guard accepted a caller-selected task record" >&2
+    exit 1
+fi
+
+cp "$task_record" "$test_root/task-matching-repository.yaml"
+sed 's#github.example.test/GEARS/gears-vehicle-comms#github.example.test/GEARS/other-repository#' \
+    "$test_root/task-matching-repository.yaml" >"$task_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --task-record "$task_record" \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "publication guard accepted mismatched Git and GitHub repositories" >&2
+    exit 1
+fi
+mv "$test_root/task-matching-repository.yaml" "$task_record"
+
+rules="$stagehand_source/skills/orchestrating-development/assets/codex-managed-role.rules"
+for command in \
+    "git push --force origin main" \
+    "git push origin refs/heads/main" \
+    "git -c push.default=current push origin main" \
+    "gh pr create --draft --base qtorgerson/gears-vehicle-comms --head qtorgerson/task-1"
+do
+    # This word splitting is intentional: execpolicy receives the shell-like
+    # command as individual tokens, matching how Codex evaluates it.
+    # shellcheck disable=SC2086
+    decision=$(codex execpolicy check --rules "$rules" $command | jq -r .decision)
+    if [ "$decision" != forbidden ]; then
+        echo "managed-role rule did not forbid: $command" >&2
+        exit 1
+    fi
+done
+
+for command in \
+    "git -C . push origin main" \
+    "/usr/bin/git push origin main" \
+    "env git push origin main" \
+    "git --no-pager push origin main"
+do
+    # shellcheck disable=SC2086
+    decision=$(codex execpolicy check --rules "$rules" $command | jq -r '.decision // "unmatched"')
+    if [ "$decision" = allow ]; then
+        echo "managed-role rule unexpectedly allowed bypass spelling: $command" >&2
+        exit 1
+    fi
+done
+
+decision=$(codex execpolicy check --rules "$rules" \
+    stagehand-managed-task-branch-push --task-record \
+    /tmp/stagehand/.orchestrator/tasks/task-1.yaml --expected-head \
+    0123456789012345678901234567890123456789 | jq -r .decision)
+if [ "$decision" != allow ]; then
+    echo "managed-role rule did not allow guarded publication" >&2
+    exit 1
+fi
+
+echo "managed task branch publication tests passed"

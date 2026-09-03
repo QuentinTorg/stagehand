@@ -1,0 +1,4 @@
+# Machine-readable local index for canonical mutable orchestration state.
+version: 1
+task_records_directory: "<absolute-task-records-directory>"
+trusted_command_path: "<absolute-command-search-path-without-task-worktrees>"

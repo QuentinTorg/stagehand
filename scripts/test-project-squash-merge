@@ -1,0 +1,284 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+test_root=$(mktemp -d)
+trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+
+test_stagehand="$test_root/stagehand"
+project_dir="$test_stagehand/.orchestrator/projects/project-1"
+package_dir="$project_dir/packages"
+guard_script="$test_stagehand/scripts/project-squash-merge"
+project_record="$project_dir/project.yaml"
+package_record="$package_dir/wp-r0.yaml"
+mkdir -p "$test_root/bin" "$test_stagehand/scripts" "$package_dir"
+cp "$script_dir/project-squash-merge" "$guard_script"
+chmod +x "$guard_script"
+timestamps=$(ruby -rtime -e '
+  now = Time.now.utc
+  puts (now - 60).iso8601
+  puts (now + 3539).iso8601
+')
+last_completed_at=$(printf '%s\n' "$timestamps" | sed -n '1p')
+next_full_due_at=$(printf '%s\n' "$timestamps" | sed -n '2p')
+cat >"$project_record" <<EOF
+version: 1
+project_id: project-1
+mode: autonomous-project
+source_documents:
+  commit: "fedcba9876543210fedcba9876543210fedcba98"
+authority:
+  status: active
+  merge_role: workflow_orchestrator
+  main_mutation_forbidden: true
+scheduler:
+  paused: false
+rehydration:
+  full_interval_seconds: 3600
+  generation: 1
+  last_completed_at: "$last_completed_at"
+  next_full_due_at: "$next_full_due_at"
+  stagehand_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  source_document_commit: "fedcba9876543210fedcba9876543210fedcba98"
+  transition_gate:
+    action: guarded-merge
+    packages:
+      - WP-R0
+    repositories:
+      - vehicle-comms
+    heads:
+      vehicle-comms: "0123456789012345678901234567890123456789"
+repositories:
+  vehicle-comms:
+    github: github.example.com/GEARS/gears-vehicle-comms
+    integration_branch: qtorgerson/gears-vehicle-comms
+    merge_method: squash
+    orchestrator_merge_only: true
+packages:
+  graph:
+    WP-R0:
+      record: packages/wp-r0.yaml
+EOF
+
+cat >"$package_record" <<'EOF'
+version: 1
+project_id: project-1
+package_id: WP-R0
+source_authority:
+  project_source_commit: "fedcba9876543210fedcba9876543210fedcba98"
+deliveries:
+  vehicle-comms:
+    pull_request: "42"
+    base: qtorgerson/gears-vehicle-comms
+    expected_head: "0123456789012345678901234567890123456789"
+    reviewed_head: "0123456789012345678901234567890123456789"
+    review_conclusion: passed
+    verification_status: passed
+    completion_criteria_satisfied: true
+    specification_aligned: true
+    decision_records_complete: true
+state:
+  name: merge-ready
+EOF
+
+cat >"$test_root/bin/gh" <<'EOF'
+#!/bin/sh
+set -eu
+state_file=${PROJECT_MERGE_TEST_STATE:?}
+log_file=${PROJECT_MERGE_TEST_LOG:?}
+printf '%s\n' "$*" >>"$log_file"
+
+case "$1 $2" in
+    "api --paginate")
+        if [ "${PROJECT_MERGE_TEST_QUEUE:-0}" = 1 ]; then
+            printf '%s\n' '[[{"type":"required_status_checks"}],[{"type":"merge_queue"}]]'
+        else
+            printf '%s\n' '[[{"type":"required_status_checks"}],[]]'
+        fi
+        ;;
+    "pr view")
+        if [ -f "$state_file" ]; then
+            printf '%s\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}'
+        else
+            printf '%s\n' '{"state":"OPEN","isDraft":false,"baseRefName":"qtorgerson/gears-vehicle-comms","headRefName":"qtorgerson/wp-r0","headRefOid":"0123456789012345678901234567890123456789","mergeStateStatus":"CLEAN","url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}'
+        fi
+        ;;
+    "pr checks") exit 0 ;;
+    "pr merge")
+        case " $* " in
+            *" --squash "*) ;;
+            *) echo "merge did not require squash" >&2; exit 1 ;;
+        esac
+        case " $* " in
+            *" --match-head-commit 0123456789012345678901234567890123456789 "*) ;;
+            *) echo "merge did not bind the reviewed head" >&2; exit 1 ;;
+        esac
+        case " $* " in
+            *" --merge "*|*" --rebase "*|*" --auto "*|*" --admin "*)
+                echo "unsafe merge option" >&2
+                exit 1
+                ;;
+        esac
+        : >"$state_file"
+        ;;
+    *) echo "unexpected gh invocation: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$test_root/bin/gh"
+
+cat >"$test_root/bin/git" <<'EOF'
+#!/bin/sh
+set -eu
+if [ "$1" = -C ] && [ "$3 $4" = "rev-parse HEAD" ]; then
+    printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+else
+    echo "unexpected git invocation: $*" >&2
+    exit 1
+fi
+EOF
+chmod +x "$test_root/bin/git"
+
+cat >"$test_root/bin/herdr" <<'EOF'
+#!/bin/sh
+set -eu
+if [ "$1 $2" != "agent get" ]; then
+    echo "unexpected herdr invocation: $*" >&2
+    exit 1
+fi
+printf '{"result":{"agent":{"name":"%s"}}}\n' "${PROJECT_MERGE_TEST_CALLER:-workflow_orchestrator}"
+EOF
+chmod +x "$test_root/bin/herdr"
+
+export PROJECT_MERGE_TEST_STATE="$test_root/merged"
+export PROJECT_MERGE_TEST_LOG="$test_root/gh.log"
+export HERDR_ENV=1
+export HERDR_PANE_ID=w1:p1
+
+merge_result=$(PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789)
+printf '%s\n' "$merge_result" \
+    | jq -e '.status == "merged" and .merge_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' >/dev/null
+
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base main \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted main as a merge target" >&2
+    exit 1
+fi
+
+cp "$package_record" "$test_root/package-backup.yaml"
+sed 's/specification_aligned: true/specification_aligned: false/' \
+    "$test_root/package-backup.yaml" >"$package_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted a specification-divergent delivery" >&2
+    exit 1
+fi
+mv "$test_root/package-backup.yaml" "$package_record"
+
+cp "$project_record" "$test_root/project-backup.yaml"
+sed 's/action: guarded-merge/action: reviewer-finalization/' \
+    "$test_root/project-backup.yaml" >"$project_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted a checkpoint for the wrong transition" >&2
+    exit 1
+fi
+mv "$test_root/project-backup.yaml" "$project_record"
+
+cp "$project_record" "$test_root/project-backup.yaml"
+sed 's/next_full_due_at: .*/next_full_due_at: "2000-01-01T00:00:00Z"/' \
+    "$test_root/project-backup.yaml" >"$project_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted an expired rehydration checkpoint" >&2
+    exit 1
+fi
+mv "$test_root/project-backup.yaml" "$project_record"
+
+cp "$package_record" "$test_root/package-backup.yaml"
+sed 's/fedcba9876543210fedcba9876543210fedcba98/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' \
+    "$test_root/package-backup.yaml" >"$package_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted a package based on stale source documents" >&2
+    exit 1
+fi
+mv "$test_root/package-backup.yaml" "$package_record"
+
+rm -f "$PROJECT_MERGE_TEST_STATE"
+PROJECT_MERGE_TEST_CALLER=maintenance PATH="$test_root/bin:$PATH" \
+    "$guard_script" --project-record "$project_record" \
+    --package-record "$package_record" --repository-key vehicle-comms \
+    --pr 42 --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1 && {
+    echo "guard accepted a caller that does not own workflow_orchestrator" >&2
+    exit 1
+}
+
+cp "$project_record" "$test_root/noncanonical-project.yaml"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$test_root/noncanonical-project.yaml" \
+    --package-record "$package_record" --repository-key vehicle-comms \
+    --pr 42 --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted a caller-selected project record path" >&2
+    exit 1
+fi
+
+cp "$project_record" "$test_root/project-backup.yaml"
+sed 's/stagehand_commit: .*/stagehand_commit: "cccccccccccccccccccccccccccccccccccccccc"/' \
+    "$test_root/project-backup.yaml" >"$project_record"
+if PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" --repository-key vehicle-comms \
+    --pr 42 --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted a stale Stagehand identity" >&2
+    exit 1
+fi
+mv "$test_root/project-backup.yaml" "$project_record"
+
+PROJECT_MERGE_TEST_QUEUE=1 PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" --package-record "$package_record" \
+    --repository-key vehicle-comms --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1 && {
+    echo "guard accepted a merge-queue-controlled integration branch" >&2
+    exit 1
+}
+if [ -f "$PROJECT_MERGE_TEST_STATE" ]; then
+    echo "guard invoked merge before rejecting the merge queue" >&2
+    exit 1
+fi
+
+echo "project squash merge guard tests passed"

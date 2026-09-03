@@ -132,6 +132,24 @@ prefix_rule(
     ],
 )
 
+# Autonomous-project merges are allowed only through the record-driven guard.
+# The script itself rejects main, non-chartered bases, non-squash strategies,
+# callers other than the named orchestrator, noncanonical records, stale
+# governing identities or heads, merge queues, incomplete evidence, and
+# missing required checks.
+prefix_rule(
+    pattern = ["./scripts/project-squash-merge"],
+    decision = "allow",
+    justification = "Perform a chartered, exact-head, squash-only project integration merge through the validated guard.",
+    match = [
+        "./scripts/project-squash-merge --project-record .orchestrator/projects/example/project.yaml --package-record .orchestrator/projects/example/packages/wp-r0.yaml --repository-key vehicle-comms --pr 42 --expected-base qtorgerson/gears-vehicle-comms --expected-head 0123456789012345678901234567890123456789",
+    ],
+    not_match = [
+        "gh pr merge 42 --merge",
+        "git push origin main",
+    ],
+)
+
 # Raw terminal input and cleanup retain a human checkpoint because they can run
 # arbitrary commands, answer approval prompts, terminate processes, or remove data.
 prefix_rule(

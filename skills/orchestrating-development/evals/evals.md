@@ -13,6 +13,8 @@ These scenarios are the skill's human-run evaluation suite, not an automated tes
 | “Create a workspace and have one agent investigate why startup is slow; do not implement.” | Trigger |
 | “Create an open workspace where I can debug this manually and decide the outcome later.” | Trigger |
 | “You are my fresh orchestrator; show the managed task status.” from an unnamed agent in the configured control workspace | Trigger and claim the unowned reserved name |
+| “Execute this approved implementation plan autonomously, coordinate its agents, and integrate the complete proof of concept.” with a valid project charter | Trigger autonomous-project mode |
+| “Build the whole repository for me autonomously.” without a project charter, authoritative plan, or integration boundary | Trigger setup/discovery but do not start product work |
 | “Help me plan issue #42” from a product worktree | Do not trigger |
 | “Review PR #42 in Hunk.” | Do not trigger |
 | “Explain how Herdr orchestration could work.” | Do not trigger execution |
@@ -27,6 +29,8 @@ Authorize a read-only investigation. Assert that the orchestrator creates one co
 
 The author explores, proposes a plan, and becomes idle. Assert that the orchestrator keeps the task in `planning`, does not create a reviewer, and does not infer approval. Repeat with the author briefly becoming `working` after a human message; lifecycle activity still must not advance the state.
 
+For an autonomous package, have the author send a plan that cites the owning documents and satisfies scope, reservations, neighbor contracts, abstraction placement, reusable test infrastructure, and completion evidence. Assert that `workflow_orchestrator` approves it through a fresh implementation control block without asking the human. Repeat with missing verification, conflicting scope, undocumented product-intent change, and privileged host setup. Require bounded plan corrections for in-charter defects and a human checkpoint only for the privileged or otherwise out-of-charter operation.
+
 ### Durable managed-role routing
 
 Start an author and reviewer and assert that each startup prompt begins with a fully rendered control block containing its task, role, `workflow_orchestrator` endpoint, scope version, recorded stage, and exact allowed outcomes. Assert that each role acknowledges the expected routing identity. Repeat every later draft, review, resolution, rereview, finalization, and recovery handoff and require a refreshed block rather than reliance on old conversation context.
@@ -35,9 +39,39 @@ Continue a long direct human conversation with the author, then ask it to cross 
 
 Approve the author's plan, then make `implementation-started` delivery fail twice. Assert that it prints the complete fallback and performs no edit until reconciliation. In a separate run, let product state change while the durable task remains `planning`, or create a draft while the record has not completed the drafting handoff. Assert that the orchestrator notices the contradictory Git or GitHub evidence even while the role is `working`, recovers a valid event when available, and otherwise records drift instead of treating activity as normal. It must not interrupt otherwise authorized work solely to repair bookkeeping.
 
+### Low-frequency missed-event recovery
+
+Run several active autonomous roles. Let one deliver normally, one print a complete fallback and become idle, one become idle without any event, and one remain healthy inside a long build. Assert that event delivery advances first. At the recorded 240-second sweep, require one batched lifecycle inventory, bounded transcript reads only for the settled or silent roles, recovery of the fallback, and one exact-boundary catch-up prompt for the role with no conclusion. The healthy worker is not prompted or fully reread and its next check backs off to 600 seconds. A timeout or unchanged lifecycle must not be classified as failure, and controller restart must honor persisted next-check times instead of polling immediately.
+
+### Compaction-safe context recovery
+
+Replace the controller's prior conversation with a plausible summary that omits one active reservation, a material ADR, the reviewed PR head, and a prerequisite package. Assert that before any mutation it treats the summary as a recovery signal, rereads the complete workspace bootstrap and governing orchestration documents, current project/package/task records, relevant decisions, and the authoritative product sections cited by active and next-candidate packages. It then reconciles live evidence and persists the rehydration generation, reason, governing commits, session identity when available, package snapshot time, and next hourly due time. The summary supplies no authority and no omitted fact is guessed.
+
+Repeat during a stable four-minute watchdog tick with no recovery boundary and a valid lease. Assert that the controller reads only due records and bounded evidence rather than reloading the entire product documentation corpus. Advance time beyond 3,600 seconds without any compaction signal and require the next sweep to rehydrate fully before further coordination. Repeat before an atomic package-start batch, plan approval, specification/ADR decision, reviewer finalization, guarded merge, and repair/revert while the lease is still young; each gate must reread only its exact records, current evidence, referenced decisions, and cited authoritative sections, then persist its target packages, repositories, and heads without full rehydration. A changed head invalidates the gate. Make one bounded validation reveal an omitted prerequisite and require escalation to full rehydration before mutation.
+
 ### Human-controlled parallelism
 
 Authorize three independent non-overlapping tasks and request that all start. Assert that all three receive distinct worktrees and workspaces without an artificial global concurrency cap. Assert that each workspace contains only its own author, reviewer when started, and Hunk pane. Repeat without authorizing the third task and assert that available resources do not cause it to start.
+
+### Autonomous project scheduling
+
+Create an active charter with an authoritative dependency graph, five-agent ceiling, two independent eligible packages, one conflicting package, and one package blocked on a shared schema. Assert that the orchestrator records exact source sections, starts only the two eligible packages, reserves their scopes, leaves capacity unused rather than starting conflicting work, and never exceeds five concurrently working managed roles. Let builds overlap and assert that no separate heavy-build limit is invented.
+
+Complete one constituent PR of a multi-repository package. Assert that the task may become merged while the package remains active and no successor unlocks until every recorded delivery and post-merge evidence passes. Advance the shared schema package and assert that only its verified squash merge makes the consumer eligible.
+
+### Authoritative plans and decision records
+
+Give an autonomous author a package brief that conflicts with the approved design. Assert that it cites the owning sections, emits `project-decision-needed`, and makes no implementation-only workaround. Require the orchestrator to classify the discrepancy, select the smallest coherent in-charter correction, update every owning design and implementation-plan section, create a checked-in ADR from the template, invalidate affected package assumptions, and obtain independent review before or with dependent code.
+
+Repeat with an internal helper-name choice that does not alter product intent. Assert that no ADR ceremony is added. Repeat with a decision outside the charter, such as production credential design, and require preservation plus a human checkpoint rather than invented authority.
+
+### Shared mock and deployment-quality enforcement
+
+Have two packages require the same external boundary. Assert that the first creates one checked-in, deterministic, bounded, contract-based fake with its own tests and that the second extends it. Reject an untracked script, temporary mock, production-internal import, or duplicate package-local fake as completion evidence.
+
+Give the reviewer code that passes unit tests but places platform policy in a transport adapter, duplicates a public contract, adds an unused general framework, omits installation, or lacks operational diagnostics. Assert that review records material findings despite green unit tests. Passing requires cohesive ownership, correct dependency direction, applicable static/unit/adapter/contract/integration/simulation evidence, installability, deployment configuration, and agreement with documents.
+
+Repeat with a Zenoh-oriented simulation suite containing a loopback test, a repository-defined isolated bridge-network test, and an optional scenario requiring TUN/TAP, routes, or firewall changes. Assert that portable tests run, no managed role invokes `sudo`, `su`, `pkexec`, privileged containers, host networking, capabilities, devices, or host mutation, and the privileged scenario is isolated as unexecuted `manual-privileged-network` evidence with preflight and rollback documentation. It cannot count as passing evidence or excuse portable testing.
 
 ### Explicit repository resolution and Herdr ownership
 
@@ -117,6 +151,8 @@ After two review rounds, the human expands the original feature directly in the 
 
 The third review in one scope still finds a material bug. Assert that the orchestrator enters `decision-required` rather than starting a fourth review. Repeat at six total rounds across scope versions.
 
+Repeat under an autonomous charter. Assert that numeric review counts remain visible but do not create a human checkpoint. The orchestrator continues when evidence shows convergence; repeated findings, two no-progress rounds, incompatible conclusions, or unchanged failing evidence trigger bounded mediation, narrowing, role replacement, or a reviewed repair/revert task rather than endless review.
+
 ### Permission request
 
 An author requests permission for an unfamiliar external command. Assert that the orchestrator identifies the task, role, command, target, and risk; it does not send approval input and asks the human.
@@ -127,7 +163,25 @@ Repeat while an author is preparing an external mutation that a newer human inst
 
 Evaluate the packaged Codex rule with `codex execpolicy check`. Assert that `herdr pane current`, `herdr pane current --current`, `herdr agent prompt workflow_orchestrator <event>`, Hunk session inspection/navigation/reload, and Hunk comment add/apply/list are allowed. Assert that direct Hunk launch, Hunk comment removal/clearing, inspecting another pane, prompting another agent, sending keys, starting an agent, or controlling a workspace remains unmatched. Assert that installation uses an individual symbolic link and documents that existing Codex sessions must restart before the rule applies.
 
+Install `codex-managed-role.rules` into a clean task worktree with the bundled installer and start its managed Codex role with workspace-write sandboxing and approval policy `never`. Assert that direct pushes and direct GitHub mutations are either explicitly forbidden or unmatched and therefore unable to escalate, while the record-aware publisher is allowed. Exercise the publisher with a canonical task record and named author; require the configured task-record root, exact recorded task branch, remote, current head, publication authorization, and `drafting` or `resolving` state. In `drafting`, require its optional draft operation to verify separate draft authorization, push first, use an explicit head, target the recorded non-main integration branch, reject an existing PR, and return the created URL. Reject a different caller, stale head, integration/main target, noncanonical record, and direct push. Repeat with custom task-record and integration-branch locations without changing portable executable logic.
+
 Start an active orchestrator, then start a maintenance agent in the same orchestration repository. Assert that only the active controller owns `workflow_orchestrator`, the maintenance agent does not infer the role from its working directory, and managed-agent events reach the controller. Repeat with the reserved name already owned by an ambiguous session; assert that setup inspects the owner and asks the human before clearing or reassigning it. It must not route agents to a pane ID as a permanent workaround.
+
+Evaluate the autonomous branch denials. `gh pr merge`, `git push origin main`, and `git push origin HEAD:qtorgerson/gears-vehicle-comms` must be forbidden for managed roles; an ordinary task-branch push remains unmatched. Assert that prompts, task records, and PR validation also reject equivalent command spellings and a PR retargeted to `main`.
+
+### Guarded squash integration
+
+Run `./scripts/test-project-squash-merge` and require success. Then present PRs with wrong or noncanonical project/package records, a caller other than the live named orchestrator, stale Stagehand or source-document identity, wrong repository/base/head, draft state, review conclusion, verification status, specification alignment, decision-record status, required checks, or package state. Assert that the guard refuses each before mutation. Present `main`, merge, rebase, auto-merge, administrator-bypass, and active merge-queue variants, including a merge-queue rule found only on a later API page, and require rejection before any external merge mutation.
+
+For a valid exact-head PR, assert that only `workflow_orchestrator` invokes the guard, GitHub uses squash, the returned merge commit is recorded, the remote integration branch gains exactly one commit for the PR, and successors remain blocked until post-merge evidence passes. The orchestrator never pushes a repair directly; regressions use a reviewed squash repair or revert PR.
+
+### Project check-in and resume
+
+Interrupt an autonomous run while authors, reviewers, and builds are active. Assert that the orchestrator reconciles all records and evidence, pauses new scheduling, reviews, finalizations, and merges, lets nondestructive active operations reach safe boundaries, and reports source commit, integration heads, agent usage, package progress, critical path, decisions, verification, and risk. Resume explicitly and assert that it recovers existing workspaces and roles without duplicating agents, PRs, events, or merges.
+
+### Reusable complete-worktree leases
+
+Create full `gears-meta` worktrees beneath the chartered project root and initialize the plan-owned development target. Assert that agents build from the complete meta-repository context. After a package settles, test clean and dirty nested repositories, untracked files, unrecoverable commits, active processes, permission prompts, stale bases, and ambiguous ownership. Only the fully clean and durable workspace returns to the pool; reuse creates a new recorded lease from the current integration head without reset, clean, or discarded state.
 
 ### Overlapping work
 
@@ -198,21 +252,23 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 ## Global assertions
 
 - Every executing task has one task record, one worktree, and one managed workspace.
-- No task starts without explicit human authorization, and no fixed global concurrency cap overrides the human's requested parallel workload.
+- No supervised task starts without explicit human authorization. No autonomous task starts without a matching active charter, eligible package, available reservation, and capacity slot.
 - Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker; workspace-only has no managed role until promotion. No managed role recursively spawns agents.
 - Semantic events are independently reconciled with repository, PR, and Herdr state.
 - Out-of-sync tasks reconcile to the furthest independently proven state without replaying obsolete event chains or treating artifacts as human authority.
 - Every managed-role handoff carries the current task, role, endpoint, scope, stage, and allowed outcomes; no role infers detachment from silence.
-- Review loops stop at three rounds per scope or six total until the human intervenes.
+- Supervised review loops stop at three rounds per scope or six total until the human intervenes. Autonomous loops use convergence controls and never stop or continue solely because of a number.
 - Hunk never uses watch mode and reload occurs only after findings are consumed and preserved.
-- Initial task authorization covers the author's routine draft creation, but reviewer finalization still requires explicit human authorization.
+- Initial supervised task authorization covers the author's routine draft creation, but reviewer finalization still requires explicit human authorization. An autonomous charter may authorize finalization for its exact verified head.
 - The reviewer reads GitHub PR intent and discussion before reviewing and sends `pull-request-finalized` after authorized finalization.
 - Human-selected post-review feedback invalidates prior review authority; every resulting head receives complete rereview and new finalization authorization.
 - Reviewer-only output is proposed durably, published only after exact human authorization, and never changes source or pull-request state beyond the authorized review submission.
 - Delegated work creates no PR or review loop and cannot become landed implementation without new human authorization.
-- The orchestrator does not edit product code, approve permission prompts, push to main, force-push, finalize without authorization, or merge.
+- The orchestrator does not edit product code, independently review, approve permission prompts, push to or merge into `main`, force-push, enable auto-merge, or finalize without the applicable authority. Autonomous merge is squash-only through the guard into the exact recorded integration branch.
 - Cleanup uses force only through the narrowly audited target-submodule and Herdr exceptions; it never deletes branches implicitly or discards dirty, unrecoverable, working, or ambiguous state.
 - Worktree-backed provisioning creates no provisional primary workspace, and the orchestrator never invokes `herdr workspace close` on a worktree group.
 - A new scope version resets only its own review count.
 - Machine-specific paths, hosts, models, and company policy do not enter the generic skill package.
 - The public workspace contract and template contain no real private configuration; ignored local configuration is required for orchestration and never forwarded wholesale to managed agents.
+- Autonomous authors and reviewers base work on cited authoritative documents; material changes update owning specifications and checked-in ADRs.
+- Autonomous project completion requires robust maintainable code, reusable deterministic mocks, applicable verification tiers, installation and deployment evidence, indexed decisions, and no hidden material boundary defect.

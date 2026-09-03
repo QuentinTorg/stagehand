@@ -1,0 +1,46 @@
+# Install this rule only in a managed task worktree before starting its Codex
+# author or reviewer. It must not be installed globally because ordinary Codex
+# sessions retain their own publication policy.
+
+# Managed roles run with workspace-write sandboxing and approval policy `never`.
+# This rule allows only the record-aware publisher to cross the network boundary.
+# Common direct push syntax is explicitly forbidden; alternate launch spellings
+# remain unmatched and therefore cannot escalate outside the sandbox.
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "forbidden",
+    justification = "Managed roles publish only the task branch and authorized head through the Stagehand publication guard.",
+    match = [
+        "git push origin task-branch",
+        "git push --force origin main",
+        "git push origin refs/heads/main",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", ["-c", "--config-env", "--git-dir", "--work-tree"]],
+    decision = "forbidden",
+    justification = "Managed roles may not use Git global options to bypass task-worktree command policy.",
+    match = [
+        "git -c push.default=current push origin main",
+        "git --git-dir .git push origin main",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "create"],
+    decision = "forbidden",
+    justification = "Managed authors create only the task-record-authorized draft through the Stagehand publication guard.",
+    match = [
+        "gh pr create --draft --base integration --head task-branch",
+    ],
+)
+
+prefix_rule(
+    pattern = ["stagehand-managed-task-branch-push"],
+    decision = "allow",
+    justification = "Publish the exact author task branch and head authorized by its canonical Stagehand task record.",
+    match = [
+        "stagehand-managed-task-branch-push --task-record /tmp/stagehand/.orchestrator/tasks/task-1.yaml --expected-head 0123456789012345678901234567890123456789",
+    ],
+)

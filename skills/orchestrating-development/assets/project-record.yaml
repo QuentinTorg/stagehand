@@ -1,0 +1,107 @@
+# The charter is the durable authority envelope for one autonomous project.
+version: 1
+project_id: "<stable-project-id>"
+display_name: "<human-readable-project-name>"
+mode: "autonomous-project"
+role_title: "Autonomous Project Integration Director"
+authority:
+  authorized_by: "<human-identity-or-conversation-reference>"
+  authorization_ref: "<recoverable-reference>"
+  status: "active"
+  merge_role: "workflow_orchestrator"
+  # Main may be inspected as reference evidence but is never a writable target.
+  main_mutation_forbidden: true
+project_root: "<absolute-project-root>"
+source_documents:
+  repository: "<repository-key>"
+  commit: "<commit-containing-approved-documents>"
+  design:
+    - "<path-to-authoritative-design>"
+  implementation_plan:
+    - "<path-to-authoritative-plan>"
+decision_log:
+  directory: "docs/decisions"
+  index: "docs/decisions/README.md"
+  next_id: 1
+terminal_milestone:
+  name: "deployment-ready-proof-of-concept"
+  required_evidence:
+    - "clean-build-and-install"
+    - "static-analysis"
+    - "unit-adapter-contract-tests"
+    - "deterministic-integration-simulation"
+    - "deployment-configuration-and-operations-docs"
+  deferred_gates:
+    - "production-authentication"
+    - "hardware-network-media-acceptance"
+    - "manual-privileged-host-network-scenarios"
+environment_policy:
+  portable_network_simulation_required: true
+  isolated_container_networks: "local-policy"
+  privileged_commands: "human-only"
+  host_network_mutation: "human-approved-exact-procedure"
+  privileged_network_tests_required_for_milestone: false
+repositories:
+  <repository-key>:
+    checkout: "<absolute-primary-checkout>"
+    github: "<host/owner/repository>"
+    remote: "origin"
+    reference_branch: "main"
+    integration_branch: "<non-main-integration-branch>"
+    integration_base_commit: null
+    branch_published: false
+    merge_method: "squash"
+    orchestrator_merge_only: true
+scheduler:
+  max_working_agents: "<positive-integer>"
+  max_parallel_heavy_builds: null
+  monitoring_interval_seconds: "<positive-integer>"
+  long_operation_interval_seconds: "<positive-integer>"
+  last_monitoring_sweep_at: null
+  paused: false
+  pause_reason: null
+  worktree_pool_root: "<absolute-path-beneath-project-root>"
+  active_agents: []
+rehydration:
+  full_interval_seconds: 3600
+  generation: 0
+  required_documents:
+    - "AGENTS.md"
+    - ".local/AGENTS.md"
+    - ".local/workspace.yaml"
+    - "skills/orchestrating-development/SKILL.md"
+    - "skills/orchestrating-development/references/project-control.md"
+    - "skills/orchestrating-development/references/workflow-state.md"
+    - "skills/orchestrating-development/references/safety-and-escalation.md"
+  last_completed_at: null
+  next_full_due_at: null
+  reason: null
+  controller_session: null
+  stagehand_commit: null
+  source_document_commit: null
+  package_snapshot_at: null
+  transition_gate:
+    action: null
+    packages: []
+    repositories: []
+    heads: {}
+packages:
+  records_directory: ".orchestrator/projects/<stable-project-id>/packages"
+  graph:
+    <work-package-id>:
+      record: "<relative-package-record-path>"
+      prerequisites: []
+      state: "planned"
+reservations: []
+evidence:
+  completed_packages: []
+  integration_heads: {}
+  terminal_evidence: []
+state:
+  name: "chartered"
+  prior: null
+  waiting_on: "project reconciliation and first eligible package"
+  decision_reason: null
+  attention_required: false
+  attention_reason: null
+last_reconciled_at: null

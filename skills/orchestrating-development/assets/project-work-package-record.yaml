@@ -1,0 +1,65 @@
+# One package may own multiple repository PRs, but it remains one cohesive plan node.
+version: 1
+project_id: "<stable-project-id>"
+package_id: "<work-package-id>"
+display_name: "<human-readable-package-name>"
+objective: "<externally-observable-capability-or-foundation>"
+source_authority:
+  project_source_commit: "<approved-document-commit>"
+  design_sections:
+    - "<path#section>"
+  implementation_sections:
+    - "<path#section>"
+prerequisites:
+  packages: []
+  decisions: []
+  external_artifacts: []
+owned_scope:
+  repositories: []
+  paths: []
+  contracts: []
+neighbor_contracts: []
+exclusions: []
+reservations:
+  repositories: []
+  paths: []
+  schemas: []
+  generated_outputs: []
+  shared_test_infrastructure: []
+tasks: []
+deliveries:
+  <repository-key>:
+    pull_request: null
+    base: "qtorgerson/gears-vehicle-comms"
+    expected_head: null
+    reviewed_head: null
+    review_conclusion: null
+    verification_status: "pending"
+    completion_criteria_satisfied: false
+    specification_aligned: false
+    decision_records_complete: false
+    merge_commit: null
+verification:
+  required:
+    static: []
+    unit: []
+    adapter: []
+    contract: []
+    integration: []
+    install: []
+    simulation: []
+  evidence: []
+decisions: []
+convergence:
+  repeated_finding_count: 0
+  consecutive_no_progress_rounds: 0
+  incompatible_conclusion_count: 0
+  recovery_actions: []
+state:
+  name: "planned"
+  prior: null
+  waiting_on: "prerequisite reconciliation"
+  decision_reason: null
+  attention_required: false
+  attention_reason: null
+last_event: null

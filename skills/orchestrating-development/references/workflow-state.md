@@ -4,6 +4,7 @@
 
 - [State ownership](#state-ownership)
 - [Task states](#task-states)
+- [Project and package states](#project-and-package-states)
 - [Semantic events](#semantic-events)
 - [Missing-event reconciliation](#missing-event-reconciliation)
 - [Event validation](#event-validation)
@@ -15,11 +16,13 @@
 
 Herdr reports terminal and agent lifecycle. The task record reports workflow state. Keep them separate: an `idle` author may be awaiting plan approval, while a `done` reviewer may have findings rather than approval.
 
-The orchestrator owns one task record per authorized task. A task owns exactly one worktree and one managed Herdr workspace for its lifetime. Development uses the topology in [Hunk Coordination](hunk-coordination.md); reviewer-only and delegated work use one reviewer or worker pane.
+The orchestrator owns one task record per authorized task. Autonomous-project mode additionally owns one project record and one package record per authoritative plan node as defined in [Autonomous Project Control](project-control.md). A task owns exactly one leased worktree and one managed Herdr workspace while active. Development uses the topology in [Hunk Coordination](hunk-coordination.md); reviewer-only and delegated work use one reviewer or worker pane.
 
 Every state transition updates `state.waiting_on`, `state.attention_required`, and `state.attention_reason` together with the state name. `waiting_on` identifies the next actor, event, decision, check, dependency, or cleanup condition in plain language for controller recovery; it is not a dashboard field. Attention is true only when a concrete human action is currently required; ordinary agent work, CI, or an expected semantic event is a wait condition but not human attention.
 
 When a managed role owns the next transition, also record `event_recovery.expected_role`, the allowed `expected_events`, and zero recovery attempts. Clear that expectation when a valid event or human decision transfers ownership elsewhere. For legacy records, derive and persist these fields from the validated state before attempting recovery.
+
+For an actively monitored autonomous project, also persist `last_observed_at`, `last_observed_lifecycle`, `last_output_digest`, and `next_check_at`. These fields prevent controller restarts from producing immediate duplicate transcript reads or worker prompts. They are observations only and never prove a workflow conclusion.
 
 ## Task states
 
@@ -27,7 +30,7 @@ When a managed role owns the next transition, also record `event_recovery.expect
 | --- | --- | --- |
 | `queued` | Authorized but intentionally waiting for a human decision, dependency, requested sequencing, or conflict resolution | Start the task when its waiting condition is cleared |
 | `human-working` | A workspace-only task is available for open-ended human-directed work | Human-requested promotion, retention, or cleanup |
-| `planning` | Author is exploring and discussing implementation with the human | Validated `implementation-started` or `needs-human` event |
+| `planning` | Author is exploring and proposing implementation to the recorded approval actor | Validated `plan-proposed`, `implementation-started`, blocker, or decision event |
 | `implementing` | Author is implementing or verifying the approved scope | Validated `implementation-ready` or `needs-human` event |
 | `drafting` | Orchestrator directed the author to create the initial draft PR | Validated `draft-pr-ready` or `needs-human` event |
 | `reviewing` | Reviewer is performing a complete review of the current changeset | Validated reviewer outcome |
@@ -46,6 +49,12 @@ When a managed role owns the next transition, also record `event_recovery.expect
 | `cleaned` | Task-owned Herdr workspace and worktree were safely removed | None |
 
 Waiting for the human does not imply failure. Record the prior state and reason before entering `decision-required` so an authorized decision can resume the correct transition.
+
+## Project and package states
+
+Autonomous project and package states are defined in [Autonomous Project Control](project-control.md). Keep their transitions separate from task states: a task may be `merged` while its multi-repository package remains `active`, and a package may be `integrated` while the project remains incomplete.
+
+Every accepted task event updates its linked package record as one atomic orchestration transition. A package unlocks successors only after all required deliveries, decisions, and post-merge evidence are independently validated. A project pause blocks new scheduling, role starts, review starts, finalization, and merges without pretending active tasks are complete.
 
 ## Semantic events
 
@@ -66,6 +75,7 @@ Required events are:
 
 | Role | Event | Additional fields | Meaning |
 | --- | --- | --- | --- |
+| Author | `plan-proposed` | `planRef`, `summary`, `verificationSummary` | Autonomous-project plan is ready for orchestrator validation; it is not implementation approval |
 | Author | `implementation-started` | none | Human explicitly approved implementation in the author session |
 | Author | `implementation-ready` | `head`, `verificationRef` | Approved implementation is ready for the orchestrator to request draft creation |
 | Author | `draft-pr-ready` | `base`, `head`, `pullRequest` | Initial draft contains intent and the verified current head |
@@ -82,10 +92,11 @@ Required events are:
 | Reviewer | `review-published` | `base`, `head`, `round`, `pullRequest`, optional `reviewUrl` | Human-authorized reviewer-only output was published for the exact head |
 | Worker | `work-complete` | `summary`, optional `resultRef` | Bounded delegated work finished without entering development |
 | Worker | `needs-human` | `reason` | Worker cannot proceed inside its current objective or mutation boundary |
+| Author or reviewer | `project-decision-needed` | `reason`, `evidenceRef`, `recommendation` | Chartered project needs an orchestrator decision, specification correction, or bounded recovery action |
 
 Free-form summaries are supporting context, not transition authority. A managed role verifies delivery from a successful command result reporting `type: agent_prompted`. If direct delivery fails twice, the agent prints `WORKFLOW_EVENT_FALLBACK` and the complete event in its final response. The orchestrator may recover it with `herdr agent read`, validate it, and record that fallback source.
 
-Authors and workers use `needs-human`; reviewers use `review-needs-human`. These blocker events are valid from every active state owned by that role. Failures do not create new event names.
+Ordinary supervised tasks use `needs-human` or `review-needs-human`. Autonomous-project authors and reviewers use `project-decision-needed` for decisions delegated to the orchestrator and retain the human blocker only for authority outside the charter. These blocker events are valid from every active state owned by that role. Failures do not create new event names.
 
 ### Shared-input collision recovery
 
@@ -102,11 +113,11 @@ Do not discard the human prefix, treat the JSON as part of the human command, or
 
 ## Missing-event reconciliation
 
-The orchestrator is not a daemon. Reconcile on monitoring, reporting, or task handling; silent delivery cannot wake it without an external controller.
+Supervised orchestration is not a daemon: reconcile on monitoring, reporting, or task handling. A chartered autonomous kickoff instead authorizes the low-frequency attached monitoring loop in [Autonomous Project Control](project-control.md). Silent delivery still cannot create evidence, so each cadence tick reconciles lifecycle and bounded transcript state rather than assuming success.
 
 Find the **furthest proven state** while keeping evidence classes distinct:
 
-- only current human instructions or unambiguous human transcript messages prove human authority;
+- only current human instructions or unambiguous human transcript messages prove supervised authority; a validated active project charter proves only its recorded autonomous authority;
 - valid events, verified delivery, fallbacks, or one requested catch-up event prove role conclusions;
 - Git, GitHub, verification, and Hunk prove artifacts and changeset identity, not authority or review conclusions;
 - Herdr lifecycle proves runtime activity or settlement only.
@@ -119,7 +130,7 @@ For a task with drift:
 4. If all boundaries are proven, atomically advance to the furthest state without replaying historical events. Record sources and skipped boundaries in `state.decision_reason`; normalize `last_event`, expected role and events, wait and attention fields, and recovery attempts.
 5. If authority and artifacts are proven but the current role conclusion is missing, record one attempt and prompt that same role once with a fresh control block and the exact current-boundary event schema. Request current state, not repeated work or historical events.
 6. If authorized work continues and only bookkeeping lags, record the proven active state and await the normal boundary. Interrupt only when mutation lacks authority or continued work compounds risk.
-7. On unresolved identity, authority, conclusion, scope, or changeset ambiguity—or a failed catch-up attempt—preserve work, enter `decision-required`, and ask one focused question. Do not infer, reprompt, replace the role, or increment review counters.
+7. On unresolved identity, authority, conclusion, scope, or changeset ambiguity—or a failed catch-up attempt—preserve work and enter `decision-required`. In supervised mode ask one focused human question. In autonomous-project mode apply the bounded decision and recovery procedure; ask the human only when the required authority lies outside the charter. Do not infer success or increment review counters.
 
 Reset recovery attempts only after successful reconciliation or a valid event establishes a new handoff. Invalid events do not reset them. When the record and transcript disagree on authority, preserve state and ask the human.
 
@@ -133,13 +144,15 @@ Before advancing state:
 4. Resolve the worktree, branch, base, pull request, and current head independently.
 5. Reject stale or contradictory events and move to `decision-required` when reconciliation could change behavior.
 
+For a project-linked task, also confirm project and package IDs, active charter status, source-document commit, integration branch, reservations, package state, agent capacity, and expected approval actor. Reject an event that would mutate or target `main`, a non-recorded integration branch, or a package invalidated by a newer decision.
+
 An event is a claim, not proof. Validate the draft PR and head before development review, `review-passed.head` before finalization authority, and `pull-request-finalized.head` before declaring development complete. For reviewer-only work, validate proposal, conclusion, current head, and publication. For delegated work, validate any `resultRef` and confirm no unauthorized tracked change before entering `delegated-complete`.
 
 Accept `post-review-changes-started` only after a successful review or finalization and only for feedback explicitly selected by the human. Preserve the former reviewed and finalized heads as history, clear both as current authority, and bind the feedback reference before resolution. Reject a concurrently arriving finalization event as stale. A material event increments the scope version using its brief reference. If draft return is required, validate `pull-request-returned-to-draft` before author implementation proceeds. A small fix does not reset review counters; material scope revision resets only the per-scope count.
 
 ## Review counters and scope versions
 
-Increment `review.rounds_this_scope` and `review.rounds_total` when a reviewer outcome for a valid complete review is accepted. Check both budgets before beginning another review.
+Increment `review.rounds_this_scope` and `review.rounds_total` when a reviewer outcome for a valid complete review is accepted. Check both budgets before beginning another supervised review. Autonomous-project mode records these counters for visibility but uses convergence evidence rather than a numeric human checkpoint; follow [Autonomous Project Control](project-control.md) instead of stopping at three or six rounds.
 
 A human-authorized material scope revision:
 
@@ -155,17 +168,23 @@ Fixes that merely resolve selected findings do not create a new scope version.
 
 On orchestration restart, treat every cached lifecycle observation as stale. Reconcile, in order:
 
+0. complete the project-control rehydration procedure when the task belongs to an autonomous project or when context may have been compacted;
+
 1. task record and configured repository identity;
 2. worktree path, branch, base, status, and current head;
 3. draft pull request, description, state, and remote head;
 4. live Herdr workspace, panes, and named agents; and
 5. Hunk session source for development review, proposal artifact for reviewer-only work, or result reference for delegated work.
 
+For autonomous projects, reconcile the charter and authoritative source commit first, then package graph, reservations, integration heads, decisions, capacity, pause state, and linked tasks. Never resume a task whose package is no longer eligible or whose integration base advanced without reconciliation.
+
+A controller-session resume or compacted conversation summary is a recovery boundary, not durable state. Before the first mutation, reload the governing orchestration documents and current records listed by the project's rehydration checkpoint. Because compaction cannot be detected reliably, the persisted one-hour `next_full_due_at` lease independently forces periodic rehydration. Rehydrate earlier whenever prior context appears summarized, an expected detail is absent, the controller session changes, or uncertainty exists. Consequential transitions still validate their exact records and cited authority, but do not independently reload the complete bundle while the checkpoint remains current. Do not use remembered prose to reconstruct a missing reservation, decision, approval, head, or prerequisite.
+
 Resume only after these sources agree. Never repeat workspace creation, PR creation, comment publication, or finalization merely because the previous command result was lost.
 
 ## Cleanup
 
-A task becomes cleanup-eligible when GitHub confirms its pull request merged or the human explicitly requests cleanup. Before removal, verify that the worktree and workspace still belong to the task, no managed role is working, and apply the two-layer recoverability audit in [Safety, Capacity, and Escalation](safety-and-escalation.md). An expected containing-repository gitlink difference is allowed only for a clean, recoverable submodule target whose recorded pointer update is `not-planned`; it does not excuse changes inside that submodule.
+A task becomes cleanup-eligible when GitHub confirms its pull request merged or the human explicitly requests cleanup. A project-linked task may instead become pool-eligible after its package lineage reaches a durable boundary. Before removal or pool release, verify that the worktree and workspace still belong to the task, no managed role is working, and apply the two-layer recoverability audit in [Safety, Capacity, and Escalation](safety-and-escalation.md). An expected containing-repository gitlink difference is allowed only for a clean, recoverable submodule target whose recorded pointer update is `not-planned`; it does not excuse changes inside that submodule.
 
 If any safety check fails, enter `decision-required` and preserve the workspace. Otherwise remove only the task-owned Herdr workspace and worktree through the normal path or the audited submodule-specific force exception, mark the record `cleaned`, and move it from the active task-record directory to its sibling archive directory (default `.orchestrator/archive`). Normal reconciliation and status reporting inspect only active records; consult the archive only for explicit historical recovery or investigation. Pull-request closure and branch deletion are separate actions and are not implied by workspace cleanup.
 
