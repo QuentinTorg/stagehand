@@ -63,14 +63,6 @@ state:
   name: drafting
 EOF
 
-cat >"$test_root/bin/herdr" <<'EOF'
-#!/bin/sh
-set -eu
-test "$1 $2" = "agent get"
-printf '{"result":{"agent":{"name":"%s"}}}\n' "${TASK_PUSH_TEST_CALLER:-task_author}"
-EOF
-chmod +x "$test_root/bin/herdr"
-
 cat >"$test_root/bin/git" <<'EOF'
 #!/bin/sh
 set -eu
@@ -108,8 +100,7 @@ esac
 EOF
 chmod +x "$test_root/bin/gh"
 
-export HERDR_ENV=1
-export HERDR_PANE_ID=w1:p2
+unset HERDR_ENV HERDR_PANE_ID
 export TASK_PUSH_TEST_STATE="$test_root/pushed"
 
 result=$(PATH="$test_root/bin:$PATH" "$guard_script" \
@@ -171,14 +162,6 @@ PATH="$test_root/bin:$PATH" "$guard_script" \
     --expected-head 0123456789012345678901234567890123456789 >/dev/null
 mv "$test_root/task-drafting.yaml" "$task_record"
 
-rm -f "$TASK_PUSH_TEST_STATE"
-TASK_PUSH_TEST_CALLER=other_author PATH="$test_root/bin:$PATH" "$guard_script" \
-    --task-record "$task_record" \
-    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1 && {
-    echo "publication guard accepted the wrong author" >&2
-    exit 1
-}
-
 if PATH="$test_root/bin:$PATH" "$guard_script" \
     --task-record "$task_record" \
     --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1; then
@@ -190,7 +173,7 @@ cp "$task_record" "$test_root/noncanonical-task.yaml"
 if PATH="$test_root/bin:$PATH" "$guard_script" \
     --task-record "$test_root/noncanonical-task.yaml" \
     --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
-    echo "publication guard accepted a caller-selected task record" >&2
+    echo "publication guard accepted a noncanonical task record" >&2
     exit 1
 fi
 

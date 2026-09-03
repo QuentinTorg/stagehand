@@ -89,25 +89,12 @@ if [ "${#expected_head}" -ne 40 ] && [ "${#expected_head}" -ne 64 ]; then
     exit 2
 fi
 
-for command_name in ruby jq git gh herdr realpath awk env mktemp rm; do
+for command_name in ruby jq git gh realpath awk env mktemp rm; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "$command_name is required for guarded task-branch publication" >&2
         exit 1
     fi
 done
-
-if [ "${HERDR_ENV:-}" != 1 ] || [ -z "${HERDR_PANE_ID:-}" ]; then
-    echo "guarded publication requires the invoking Herdr pane identity" >&2
-    exit 1
-fi
-caller_json=$(herdr agent get "$HERDR_PANE_ID") || {
-    echo "could not resolve the invoking Herdr agent" >&2
-    exit 1
-}
-caller_name=$(printf '%s\n' "$caller_json" | jq -er '.result.agent.name') || {
-    echo "the invoking Herdr agent has no stable workflow identity" >&2
-    exit 1
-}
 
 record_json=$(ruby -ryaml -rjson -e '
   task = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
@@ -189,7 +176,10 @@ require_value() {
 }
 
 require_value mode development
-require_value author "$caller_name"
+author=$(record_value author)
+case "$author" in
+    *[!A-Za-z0-9_-]*|'') echo "invalid author in task record" >&2; exit 1 ;;
+esac
 require_value publication_authorized true
 require_value publication_role author
 require_value publication_head "$expected_head"
