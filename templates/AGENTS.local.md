@@ -8,6 +8,12 @@ Task authorization, implementation-plan approval, pull-request finalization, and
 
 Record only choices delegated to local policy, such as the preferred merge interface and strategy, standing draft-state policy for post-readiness changes, or stricter local limits.
 
+## Optional builder charter
+
+For a bounded autonomous project, record the terminal outcome, authoritative design and implementation plan, allowed repositories, exact non-main integration branches, agent limit, and decisions that remain human-only. State explicitly which ordinary human checkpoints the orchestrator owns under the skill's builder-mode extension.
+
+Keep project progress in one concise Markdown note. Do not duplicate the implementation plan as controller-owned package records or encode delivery as a second workflow state machine.
+
 ## Repository resolution
 
 List allowed location roots as hints, then map every preconfigured repository to one exact canonical checkout. A root does not authorize arbitrary scanning or mutation.

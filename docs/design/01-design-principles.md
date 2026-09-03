@@ -4,8 +4,9 @@
 
 Stagehand helps one developer coordinate coding agents while producing pull
 requests that fit ordinary human team practices. It automates workflow
-coordination without taking ownership of product intent, engineering judgment,
-or merge authority.
+coordination without taking authorship or independent-review authority. Human-led
+work remains the default; a bounded local builder charter may delegate routine
+delivery judgment and non-main squash integration to the orchestrator.
 
 This document preserves the reasoning behind the workflow. Operational details
 belong in the [orchestration skill](../../skills/orchestrating-development/SKILL.md),
@@ -33,9 +34,9 @@ underlying contracts or turn the orchestrator into an author, reviewer, or fixer
 
 ## Guiding Principles
 
-- **Human authority:** The human chooses tasks, approves implementation plans,
-  controls scope, disposes ambiguous findings, authorizes pull-request
-  finalization, and performs every merge.
+- **Explicit authority:** The human owns every checkpoint by default. A local
+  builder charter may delegate project delivery checkpoints and exact non-main
+  squash integration while retaining named high-risk decisions for the human.
 - **Explicit intent:** The author and human establish enough context to
   distinguish required behavior, constraints, and non-goals. The draft pull
   request becomes the durable team-facing statement of that intent.
@@ -65,12 +66,12 @@ underlying contracts or turn the orchestrator into an author, reviewer, or fixer
 
 ## Responsibility Boundaries
 
-- **Human:** Selects work, owns intent and scope, approves the author's plan,
-  resolves judgment calls, authorizes shared publication and readiness, and
-  merges through GitHub.
+- **Human:** Defines authority and owns intent, high-risk decisions, and final
+  integration by default.
 - **Orchestrator:** Provisions isolated workspaces, records workflow state,
   launches and monitors roles, routes validated handoffs, applies resource and
-  safety limits, and reports decisions that require the human.
+  safety limits, and reports decisions that require the human. Under a builder
+  charter it also owns the delegated delivery decisions and non-main squash merge.
 - **Author:** Explores the repository, proposes the implementation plan,
   implements only after approval, verifies the result, creates the draft pull
   request, and resolves selected findings.
@@ -104,11 +105,12 @@ current changeset identity remain authoritative when a role must be replaced.
 
 ## Boundaries and Non-Goals
 
-Stagehand does not implement product code, decide what issue should be pursued
-without human authorization, silently expand scope, approve unexpected risky
-operations, publish an external review without permission, or merge pull
-requests. It does not replace repository instructions, CI, branch protection,
-required reviews, or company policy.
+Stagehand does not implement product code, silently expand scope, approve
+unexpected risky operations, or publish an external review without permission.
+Outside a builder charter it does not select or merge work; inside one it remains
+bounded to named repositories and non-main integration branches. It does not
+replace repository instructions, CI, branch protection, required reviews, or
+company policy.
 
 The workflow is intentionally compatible with native and container builds,
 C++, worktrees, submodules, and meta-repositories, but their concrete behavior

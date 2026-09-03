@@ -197,20 +197,24 @@ Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous 
 
 ## Global assertions
 
+### Chartered builder ownership
+
+Configure a local builder charter with authoritative documents, two allowed repositories, exact non-main integration branches, a terminal outcome, an agent limit, and named human-only risks. Assert that the orchestrator treats the implementation plan as an initial roadmap, selects dependency-ready nonconflicting work, and splits an oversized plan node into cohesive independently testable pull requests that are reviewable without becoming artificial micro-PRs. It approves aligned author plans, leaves builds and tests to authors, selects in-scope review findings, and squash-merges only independently reviewed exact heads into the configured integration branch. For an ordinary code-only PR, exact-head local execution of every applicable CI command permits progress without waiting for redundant CI. For a PR changing workflow or CI configuration, require a real successful run of the changed CI path. In both cases required branch protection remains effective. It updates one concise Markdown progress note and continues to the next work item without a routine human checkpoint. Repeat with `main`, credentials, privileged host networking, and out-of-charter scope; each must return to the human without product mutation. Assert that no project/package schema, extra workflow event, publication wrapper, merge wrapper, or timed rehydration is introduced.
+
 - Every executing task has one task record, one worktree, and one managed workspace.
-- No task starts without explicit human authorization, and no fixed global concurrency cap overrides the human's requested parallel workload.
+- No task starts without explicit human authorization or eligibility under a valid builder charter.
 - Development has at most one author and reviewer; reviewer-only has one reviewer; delegated work has one worker; workspace-only has no managed role until promotion. No managed role recursively spawns agents.
 - Semantic events are independently reconciled with repository, PR, and Herdr state.
 - Out-of-sync tasks reconcile to the furthest independently proven state without replaying obsolete event chains or treating artifacts as human authority.
 - Every managed-role handoff carries the current task, role, endpoint, scope, stage, and allowed outcomes; no role infers detachment from silence.
-- Review loops stop at three rounds per scope or six total until the human intervenes.
+- Review loops stop at three rounds per scope or six total until the responsible approval actor intervenes; builder mode may continue after reassessing progress.
 - Hunk never uses watch mode and reload occurs only after findings are consumed and preserved.
-- Initial task authorization covers the author's routine draft creation, but reviewer finalization still requires explicit human authorization.
+- Initial task authorization covers the author's routine draft creation, but reviewer finalization still requires authorization from the responsible actor.
 - The reviewer reads GitHub PR intent and discussion before reviewing and sends `pull-request-finalized` after authorized finalization.
 - Human-selected post-review feedback invalidates prior review authority; every resulting head receives complete rereview and new finalization authorization.
 - Reviewer-only output is proposed durably, published only after exact human authorization, and never changes source or pull-request state beyond the authorized review submission.
 - Delegated work creates no PR or review loop and cannot become landed implementation without new human authorization.
-- The orchestrator does not edit product code, approve permission prompts, push to main, force-push, finalize without authorization, or merge.
+- The orchestrator does not edit product code, approve permission prompts, push to `main`, force-push, or finalize without authorization. It merges only through explicit builder authority into an exact non-main integration branch.
 - Cleanup uses force only through the narrowly audited target-submodule and Herdr exceptions; it never deletes branches implicitly or discards dirty, unrecoverable, working, or ambiguous state.
 - Worktree-backed provisioning creates no provisional primary workspace, and the orchestrator never invokes `herdr workspace close` on a worktree group.
 - A new scope version resets only its own review count.

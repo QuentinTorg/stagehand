@@ -2,7 +2,7 @@
 
 ## 1. Intent
 
-Coordinate Herdr-managed development, reviewer-only, delegated-work, and workspace-only tasks while the human retains task, scope, risk, publication, finalization, and merge authority. Herdr supplies runtime control; this skill supplies durable workflow state, bounded role handoffs, review loops, and recovery.
+Coordinate Herdr-managed development, reviewer-only, delegated-work, and workspace-only tasks. By default the human retains task, scope, risk, publication, finalization, and merge authority. An explicit local builder charter may delegate routine project selection, plan approval, finding disposition, finalization, and non-main integration to the orchestrator. Herdr supplies runtime control; this skill supplies durable workflow state, bounded role handoffs, review loops, and recovery.
 
 The operating model is:
 
@@ -12,9 +12,9 @@ The operating model is:
 - a draft PR carrying intent before private Hunk review;
 - selected findings returned to the original author and completely rereviewed;
 - human-authorized PR finalization by the reviewer; and
-- final review and merge by humans in GitHub.
+- final review and merge by humans in GitHub by default, or exact non-main squash integration by a chartered builder orchestrator.
 
-This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, cascading worktree-group closure, and personal configuration leaking into a portable package. Long-lived orchestrators also need concise, single-owner instructions to preserve context across many tasks.
+This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, cascading worktree-group closure, and personal configuration leaking into a portable package. Long-lived builder orchestrators also need confidence to adapt delivery without turning their progress notes into a second workflow engine.
 
 See [Stagehand design principles](../../docs/design/01-design-principles.md) and [skill composition](../../docs/design/02-skill-composition.md) for product-level rationale.
 
@@ -38,12 +38,13 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 8. Keep Hunk non-watching, task-local, rooted in the repository owning the PR, and unchanged until findings are consumed.
 9. Return only human-selected material findings to the author. Every changed head receives a complete rereview by the same reviewer.
 10. Treat direct human scope changes in the author pane as sufficient authority, synchronize them through a versioned scope update without duplicate approval, and require a new phase-zero review.
-11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans always merge.
+11. Require authorization from the responsible actor for reviewer finalization and budget overrides; retain human authority for reviewer-only publication, exceptional permissions, risky actions, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans merge unless a builder charter grants exact non-main squash integration.
 12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
 13. Report all open tasks with the fixed dashboard and a single human-action section.
 14. Interpret ordinary task/workspace cleanup language as guarded removal of the uniquely identified task's recorded linked workspace and worktree, then archive its cleaned record outside the active set; preserve ambiguous targets.
 15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
 16. Extend a cohesive existing task and reuse its workspace and roles when safe, including related multi-repository or multi-PR follow-ups; isolate independent or conflicting work.
+17. Under an explicit builder charter, own the delegated checkpoints, treat the implementation plan as an adaptable roadmap, decompose it into cohesive independently testable and reviewable pull requests, keep authors responsible for their builds and tests, allow charter-approved exact-head local evidence to replace waiting for redundant CI except when CI configuration changes, maintain one concise project progress note, and continue until the chartered terminal outcome or a genuine out-of-charter blocker.
 
 ## 4. Guardrails
 
@@ -52,7 +53,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 - Default limits are three accepted review outcomes per scope and six total. A third material scope revision requires a progress and cost check.
 - Repeated findings, no-progress fixes, conflicting conclusions, missing events, unknown head changes, or overlap trigger escalation rather than another loop.
 - Herdr lifecycle proves activity only. Git and GitHub prove artifacts only. Neither proves human authority or reviewer conclusions.
-- The orchestrator never implements, reviews, fixes, merges, pushes primary branches, force-pushes, bypasses policy, publishes unapproved reviews, or cleans ambiguous work.
+- The orchestrator never implements, reviews, fixes, pushes primary branches, force-pushes, bypasses policy, publishes unapproved reviews, or cleans ambiguous work. It merges only when an explicit builder charter grants squash-merge authority for an exact non-main integration branch.
 - The orchestrator never invokes `herdr workspace close`; audited task cleanup uses worktree removal on the recorded linked workspace.
 - Product agents receive role contracts, not this skill or private orchestration configuration.
 
@@ -74,4 +75,4 @@ Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, h
 
 [Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
-Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.
+Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, the recorded approval actor, reviewer independence, no `main` mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.

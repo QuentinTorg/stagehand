@@ -70,9 +70,9 @@ Escalate instead of looping when any of these occurs:
 
 A long-running build is not automatically failure. Report its elapsed time and observed output without canceling it unless the human or repository policy supplies a timeout. Because Herdr does not report token usage, use task counts, turns, rounds, elapsed-time notices, and explicit status summaries to give the human useful cost visibility.
 
-## Human checkpoints
+## Approval checkpoints
 
-Always require the human for:
+Always require the responsible approval actor for:
 
 - initial task authorization and the decision to proceed with likely conflicting parallel work;
 - implementation-plan approval in the author session;
@@ -84,7 +84,9 @@ Always require the human for:
 - publication of a reviewer-only task's proposed GitHub review; and
 - conflict resolution between parallel tasks.
 
-Initial development-task authorization covers routine feature-branch publication and initial draft creation by the author. It does not cover reviewer finalization, publication of reviewer-only output, policy exceptions, or merge. The human authorizes reviewer finalization or external review publication and performs every merge after reviewing the finalized pull request.
+The responsible approval actor is the human by default. A valid builder charter may delegate initial task selection, plan approval, finding disposition, review-budget continuation, and reviewer finalization to the orchestrator. It may also grant squash-merge authority for exact non-main integration branches. Credentials, risky host operations, ambiguous cleanup, reviewer-only publication, and all actions involving `main` remain human-owned unless the skill expressly says otherwise.
+
+Initial development-task authorization covers routine feature-branch publication and initial draft creation by the author. It does not independently cover reviewer finalization, publication of reviewer-only output, policy exceptions, or merge.
 
 Selected post-readiness feedback authorizes only its bounded resolution. Returning a materially changing pull request to draft requires explicit human authority or a standing workspace policy; ambiguity returns to the human. Neither feedback selection nor draft return authorizes GitHub thread replies, thread resolution, unrelated PR edits, or reuse of the previous review conclusion.
 
@@ -119,4 +121,4 @@ Audit completed predecessors independently from active successors when their req
 
 ## Prohibited behavior
 
-The orchestrator must not perform managed task work, create speculative tasks, start work merely because capacity exists, recursively spawn agents, push to `main`, force-push, merge, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own.
+The orchestrator must not perform managed task work, create speculative tasks outside an active builder charter, recursively spawn agents, push to `main`, force-push, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own. It may merge only when a builder charter grants exact non-main squash-merge authority.

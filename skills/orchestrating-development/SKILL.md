@@ -1,11 +1,30 @@
 ---
 name: orchestrating-development
-description: Use only when the user explicitly asks an agent in a configured orchestration workspace to become the controller or to start, coordinate, monitor, resume, or report on development, reviewer-only, delegated-work, or workspace-only tasks through Herdr-managed sessions. Do not use for ordinary implementation, direct review, Hunk interaction, or orchestration discussion.
+description: Use only when the user explicitly asks an agent in a configured orchestration workspace to become the controller or to start, coordinate, monitor, resume, or report on development, reviewer-only, delegated-work, workspace-only, or locally chartered builder work through Herdr-managed sessions. Do not use for ordinary implementation, direct review, Hunk interaction, or orchestration discussion.
 ---
 
 # Orchestrating Development
 
 Coordinate authorized development, reviewer-only, delegated-work, and workspace-only tasks without performing their work. Herdr provides runtime control; this skill provides workflow state, role handoffs, conflict visibility, loop limits, and human authority boundaries.
+
+## Chartered builder mode
+
+The default workflow below keeps task selection, plan approval, finding disposition, pull-request finalization, and merging with the human. A workspace's local configuration may instead contain an explicit builder charter that delegates some or all of those checkpoints to the orchestrator for one bounded project. Treat that charter as durable authority only when it names the terminal outcome, authoritative product documents, allowed repositories, exact non-main integration branches, resource limits, and decisions that remain human-only.
+
+In builder mode, act as the delivery owner rather than a passive task runner:
+
+- continue toward the terminal outcome without waiting for routine human prompts;
+- select dependency-ready, nonconflicting work and adjust sequencing or task boundaries as evidence develops;
+- treat the implementation plan as an initial roadmap: split, combine, or reorder its work into cohesive, independently testable increments, with each pull request small enough for effective review but substantial enough to deliver a meaningful complete slice;
+- approve bounded author plans, select in-scope review findings, and resolve ordinary delivery problems yourself;
+- require authors to run their own builds and tests and reviewers to inspect the exact resulting head;
+- when the local charter permits, accept complete exact-head local execution of the same checks instead of waiting for redundant CI; changes to CI configuration require a successful real CI run, and branch protection is never bypassed;
+- squash-merge accepted pull requests only into the chartered non-main integration branch when the charter grants that authority; and
+- record material specification changes in the product documentation and keep one concise project progress note for completed, active, blocked, decision, and next work.
+
+Use normal Stagehand task records for active agent tasks. Do not copy the implementation plan into package schemas, create a second project state machine, require extra event types, or add wrappers and gates merely to demonstrate compliance. Git, GitHub, Herdr, and test results remain the evidence for consequential actions.
+
+The local charter may replace the human actor only for checkpoints it explicitly delegates. It never permits the orchestrator to implement or independently review product code, approve excluded privileges, use administrator bypass, or work on, target, push to, or merge `main`. Missing optional CI, routine tool or build failures, and an ordinary agent response ending are not reasons to stop an autonomous builder run. When persistent goal control is available, bind the run to the terminal outcome. On startup, resume, suspected compaction, or genuine uncertainty, reread the skill, local charter, and project progress note; do not reload them merely because a timer elapsed.
 
 ## Activation gate
 
@@ -42,14 +61,15 @@ Use [task-record.yaml](assets/task-record.yaml) for development and reviewer-onl
 Copy this checklist into the orchestration scratchpad and keep one instance per active turn:
 
 - [ ] Verify environment, authority, and current limits.
+- [ ] Select the default human-led workflow or a valid local builder charter.
 - [ ] Reconcile existing task records with Git, GitHub, Herdr, and Hunk as applicable.
-- [ ] Confirm the human-authorized task and requested start state.
+- [ ] Confirm the human-authorized task or builder-chartered work and requested start state.
 - [ ] Enforce one task per worktree and managed feature workspace.
 - [ ] Start or reuse only the role required for the current transition.
 - [ ] Prepend the current managed workflow control block to every role prompt.
 - [ ] Validate semantic events before changing workflow state.
 - [ ] Enforce review, scope, permission, role-cardinality, and conflict boundaries.
-- [ ] Stop at the next human decision or report the validated outcome.
+- [ ] Stop at the next decision owned by the human, or continue toward the builder charter's terminal outcome.
 
 ## Orchestration procedure
 
@@ -65,11 +85,11 @@ Treat Herdr `working`, `idle`, `done`, `blocked`, and `unknown` as runtime obser
 
 The orchestrator may inspect authorized GitHub issues, direct requests, and repository context to help the human choose work. Present scope, dependencies, likely conflicts, and cost at task-selection depth. Do not develop the implementation plan; that discussion belongs in the author workspace.
 
-Create a task only after explicit human authorization. Record its mode (`development`, `reviewer-only`, `delegated-work`, or `workspace-only`) and capture the objective and boundaries compactly without copying the full conversation. Give every task a short, recognizable `display_name`, normally based on the GitHub issue or pull-request title when one exists; use it as the human-facing fallback until a Herdr workspace exists, while `task_id` remains the stable machine identity and the live workspace label becomes the primary human identity after provisioning. Record the containing checkout's verified remote, requested base, and fetched base commit. Development and reviewer-only records also identify their exact development target; delegated records contain only their repository, mutation boundary, worker, result, and common state. When development originates on GitHub, pass its issue context so the author can link the draft. Store active records in the configured task-record directory, defaulting to `.orchestrator/tasks` here.
+Create a task only after explicit human authorization or when it is dependency-ready work within an active builder charter. Record its mode (`development`, `reviewer-only`, `delegated-work`, or `workspace-only`) and capture the objective and boundaries compactly without copying the full conversation. Give every task a short, recognizable `display_name`, normally based on the GitHub issue or pull-request title when one exists; use it as the human-facing fallback until a Herdr workspace exists, while `task_id` remains the stable machine identity and the live workspace label becomes the primary human identity after provisioning. Record the containing checkout's verified remote, requested base, and fetched base commit. Development and reviewer-only records also identify their exact development target; delegated records contain only their repository, mutation boundary, worker, result, and common state. When development originates on GitHub, pass its issue context so the author can link the draft. Store active records in the configured task-record directory, defaulting to `.orchestrator/tasks` here.
 
 ### 3. Start authorized work with conflict visibility
 
-Read the safety reference and apply the configured overlap and repository policy. The human controls authorized parallelism; recommend sequencing for likely conflicts without imposing a fixed cap. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested remote-base commit, and create one Herdr-managed task workspace from that exact commit. Run only initialization declared by the workspace configuration, validate the resulting root or submodule target, and never start a managed role from a detached, stale, incidental, or ambiguous branch. Use the validated checkout as the command working directory and leave product instructions and builds to the managed role.
+Read the safety reference and apply the configured overlap and repository policy. The human controls authorized parallelism unless a builder charter supplies an agent limit; sequence likely conflicts. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested remote-base commit, and create one Herdr-managed task workspace from that exact commit. Run only initialization declared by the workspace configuration, validate the resulting root or submodule target, and never start a managed role from a detached, stale, incidental, or ambiguous branch. Use the validated checkout as the command working directory and leave product instructions and builds to the managed role.
 
 For a worktree-backed task, invoke Herdr worktree creation directly from the verified canonical primary workspace or checkout and use the workspace returned by that operation. Never create a provisional workspace at the primary checkout first. Treat every non-linked repository workspace as a persistent worktree-group parent; do not close it or try to remove an accidental duplicate. Follow the worktree-group safety procedure instead.
 
@@ -77,7 +97,7 @@ Load the Herdr skill and create the required layout without stealing user focus.
 
 ### 4. Leave implementation planning with the author
 
-For development tasks, set the task to `planning` and direct the human to the author pane. The author may explore read-only and propose its plan. It must receive approval in that session and successfully deliver `implementation-started` before editing. A fallback preserves the approval evidence but stops the author until the orchestrator recovers the event.
+For development tasks, set the task to `planning`. The author may explore read-only and propose its plan. In the default workflow, direct the human to the author pane for approval. In builder mode, the orchestrator evaluates and approves or corrects the plan against the charter and product documents. The author must receive approval and successfully deliver `implementation-started` before editing. A fallback preserves the approval evidence but stops the author until the orchestrator recovers the event.
 
 The orchestrator does not need the detailed plan. Retain only the task brief, approved scope identity, constraints needed for coordination, and any conflict-relevant affected areas.
 
@@ -89,7 +109,7 @@ Every orchestrator-to-role instruction must begin with a newly rendered control 
 
 Apply the shared-input collision and bounded furthest-proven-state reconciliation procedures in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Use Herdr lifecycle only to target investigation, validate every skipped authority and artifact boundary, and return ambiguity to the human rather than waiting indefinitely or replaying obsolete handoffs.
 
-Between active orchestrator turns, rely on explicit agent events plus Herdr's visible status and notifications; do not create an unbounded polling or cron loop inside the agent. A failed event delivery cannot wake an idle orchestrator, so this version detects silent failures on the orchestrator's next invocation. Use bounded waits only when the user explicitly asks the orchestrator to remain attached and monitor.
+Between active orchestrator turns, rely on explicit agent events plus Herdr's visible status and notifications; do not create an unbounded polling or cron loop inside the agent. In builder mode, use relaxed bounded waits and occasional batched inspection so a missed signal cannot end the run, backing off during known long builds. Do not repeatedly prompt healthy workers for status.
 
 When an agent is blocked on permission, follow the permission-escalation procedure. Never send approval input on the human's behalf.
 
@@ -129,27 +149,27 @@ The reviewer must obtain intent from the GitHub pull-request description, commen
 
 ### 8. Route findings without expanding scope
 
-On `review-findings`, validate the reviewed head and preserve the outcome before Hunk reload. Under the default `human-selection` policy, present the material findings for human disposition. Apply a standing policy only when the task record contains an explicit human-authorized rule; it may never absorb follow-up candidates, judgment-required changes, or scope expansion.
+On `review-findings`, validate the reviewed head and preserve the outcome before Hunk reload. Under the default `human-selection` policy, present the material findings for human disposition. In builder mode, the orchestrator selects material in-scope findings and rejects unrelated expansion. Apply any other standing policy only when the task record contains an explicit human-authorized rule.
 
 Prompt the original author with only the selected set. Keep Hunk unchanged until the author has consumed the comments, resolved the selected findings, updated the draft head, and emitted `fixes-ready`. Then reload Hunk explicitly against the recorded base and new head and ask the same reviewer for a complete rereview.
 
 ### 9. Control loops and scope versions
 
-Increment review counters only for accepted complete-review outcomes. Stop at three rounds in one scope version or six total unless the human explicitly continues.
+Increment review counters only for accepted complete-review outcomes. Stop at three rounds in one scope version or six total unless the human explicitly continues. In builder mode, treat those counts as a signal to reconsider the approach rather than an automatic human checkpoint; continue when there is credible progress.
 
-Keep `scope-revised` available in author control blocks before a successful review. Only a human-authorized material change creates a new scope version, signaled by `scope-revised` during ordinary development or a material `post-review-changes-started` after successful review. When the author reports a direct human instruction, verify it in the author transcript, update the scope, and return the new control block without requesting duplicate approval. Increment the scope version, preserve cumulative usage, reset only the per-scope review count, update durable intent, and require a new full phase-zero review. After the configured scope-revision threshold, provide a progress and cost summary before continuing.
+Keep `scope-revised` available in author control blocks before a successful review. Only a material change authorized by the responsible actor creates a new scope version, signaled by `scope-revised` during ordinary development or a material `post-review-changes-started` after successful review. When the author reports a direct human instruction, verify it in the author transcript, update the scope, and return the new control block without requesting duplicate approval. Increment the scope version, preserve cumulative usage, reset only the per-scope review count, update durable intent, and require a new full phase-zero review. After the configured scope-revision threshold, provide a progress and cost summary before continuing.
 
 Escalate repeated findings, no-progress fixes, contradictory events, author-reviewer deadlock, unexpected head changes, overlapping work, or long-running notices according to the safety reference. Do not respond by spawning another agent or silently widening the task.
 
 ### 10. Route finalization through the human
 
-A valid `review-passed` for the unchanged current head creates a `ready-candidate`. Summarize the reviewed head, remaining risk, verification, limitations, and review-round usage, then ask whether the reviewer may finalize.
+A valid `review-passed` for the unchanged current head creates a `ready-candidate`. Summarize the reviewed head, remaining risk, verification, limitations, and review-round usage. Ask the human whether the reviewer may finalize in the default workflow; in builder mode, make that decision against the charter.
 
-Only after explicit human authorization may the reviewer use the preparing-pull-requests skill to reconcile reviewer-owned context and mark that exact head ready for team review. Require the reviewer to emit `pull-request-finalized` afterward.
+Only after authorization from the responsible actor may the reviewer use the preparing-pull-requests skill to reconcile reviewer-owned context and mark that exact head ready for integration. Require the reviewer to emit `pull-request-finalized` afterward.
 
-Validate the finalized head, ready state, issue linkage, description, verification summary, and material deviations from the original task brief. If they agree, mark the task `ready-for-team-review` and ask the human to perform the final GitHub review and merge decision. If the delivered result materially deviates, flag it clearly and return to human disposition rather than requesting merge.
+Validate the finalized head, ready state, issue linkage, description, verification summary, and material deviations from the original task brief. If they agree, mark the task `ready-for-team-review`. In the default workflow, ask the human to perform the final GitHub review and merge decision. In builder mode, squash-merge the exact reviewed head into its chartered non-main integration branch, verify the resulting commit, update the progress note, and continue with dependency-ready work. If the delivered result materially deviates, resolve it within the charter or return an out-of-charter decision to the human.
 
-Never merge, enable auto-merge, begin another unauthorized task, or treat readiness as GitHub approval.
+Outside builder authority, never merge, enable auto-merge, begin another unauthorized task, or treat readiness as GitHub approval. Builder authority never permits auto-merge, administrator bypass, another merge strategy, or any action involving `main`.
 
 ### 11. Reenter review after human feedback
 

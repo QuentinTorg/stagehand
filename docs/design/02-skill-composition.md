@@ -67,9 +67,10 @@ and preserves its workspace and agent unless reuse would mix or endanger work.
 ### `orchestrating-development`
 
 The orchestrator coordinates state and authority; it does not implement, review,
-fix, or merge product code. It treats Herdr lifecycle as observation rather than
-proof, validates semantic handoffs against durable artifacts, warns about task
-overlap, and stops at human decisions or bounded workflow limits.
+or fix product code. It treats Herdr lifecycle as observation rather than proof,
+validates semantic handoffs against durable artifacts, and warns about task
+overlap. It stops at human decisions by default; a local builder charter may make
+it the delivery and non-main squash-integration decision maker.
 
 ### `writing-specifications`
 
@@ -121,4 +122,5 @@ unless the human explicitly expands scope.
   merge by itself.
 - Stagehand may route work between skills, but it never automatically begins a
   new task or converts a reviewer observation into authorized scope.
-- The human performs the final GitHub review and merge.
+- The human performs the final GitHub review and merge by default. A builder
+  charter may grant the orchestrator exact non-main squash-merge authority.
