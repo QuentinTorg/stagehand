@@ -45,7 +45,7 @@ Leave product build selection and product-repository instructions to the author 
 
 Record the preferred model and reasoning effort for newly launched agents. State whether inheritance is acceptable and how explicit task-specific human choices override the default.
 
-For managed product roles, also record the required sandbox and approval policy. When guarded publication depends on unmatched commands remaining non-escalating, require workspace-write sandboxing with approval policy `never` and prohibit permissive overrides.
+For managed product roles, record any intentional departure from the standard Stagehand sandbox and approval settings. Do not introduce a stricter launch policy solely to enforce publication; use explicit command rules and the guarded publisher for that boundary.
 
 ## Autonomous project configuration
 

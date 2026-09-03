@@ -74,6 +74,11 @@ The ordinary supervised modes remain available when no autonomous project charte
 - **Root Cause/Rationalization:** A task-level record has no authoritative dependency graph, cross-task ownership reservation, integration-branch authority, package completion ledger, or autonomous convergence policy. Simply removing human stops would widen authority without replacing those controls.
 - **Generalization:** Autonomous delivery requires a chartered authority envelope, durable dependency and evidence state, guarded integration, resource-aware scheduling, and explicit recovery policies. Motivation text or a job title alone cannot supply those controls.
 
+- **Reported Failure:** Managed authors could not access the host's working Docker installation or GPG signing setup and repeatedly returned routine verification and commit work to the orchestrator.
+- **Actual vs. Expected:** Standard Stagehand agents already use the user's auto-approval policy successfully; managed roles should retain those settings while direct publication remains denied by explicit command rules and guarded scripts.
+- **Root Cause/Rationalization:** A custom `workspace-write` plus non-escalating approval launch policy was added as a second publication boundary. It duplicated existing policy and blocked unrelated development capabilities.
+- **Generalization:** Enforce a narrow operation at that operation's command boundary. Do not tighten an agent's entire execution environment when standard approval policy plus an explicit guarded command already controls the risk.
+
 ## 5. Architecture & Progressive Disclosure Plan
 
 - **`SKILL.md` (Core Instructions):** Keep activation, controller ownership, authority-profile selection, the shared reconciliation checklist, ordinary task routing, autonomous-project routing, absolute `main` prohibition, role separation, guarded merge entry point, pause/resume behavior, and dashboard selection here. Keep the file below 500 lines by routing project mechanics to one focused reference.
