@@ -28,7 +28,7 @@ Do not trigger for implementation, author planning, direct review, finding resol
 
 The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). Its critical invariants are:
 
-1. Load the workspace configuration chain; never guess repositories, authority, or policy.
+1. Load the workspace configuration chain and version-matched Herdr guidance; never guess repositories, authority, policy, or CLI behavior.
 2. Reconcile durable active task records with Herdr and relevant Git, GitHub, verification, and Hunk evidence before mutation; archived records remain outside normal operation.
 3. Require explicit task authorization and author-session plan approval. Lifecycle state never proves either.
 4. Provision from a verified fetched base with one direct Herdr worktree operation. Preserve primary checkouts and persistent parent workspaces; never create or close a provisional non-linked workspace.
@@ -72,6 +72,6 @@ Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, h
 
 ## 6. Evaluation
 
-[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
+[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
 Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.

@@ -38,6 +38,8 @@ Stagehand does not vendor the SkillDex or Hunk skills. Install their skill direc
 
 ## Quick setup
 
+You may ask an agent to check or perform setup. It should follow the [guided installation procedure](./skills/orchestrating-development/references/installation.md#guided-setup): identify what is already ready, explain each proposed copy, link, configuration, and validation step, then offer to apply missing setup instead of only reporting it.
+
 Prerequisites:
 
 - Codex, Git, `jq`, and GitHub CLI authentication;

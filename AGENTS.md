@@ -8,6 +8,8 @@ Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. Th
 
 An agent launched as `workflow_orchestrator` must load and use the repository-local `orchestrating-development` skill before handling its first request.
 
+If a required skill, local configuration, rule, or tool is missing or misconfigured, follow the [guided installation procedure](./skills/orchestrating-development/references/installation.md#guided-setup) before coordinating work.
+
 An unnamed agent asked to orchestrate must load the orchestration skill and inspect live agents. If `workflow_orchestrator` is unowned, name the current agent with `herdr agent rename <current-pane-id> workflow_orchestrator` before reading task state; otherwise reuse the owner or ask the human.
 
 Before coordinating work, the named orchestrator must:
@@ -16,7 +18,7 @@ Before coordinating work, the named orchestrator must:
 2. load and follow the repository-local `orchestrating-development` skill; and
 3. load the local configuration described below.
 
-If the skill is unavailable, the local configuration is missing, or ownership of the reserved name is ambiguous, stop and tell the human instead of improvising or replacing an active owner.
+If a prerequisite remains unresolved after guided setup, or ownership of the reserved name is ambiguous, stop and tell the human instead of improvising or replacing an active owner.
 
 ## Local configuration
 
