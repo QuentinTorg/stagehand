@@ -4,7 +4,7 @@
 
 A development task has one persistent author and one persistent independent reviewer; reviewer-only work has one reviewer; delegated work has one worker. Reuse roles across rounds. Do not add helpers or replace a healthy role for a different answer.
 
-Start each role with its template and a rendered managed workflow control block. Prepend a fresh block to every later handoff so identity, endpoint, scope, stage, and outcomes never depend on memory. Fill it from the validated record; never send orchestration instructions into product worktrees.
+Start each role with its template and a rendered managed workflow control block. Later handoffs need only the compact block plus the new outcome, boundaries, and evidence requirement; do not restate the task history or teach capable agents how to perform ordinary engineering work. Fill identities from the validated record; never send orchestration internals into product worktrees.
 
 The block remains authoritative until explicit release or cleanup. Human discussion may grant a supervised checkpoint but does not detach the role, change its endpoint, or waive its next event. In autonomous-project mode, only the named orchestrator approval actor may advance a package plan. Each role must:
 
@@ -16,13 +16,14 @@ The block remains authoritative until explicit release or cleanup. Human discuss
 - never run `git push` or mutating `gh` commands directly; when publication is authorized, use only the configured record-aware guard for the exact task branch and head and, when separately authorized, its initial-draft operation, never the integration branch;
 - never invoke privilege escalation, enter credentials, or mutate host network/system configuration; privileged scenarios may be authored only as unexecuted human-gated evidence;
 - send the required semantic events through the endpoint and delivery procedure in the current control block;
-- stop rather than invent authority when scope, risk, permissions, or task identity is unclear.
+- use engineering judgment to resolve ordinary repository state, missing optional CI, dependency initialization, tool-version differences, build failures, and verification setup inside the assigned scope;
+- stop only when progress needs authority or essential information outside the task contract.
 
 ## Signaling protocol
 
 Send an allowed semantic event at each workflow boundary or diagnosed blocker, with fields verified from current state. Plan discussion and progress need no event. Follow the block's delivery and fallback procedure; fallback enables recovery, not advancement.
 
-After proportionate diagnosis, authors and workers report `needs-human`; reviewers report `review-needs-human`. Name the operation, error or ambiguity, and required decision. Initialization, build, verification, GitHub, Hunk, finalization, and event failures do not create new event names.
+After proportionate diagnosis, authors and workers report `needs-human`; reviewers report `review-needs-human`. Use these only when no safe in-scope recovery remains. A failed command, absent non-required CI, uninitialized dependency, sandbox retry, or tool-output variation is normally a problem to solve, not a human decision.
 
 ## Author contract
 

@@ -18,7 +18,7 @@ Herdr reports terminal and agent lifecycle. The task record reports workflow sta
 
 The orchestrator owns one task record per authorized task. Autonomous-project mode additionally owns one project record and one package record per authoritative plan node as defined in [Autonomous Project Control](project-control.md). A task owns exactly one leased worktree and one managed Herdr workspace while active. Development uses the topology in [Hunk Coordination](hunk-coordination.md); reviewer-only and delegated work use one reviewer or worker pane.
 
-Every state transition updates `state.waiting_on`, `state.attention_required`, and `state.attention_reason` together with the state name. `waiting_on` identifies the next actor, event, decision, check, dependency, or cleanup condition in plain language for controller recovery; it is not a dashboard field. Attention is true only when a concrete human action is currently required; ordinary agent work, CI, or an expected semantic event is a wait condition but not human attention.
+For a consequential handoff, update the state name, `waiting_on`, and human-attention fields together. Keep these values terse. Ordinary lifecycle observations and successful retries do not require narrative rewrites across project, package, and task records when the workflow owner and next boundary are unchanged. Attention is true only when concrete human action is required.
 
 When a managed role owns the next transition, also record `event_recovery.expected_role`, the allowed `expected_events`, and zero recovery attempts. Clear that expectation when a valid event or human decision transfers ownership elsewhere. For legacy records, derive and persist these fields from the validated state before attempting recovery.
 
@@ -136,7 +136,7 @@ Reset recovery attempts only after successful reconciliation or a valid event es
 
 ## Event validation
 
-Before advancing state:
+Before an irreversible publication, finalization, review conclusion, or merge transition:
 
 1. Confirm the task exists and the emitting role matches the task's named live agent.
 2. Confirm the event is valid from the current task state. During an active catch-up, it may instead match the candidate current boundary only when every skipped transition was independently proven by the reconciliation procedure.
@@ -144,7 +144,7 @@ Before advancing state:
 4. Resolve the worktree, branch, base, pull request, and current head independently.
 5. Reject stale or contradictory events and move to `decision-required` when reconciliation could change behavior.
 
-For a project-linked task, also confirm project and package IDs, active charter status, source-document commit, integration branch, reservations, package state, agent capacity, and expected approval actor. Reject an event that would mutate or target `main`, a non-recorded integration branch, or a package invalidated by a newer decision.
+For a project-linked task, confirm the identities that can change the result: project/package, active charter, integration branch, current package eligibility, and approval actor. Do not mechanically revalidate stable fields at every reversible handoff. Reject any event that would mutate or target `main`, a non-recorded integration branch, or a package invalidated by a newer decision.
 
 An event is a claim, not proof. Validate the draft PR and head before development review, `review-passed.head` before finalization authority, and `pull-request-finalized.head` before declaring development complete. For reviewer-only work, validate proposal, conclusion, current head, and publication. For delegated work, validate any `resultRef` and confirm no unauthorized tracked change before entering `delegated-complete`.
 

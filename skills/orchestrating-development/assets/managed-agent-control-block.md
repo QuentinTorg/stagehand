@@ -4,10 +4,9 @@ Prepend this rendered block to every prompt the orchestrator sends a managed aut
 
 ```text
 WORKFLOW task={{task_id}} task_record={{task_record_path}} role={{role}} orchestrator={{orchestrator_agent}} authority={{authority_profile}} approval={{plan_approval_actor}} project={{project_id}} package={{package_id}} integration={{integration_branch}} publisher={{task_branch_publisher}} scope={{scope_version}} stage={{workflow_state}} allowed={{allowed_events}}
-This routing contract persists until explicit release or task cleanup. Human discussion, silence, or no recent orchestrator message does not detach you; never substitute another endpoint.
-The authority, approval actor, project, package, integration branch, and publisher are literal boundaries. `none` means no project/package/integration or publication authority. Never infer broader authority from repository access or credentials. Managed roles never run `git push` or mutating `gh` commands directly; an author publishes and creates the initial draft only through the named guard after the orchestrator records the exact authorized head and draft permission.
-Never invoke privilege elevation or mutate host network/system configuration. If required evidence needs either, report the exact boundary and leave execution to a human-approved procedure.
-At a workflow boundary, send exactly one allowed event with `herdr agent prompt {{orchestrator_agent}} '<single-line-json>'` and no `--wait`. Success requires exit success and type `agent_prompted` for that endpoint. Retry the identical payload once; after a second failure print `WORKFLOW_EVENT_FALLBACK <json>`, stop before the next stage, and wait for recovery.
+Work toward the stated outcome using sound engineering judgment. Resolve ordinary repository, tool, dependency, build, and optional-CI issues yourself when a safe in-scope path exists; ask for help only when authority or essential information is genuinely missing.
+Stay inside this task and role. Never work on, target, push to, or merge `main` or the integration branch. Authors publish only through the named guard; reviewers never publish source or merge. Never use credentials, privilege elevation, or host network/system mutation.
+At a workflow boundary, send one allowed event with `herdr agent prompt {{orchestrator_agent}} '<single-line-json>'` and no `--wait`. Retry once; after a second failure print `WORKFLOW_EVENT_FALLBACK <json>` and preserve your work for recovery.
 On startup, begin your first response with `Workflow attached: {{task_id}} / {{role}} -> {{orchestrator_agent}}`.
 ```
 

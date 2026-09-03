@@ -16,7 +16,7 @@ usage: project-squash-merge \
   --expected-head <commit>
 
 Validates the charter, fresh merge-transition checkpoint, package evidence,
-pull-request identity, and required checks before squash-merging into the
+and pull-request identity and mergeability before squash-merging into the
 recorded project integration branch.
 EOF
 }
@@ -301,22 +301,6 @@ fi
 if [ "$pr_merge_state" != CLEAN ]; then
     echo "pull request is not immediately mergeable without a queue or bypass: $pr_merge_state" >&2
     exit 1
-fi
-
-# GitHub CLI returns failure both when a required check failed and when the
-# required-check set is empty. An empty set satisfies the policy; every other
-# failure remains blocking, and autonomous authority still excludes auto-merge.
-required_checks_output=
-if ! required_checks_output=$(gh pr checks "$pr_number" -R "$github_repository" \
-    --required 2>&1); then
-    case "$required_checks_output" in
-        "no checks reported on the '"*"' branch") ;;
-        *)
-            echo "required pull-request checks are not successful" >&2
-            printf '%s\n' "$required_checks_output" >&2
-            exit 1
-            ;;
-    esac
 fi
 
 gh pr merge "$pr_number" -R "$github_repository" \

@@ -27,7 +27,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 
 Follow all instructions in the target repository. Work only on this task and do not spawn or delegate to another agent. Never implement on, commit to, push to, or merge into `main`. In autonomous-project mode, never target a pull request at `main` or push to the recorded integration branch; only your task branch is writable. Never invoke `sudo`, `su`, `pkexec`, enter credentials, or modify host network/system configuration. You may author a clearly isolated manual privileged-network test, but must not execute it or claim it passed.
 
-Before proposing a plan, verify that the recorded development target is clean, checked out on the recorded feature branch, and descended from the recorded fetched base commit. Treat a detached target, different branch, missing base, or incidental containing-repository submodule pin as an initialization blocker: diagnose the mismatch, send the documented `needs-human` event, and do not repair or implement around it yourself. Never invent an `initialization-failed` event or end with only a prose error.
+Before proposing a plan, verify the recorded target, feature branch, and base ancestry. Reconcile routine worktree setup yourself when it is safe and preserves recorded work: fetch missing objects, initialize required submodules, restore the intended task branch, and use the containing repository's documented build context. Stop only when identity is ambiguous or recovery would discard, overwrite, or mutate work outside the task.
 
 ## Planning and specification gate
 
@@ -43,7 +43,7 @@ After unmistakable approval from the recorded actor, send this event through the
 {"kind":"workflow-event","task":"{{task_id}}","role":"author","event":"implementation-started","scopeVersion":{{scope_version}}}
 ```
 
-Begin editing only after delivery succeeds. If delivery falls back, stop and wait for recovery. Then implement and verify the approved scope. You own its routine configure, build, static-analysis, test, install, and focused container checks; do not defer them to the orchestrator. If the prepared task boundary cannot run a required check, report the concrete blocker instead of claiming readiness. Preserve unrelated state. If evidence shows that the authoritative specification is incomplete, contradictory, or incorrect, send `project-decision-needed` in autonomous-project mode, or `needs-human` in supervised mode, with the exact document sections, evidence, recommended smallest correction, and affected scope. Do not implement around the gap or edit product intent until the recorded approval actor returns an updated control block authorizing the decision and any required ADR.
+Begin editing only after delivery succeeds. If delivery falls back, preserve the work for recovery. Then implement and verify the approved scope. You own its routine configure, build, static-analysis, test, install, and focused container checks; do not defer them to the orchestrator. Use local, containerized, or repository-defined evidence when CI is absent on the integration branch. Diagnose failures and adapt the implementation or verification approach within scope before reporting a blocker. Preserve unrelated state. If evidence shows that authoritative product intent must change, send `project-decision-needed` with the evidence and smallest coherent correction; ordinary implementation-plan refinements do not need that event.
 
 ## Handoffs
 

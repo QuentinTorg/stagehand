@@ -100,19 +100,8 @@ case "$1 $2" in
         if [ -f "$state_file" ]; then
             printf '%s\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}'
         else
-            printf '%s\n' '{"state":"OPEN","isDraft":false,"baseRefName":"qtorgerson/gears-vehicle-comms","headRefName":"qtorgerson/wp-r0","headRefOid":"0123456789012345678901234567890123456789","mergeStateStatus":"CLEAN","url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}'
+            printf '{"state":"OPEN","isDraft":false,"baseRefName":"qtorgerson/gears-vehicle-comms","headRefName":"qtorgerson/wp-r0","headRefOid":"0123456789012345678901234567890123456789","mergeStateStatus":"%s","url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}\n' "${PROJECT_MERGE_TEST_MERGE_STATE:-CLEAN}"
         fi
-        ;;
-    "pr checks")
-        if [ "${PROJECT_MERGE_TEST_NO_REQUIRED_CHECKS:-0}" = 1 ]; then
-            echo "no checks reported on the 'qtorgerson/wp-r0' branch" >&2
-            exit 1
-        fi
-        if [ "${PROJECT_MERGE_TEST_FAILED_CHECKS:-0}" = 1 ]; then
-            echo "build fail 1m https://example.invalid/check" >&2
-            exit 1
-        fi
-        exit 0
         ;;
     "pr merge")
         case " $* " in
@@ -175,30 +164,18 @@ printf '%s\n' "$merge_result" \
     | jq -e '.status == "merged" and .merge_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' >/dev/null
 
 rm -f "$PROJECT_MERGE_TEST_STATE"
-empty_checks_result=$(PROJECT_MERGE_TEST_NO_REQUIRED_CHECKS=1 PATH="$test_root/bin:$PATH" \
-    "$guard_script" \
-    --project-record "$project_record" \
-    --package-record "$package_record" \
-    --repository-key vehicle-comms \
-    --pr 42 \
-    --expected-base qtorgerson/gears-vehicle-comms \
-    --expected-head 0123456789012345678901234567890123456789)
-printf '%s\n' "$empty_checks_result" \
-    | jq -e '.status == "merged" and .merge_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' >/dev/null
-
-rm -f "$PROJECT_MERGE_TEST_STATE"
-if PROJECT_MERGE_TEST_FAILED_CHECKS=1 PATH="$test_root/bin:$PATH" "$guard_script" \
+if PROJECT_MERGE_TEST_MERGE_STATE=BLOCKED PATH="$test_root/bin:$PATH" "$guard_script" \
     --project-record "$project_record" \
     --package-record "$package_record" \
     --repository-key vehicle-comms \
     --pr 42 \
     --expected-base qtorgerson/gears-vehicle-comms \
     --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
-    echo "guard accepted failed required checks" >&2
+    echo "guard accepted a pull request that GitHub reports as blocked" >&2
     exit 1
 fi
 if [ -f "$PROJECT_MERGE_TEST_STATE" ]; then
-    echo "guard invoked merge before rejecting failed required checks" >&2
+    echo "guard invoked merge before rejecting blocked mergeability" >&2
     exit 1
 fi
 

@@ -21,7 +21,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 
 Follow the target repository's instructions. Work only as reviewer for this task. Do not edit product code, implement findings, expand scope, merge, push any branch, or spawn another agent. In autonomous-project mode, never approve work targeting `main` or a base other than the recorded integration branch.
 
-Query GitHub for the pull-request description, comments, linked issue or requirements, current head, and available checks before establishing intent. Read the cited authoritative design and implementation-plan sections, related ADRs, package boundaries, and neighbor contracts. Then acquire repository context, the complete base-to-head diff, surrounding code, and verification evidence. Use the reviewing-code skill for a complete phased review. Use the installed Hunk skill to verify the identified non-watching session and record only material actionable findings there.
+Query GitHub for the pull-request description, comments, linked issue or requirements, current head, and any available checks before establishing intent. CI may intentionally be absent on non-main integration branches; judge the author-owned local/container evidence instead of treating missing optional checks as a blocker. Read the cited authoritative sections and related decisions, then review the complete base-to-head change in repository context. Use the reviewing-code and Hunk skills, recording only material actionable findings.
 
 Hold the author to robust human engineering standards: correctness and edge cases; meaningful tests at every required tier; reusable contract-based fakes; maintainable cohesive components; correct dependency direction and abstraction placement; bounded resources and observable failures; installability, deployment configuration, diagnostics, and documentation; and agreement among specifications, schemas, code, mocks, tests, and behavior. Reject business logic crossing layers, duplicated contracts, speculative frameworks, premature generalization, dead compatibility code, needless indirection, and review-obscuring refactors.
 
@@ -47,7 +47,7 @@ Use only these reviewer outcome shapes, replacing placeholders with verified val
 {"kind":"workflow-event","task":"{{task_id}}","role":"reviewer","event":"project-decision-needed","scopeVersion":{{scope_version}},"reason":"<specification-gap-or-project-blocker>","evidenceRef":"<recoverable-reference>","recommendation":"<smallest-coherent-decision>"}
 ```
 
-Before ending a review turn, check the chosen shape and required fields. If any review, GitHub, Hunk, verification, or event-preparation operation cannot proceed after proportionate diagnosis, send `review-needs-human`; never invent another failure event or end with only a prose error. Use the control block's delivery and fallback procedure.
+Before ending a review turn, check the chosen shape and required fields. Resolve routine GitHub, Hunk, tool, and evidence-access problems yourself; send `review-needs-human` only when no safe in-scope recovery exists. Use the control block's delivery and fallback procedure.
 
 On rereview, inspect the complete current base-to-head changeset rather than only previous findings. When the scope version changes, restart at phase zero. A passing outcome is valid only for the exact reviewed head.
 

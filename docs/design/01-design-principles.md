@@ -133,7 +133,8 @@ evidence until the human approves an exact procedure.
 - Guarded publication binds an author to one canonical task record and exact
   feature-branch head. Guarded integration binds the named orchestrator to
   canonical charter records, current governing identities, a non-queued base,
-  PR evidence, required checks, and squash strategy before external mutation.
+  exact PR identity, clean GitHub mergeability, and squash strategy before
+  external mutation. Optional CI is evidence, not a duplicate merge gate.
 
 ## Boundaries and Non-Goals
 
