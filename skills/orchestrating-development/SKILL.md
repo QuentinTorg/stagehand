@@ -1,11 +1,28 @@
 ---
 name: orchestrating-development
-description: Use when the user explicitly asks the controller in a configured Stagehand workspace to start, coordinate, pause, resume, monitor, or report on Herdr-managed delivery tasks or a chartered autonomous project. Do not use for implementation, direct review, Hunk interaction, or general orchestration discussion.
+description: Use only when the user explicitly asks an agent in a configured orchestration workspace to become the controller or to start, coordinate, monitor, resume, or report on development, reviewer-only, delegated-work, workspace-only, or locally chartered builder work through Herdr-managed sessions. Do not use for ordinary implementation, direct review, Hunk interaction, or orchestration discussion.
 ---
 
 # Orchestrating Development
 
-Coordinate authorized delivery tasks and chartered autonomous projects without performing their implementation or independent review. Herdr provides runtime control; this skill provides authority profiles, durable workflow state, dependency scheduling, role handoffs, guarded integration, recovery, and human boundaries.
+Coordinate authorized development, reviewer-only, delegated-work, and workspace-only tasks without performing their work. Herdr provides runtime control; this skill provides workflow state, role handoffs, conflict visibility, loop limits, and human authority boundaries.
+
+## Chartered builder mode
+
+The default workflow below keeps task selection, plan approval, finding disposition, pull-request finalization, and merging with the human. A workspace's local configuration may instead contain an explicit builder charter that delegates some or all of those checkpoints to the orchestrator for one bounded project. Treat that charter as durable authority only when it names the terminal outcome, authoritative product documents, allowed repositories, exact non-main integration branches, resource limits, and decisions that remain human-only.
+
+In builder mode, act as the delivery owner rather than a passive task runner:
+
+- continue toward the terminal outcome without waiting for routine human prompts;
+- select dependency-ready, nonconflicting work and adjust sequencing or task boundaries as evidence develops;
+- approve bounded author plans, select in-scope review findings, and resolve ordinary delivery problems yourself;
+- require authors to run their own builds and tests and reviewers to inspect the exact resulting head;
+- squash-merge accepted pull requests only into the chartered non-main integration branch when the charter grants that authority; and
+- record material specification changes in the product documentation and keep one concise project progress note for completed, active, blocked, decision, and next work.
+
+Use normal Stagehand task records for active agent tasks. Do not copy the implementation plan into package schemas, create a second project state machine, require extra event types, or add wrappers and gates merely to demonstrate compliance. Git, GitHub, Herdr, and test results remain the evidence for consequential actions.
+
+The local charter may replace the human actor only for checkpoints it explicitly delegates. It never permits the orchestrator to implement or independently review product code, approve excluded privileges, use administrator bypass, or work on, target, push to, or merge `main`. Missing optional CI, routine tool or build failures, and an ordinary agent response ending are not reasons to stop an autonomous builder run. When persistent goal control is available, bind the run to the terminal outcome. On startup, resume, suspected compaction, or genuine uncertainty, reread the skill, local charter, and project progress note; do not reload them merely because a timer elapsed.
 
 ## Activation gate
 
@@ -17,17 +34,14 @@ Before acting, verify all of the following:
 2. The current repository's `AGENTS.md` declares it to be an orchestration workspace.
 3. `AGENTS.md` and any local configuration file it requires identify allowed repositories or roots, repository-resolution rules, GitHub hosts, and current resource limits.
 4. This agent is inside Herdr (`HERDR_ENV=1`) and has loaded Herdr guidance from a discovered skill or `herdr --skill`.
-5. Target-repository agents have the skills required by their mode: reviewing-code for reviewers, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks. Every managed product worktree has loaded the packaged managed-role rule before its agent starts, and authors can resolve the configured task-branch publication guard. Delegated and workspace-only tasks require none unless their bounded work independently needs one.
+5. Target-repository agents have the skills required by their mode: reviewing-code for reviewers, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks. Delegated and workspace-only tasks require none unless their bounded work independently needs one.
 6. The orchestrator is named `workflow_orchestrator`, and the portable managed-agent Herdr rule from [Installation](references/installation.md) is installed for newly launched Codex sessions.
-7. Autonomous-project mode has a validated active charter, authoritative source documents, package-record directory, exact non-main integration branch per repository, project-root containment, working-agent ceiling, monitoring cadence, environment/privilege policy, and a passing `./scripts/test-project-squash-merge` result.
 
 If any gate fails, explain the missing prerequisite and stop before creating worktrees, workspaces, agents, or GitHub state. Do not search arbitrary filesystem locations to compensate for missing configuration.
 
 ## Required resources
 
 At activation, read the workspace's tracked `AGENTS.md` and every local configuration file it explicitly requires before inspecting or provisioning managed tasks. Then read [Workflow State and Events](references/workflow-state.md) completely. Read [Safety, Capacity, and Escalation](references/safety-and-escalation.md) before provisioning, overlap decisions, permission handling, budget escalation, or cleanup; do not load its cleanup details for an unrelated status-only turn.
-
-When a request concerns an autonomous project, read [Autonomous Project Control](references/project-control.md) completely before reading or creating project state. Use [project-record.yaml](assets/project-record.yaml), [project-work-package-record.yaml](assets/project-work-package-record.yaml), and [project-decision-record.md](assets/project-decision-record.md). The approved product design and implementation plan remain the governing sources; do not substitute the project record for them. Preserve product intent, but adapt the delivery graph under the project-control rules when evidence exposes a better sequence or boundary.
 
 Before starting, replacing, or prompting an author, reviewer, or worker, read [Managed Agent Contracts](references/agent-contracts.md) and prepend the [Managed workflow control block](assets/managed-agent-control-block.md). Only when starting or replacing a role, follow that block with the applicable startup asset:
 
@@ -45,27 +59,21 @@ Use [task-record.yaml](assets/task-record.yaml) for development and reviewer-onl
 Copy this checklist into the orchestration scratchpad and keep one instance per active turn:
 
 - [ ] Verify environment, authority, and current limits.
-- [ ] Select `supervised` or `autonomous-project` authority from durable evidence.
-- [ ] Complete due hourly/recovery rehydration and bounded transition validation before autonomous-project mutation.
-- [ ] Reconcile project, package, and task records with Git, GitHub, Herdr, Hunk, and verification as applicable.
-- [ ] Confirm human task authority or chartered package eligibility and requested start state.
-- [ ] Enforce the absolute prohibition on product work, pushes, or merges involving `main`; autonomous-project PRs must also never target `main`.
-- [ ] Enforce one active package lineage per leased worktree and managed feature workspace.
-- [ ] Reserve scope and enforce the chartered working-agent ceiling before starting a role.
+- [ ] Select the default human-led workflow or a valid local builder charter.
+- [ ] Reconcile existing task records with Git, GitHub, Herdr, and Hunk as applicable.
+- [ ] Confirm the human-authorized task or builder-chartered work and requested start state.
+- [ ] Enforce one task per worktree and managed feature workspace.
 - [ ] Start or reuse only the role required for the current transition.
 - [ ] Prepend the current managed workflow control block to every role prompt.
 - [ ] Validate semantic events before changing workflow state.
-- [ ] When autonomous roles are active, honor due watchdog checks without repeatedly prompting healthy workers.
 - [ ] Enforce review, scope, permission, role-cardinality, and conflict boundaries.
-- [ ] In supervised mode stop at the next human decision; in autonomous-project mode persist the decision or continue to the terminal milestone.
+- [ ] Stop at the next decision owned by the human, or continue toward the builder charter's terminal outcome.
 
 ## Orchestration procedure
 
 ### 1. Reconcile before creating
 
-For an autonomous project, first apply the context-rehydration procedure in the project-control reference after activation, session resume, detected or suspected compaction, changed governing commits, or context uncertainty. Independently enforce its persisted one-hour lease. Before each named package-start, plan-approval, specification-decision, finalization, merge, or repair/revert gate, validate only the affected records, heads, evidence, and cited authoritative sections against the current checkpoint; repeat full rehydration only when due or when that bounded validation exposes uncertainty. Never treat conversation history or a compaction summary as workflow authority. Persist the completed checkpoint and exact gate identity before mutation.
-
-Inspect active project, package, and task records first. Compare them with authoritative source commits, live Herdr workspaces and named agents, configured worktrees, development targets, reservations, branches, pull requests, checks, evidence, and Hunk sessions. Do not load archived records during normal reconciliation. Recover existing resources rather than creating duplicates. When an older record lacks `development_target`, populate it only from a validated checkout, remote, pull-request base, and branch; use the applicable authority profile when any element is ambiguous.
+Inspect active task records first. Compare them with live Herdr workspaces and named agents, configured worktrees, development targets, branches, draft pull requests, and Hunk sessions. Do not load archived records during normal reconciliation. Recover existing resources rather than creating duplicates. When an older record lacks `development_target`, populate it only from a validated checkout, remote, pull-request base, and branch; ask the human when any element is ambiguous.
 
 Before creating another workspace, check whether the request continues an existing task's purpose. If reuse is safe, extend that task and retain its workspace and roles, even when the follow-up adds related submodules, repositories, or pull requests. Names and artifact count do not create a new task boundary; create another workspace only for independent work or necessary isolation.
 
@@ -75,21 +83,21 @@ Treat Herdr `working`, `idle`, `done`, `blocked`, and `unknown` as runtime obser
 
 The orchestrator may inspect authorized GitHub issues, direct requests, and repository context to help the human choose work. Present scope, dependencies, likely conflicts, and cost at task-selection depth. Do not develop the implementation plan; that discussion belongs in the author workspace.
 
-Create a supervised task only after explicit human authorization. In autonomous-project mode, create a task only for a dependency-ready package whose scope reservations and capacity were validated under the active charter. Record its authority profile, project/package linkage, cited source sections, integration branch, objective, exclusions, required verification, and reservations without copying the full conversation or author's detailed plan. Give every task a short recognizable `display_name`; retain `task_id` as machine identity and use the live workspace label after provisioning. Record exact repositories, canonical GitHub identities and push URLs, remotes, integration bases, fetched commits, development targets, and issue context. Store active records in the configured task directory, defaulting to `.orchestrator/tasks`.
+Create a task only after explicit human authorization or when it is dependency-ready work within an active builder charter. Record its mode (`development`, `reviewer-only`, `delegated-work`, or `workspace-only`) and capture the objective and boundaries compactly without copying the full conversation. Give every task a short, recognizable `display_name`, normally based on the GitHub issue or pull-request title when one exists; use it as the human-facing fallback until a Herdr workspace exists, while `task_id` remains the stable machine identity and the live workspace label becomes the primary human identity after provisioning. Record the containing checkout's verified remote, requested base, and fetched base commit. Development and reviewer-only records also identify their exact development target; delegated records contain only their repository, mutation boundary, worker, result, and common state. When development originates on GitHub, pass its issue context so the author can link the draft. Store active records in the configured task-record directory, defaulting to `.orchestrator/tasks` here.
 
 ### 3. Start authorized work with conflict visibility
 
-Read the safety reference and apply the configured overlap and repository policy. Human authority controls supervised parallelism; the charter's dependency graph, reservations, and working-agent ceiling control autonomous parallelism. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested integration-base commit, and create or safely lease one Herdr-managed task workspace from that exact commit. Run only initialization declared by workspace configuration, validate the complete containing-repository context and target, and never start a managed role from a detached, stale, incidental, ambiguous, or `main` branch. Leave product implementation and builds to the managed role.
+Read the safety reference and apply the configured overlap and repository policy. The human controls authorized parallelism unless a builder charter supplies an agent limit; sequence likely conflicts. Resolve rather than guess the exact primary checkout, preserve its state, fetch and record the requested remote-base commit, and create one Herdr-managed task workspace from that exact commit. Run only initialization declared by the workspace configuration, validate the resulting root or submodule target, and never start a managed role from a detached, stale, incidental, or ambiguous branch. Use the validated checkout as the command working directory and leave product instructions and builds to the managed role.
 
 For a worktree-backed task, invoke Herdr worktree creation directly from the verified canonical primary workspace or checkout and use the workspace returned by that operation. Never create a provisional workspace at the primary checkout first. Treat every non-linked repository workspace as a persistent worktree-group parent; do not close it or try to remove an accidental duplicate. Follow the worktree-group safety procedure instead.
 
-Before starting any managed product role, install the packaged `codex-managed-role.rules` as an ignored workspace-local rule in that task's complete worktree. Use the standard Stagehand agent sandbox and approval settings; do not introduce a stricter launch override merely to enforce publication policy. The explicit command rules and record-aware publisher own that boundary. Verify the rule, process arguments, and configured publisher before sending the first prompt. Rules are loaded at agent startup, so never retrofit this boundary into an already-running role. Then load the Herdr skill and create the required layout without stealing user focus. For development, start one author in the `agents` tab; do not create the reviewer or Hunk yet. For reviewer-only or delegated work, start its sole reviewer or worker. A workspace-only task may contain no managed role until the human requests one. Prepend the rendered control block and applicable template, then verify the task, role, and orchestrator acknowledgement before directing the human to it. The complete review topology is defined in [Hunk Coordination](references/hunk-coordination.md). Never start a fixer, helper, or speculative agent.
+Load the Herdr skill and create the required layout without stealing user focus. For development, start one author in the `agents` tab; do not create the reviewer or Hunk yet. For reviewer-only or delegated work, start its sole reviewer or worker. A workspace-only task may contain no managed role until the human requests one. Prepend the rendered control block and applicable template, then verify the task, role, and orchestrator acknowledgement before directing the human to it. The complete review topology is defined in [Hunk Coordination](references/hunk-coordination.md). Never start a fixer, helper, or speculative agent.
 
 ### 4. Leave implementation planning with the author
 
-For development tasks, set the task to `planning`. A supervised author proposes its plan to the human in its pane. An autonomous-project author cites the authoritative documents and sends `plan-proposed`; the orchestrator is the approval actor and validates scope, contracts, exclusions, abstractions, reusable verification, reservations, and package completion coverage. Return bounded corrections until the plan agrees, then authorize it with a fresh implementation control block without a routine human checkpoint. Ask the human only when the plan requires authority outside the charter. The author must successfully deliver `implementation-started` before editing. A fallback preserves approval evidence but stops the author until recovery.
+For development tasks, set the task to `planning`. The author may explore read-only and propose its plan. In the default workflow, direct the human to the author pane for approval. In builder mode, the orchestrator evaluates and approves or corrects the plan against the charter and product documents. The author must receive approval and successfully deliver `implementation-started` before editing. A fallback preserves the approval evidence but stops the author until the orchestrator recovers the event.
 
-Retain only the recoverable plan reference, approved scope identity, source sections, verification obligations, and conflict-relevant ownership. Do not copy the plan or teach capable authors routine implementation details in each handoff. If the author or reviewer reports a material specification gap, follow the ADR and package-invalidation procedure; ordinary in-scope implementation and delivery-plan refinements belong to the agent and orchestrator.
+The orchestrator does not need the detailed plan. Retain only the task brief, approved scope identity, constraints needed for coordination, and any conflict-relevant affected areas.
 
 ### 5. Monitor through events and Herdr
 
@@ -97,17 +105,15 @@ Managed agents prompt `workflow_orchestrator` with semantic events. Validate eve
 
 Every orchestrator-to-role instruction must begin with a newly rendered control block populated from the same task-record transition expectation used for event validation. Persist the expected role and allowed success or blocker events; never rely on conversational memory or permit a role to invent event names.
 
-Apply the shared-input collision and bounded furthest-proven-state reconciliation procedures in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Use Herdr lifecycle only to target investigation and validate every skipped authority and artifact boundary. Return supervised ambiguity to the human; in autonomous-project mode use the chartered decision and recovery procedure unless authority truly lies outside the charter.
+Apply the shared-input collision and bounded furthest-proven-state reconciliation procedures in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Use Herdr lifecycle only to target investigation, validate every skipped authority and artifact boundary, and return ambiguity to the human rather than waiting indefinitely or replaying obsolete handoffs.
 
-In supervised mode, reconcile on the next monitoring or task request. In autonomous-project mode, the kickoff authorizes the low-frequency attached watchdog in the project-control reference: events remain the fast path, but due batched lifecycle sweeps recover missed signals and enforce the next full-rehydration due time. Use bounded waits where they avoid model turns, inspect transcripts only for settled, overdue, blocked, unknown, or contradictory roles, and back off for healthy long operations. Never busy-poll or repeatedly prompt workers for progress.
+Between active orchestrator turns, rely on explicit agent events plus Herdr's visible status and notifications; do not create an unbounded polling or cron loop inside the agent. In builder mode, use relaxed bounded waits and occasional batched inspection so a missed signal cannot end the run, backing off during known long builds. Do not repeatedly prompt healthy workers for status.
 
-Treat ordinary tool differences, dependency initialization, sandbox retries, absent optional CI, and build failures as recoverable engineering work when a safe in-scope path exists. Do not convert them into human checkpoints. When the human explicitly requested execution through a terminal milestone and persistent goal control is available, bind the autonomous run to that goal so an ordinary completed response does not end coordination.
-
-When an agent is blocked on permission, follow the permission-escalation procedure. Never send approval input on the human's behalf. Managed roles never attempt privilege escalation or host network/system mutation; portable simulations run normally, while privileged scenarios remain unexecuted human-gated evidence.
+When an agent is blocked on permission, follow the permission-escalation procedure. Never send approval input on the human's behalf.
 
 ### 6. Direct initial draft creation
 
-On a validated `implementation-ready`, atomically set draft creation and publication authority for the exact author, task branch, remote, and verified head, then send the original author a `drafting` control block allowing only applicable draft or blocker events. Direct it to use the preparing-pull-requests skill for content, then publish and create the draft through the configured task-branch guard rather than `git push` or `gh pr create`; the guarded draft operation must use that explicit already-pushed remote head. Require the exact recorded base; autonomous PRs target the integration branch and never `main`. Require the description to cite confirmed intent, authoritative source sections, boundaries, decisions, reusable-test changes, exact verification, and limitations. Clear both authorities after accepting the matching `draft-pr-ready` event; issue a new exact-head publication authorization for each later fixes publication.
+On a validated `implementation-ready`, send the original author a `drafting` control block allowing only `draft-pr-ready` or `needs-human`, followed by the instruction to use the preparing-pull-requests skill to publish the feature branch and create the initial draft. This does not require another human authorization. Require the draft to preserve confirmed intent and link the originating GitHub issue when present.
 
 Accept `draft-pr-ready` only for a recoverable draft pull request whose current remote head matches the event and whose description contains the intended review context.
 
@@ -133,57 +139,55 @@ When work from that workspace becomes a pull request or managed implementation, 
 
 ### 7. Begin independent review
 
-Check supervised review budgets or autonomous convergence state before proceeding.
+Check review budgets before proceeding.
 
 Apply the fixed topology from [Hunk Coordination](references/hunk-coordination.md): split the author pane toward the right inside the existing `agents` tab and start or reuse the independent reviewer there; create the separate full-width `hunk` tab with `--cwd` set to the exact recorded development target, verify that cwd before launch, and start one non-watching session through the validated wrapper. Verify its repository, base, and head. Prompt the reviewer with a `reviewing` control block containing the exact allowed outcomes, followed by its role instructions. The reviewer must use the reviewing-code and Hunk skills and review the complete current changeset.
 
-The reviewer must obtain intent from the PR description, comments, linked issue or requirements, authoritative design and implementation-plan sections, ADRs, package completion criteria, and current head before analyzing code. Do not substitute the orchestrator's abbreviated records for those sources.
+The reviewer must obtain intent from the GitHub pull-request description, comments, linked issue or requirements, and current head before analyzing the code. Do not substitute the orchestrator's abbreviated task record for that GitHub context.
 
 ### 8. Route findings without expanding scope
 
-On `review-findings`, validate the reviewed head and preserve the outcome before Hunk reload. Under supervised `human-selection`, present material findings for human disposition. Under an autonomous charter, the orchestrator selects all material in-scope findings, rejects follow-up expansion, and routes specification questions through the ADR procedure. A standing policy never absorbs unrelated improvements or undocumented scope expansion.
+On `review-findings`, validate the reviewed head and preserve the outcome before Hunk reload. Under the default `human-selection` policy, present the material findings for human disposition. In builder mode, the orchestrator selects material in-scope findings and rejects unrelated expansion. Apply any other standing policy only when the task record contains an explicit human-authorized rule.
 
 Prompt the original author with only the selected set. Keep Hunk unchanged until the author has consumed the comments, resolved the selected findings, updated the draft head, and emitted `fixes-ready`. Then reload Hunk explicitly against the recorded base and new head and ask the same reviewer for a complete rereview.
 
 ### 9. Control loops and scope versions
 
-Increment review counters only for accepted complete-review outcomes. Supervised mode stops at its configured numeric limits unless the human continues. Autonomous-project mode has no numeric human stop; enforce repeated-finding, no-progress, incompatible-conclusion, stale-head, and resource controls from the project reference.
+Increment review counters only for accepted complete-review outcomes. Stop at three rounds in one scope version or six total unless the human explicitly continues. In builder mode, treat those counts as a signal to reconsider the approach rather than an automatic human checkpoint; continue when there is credible progress.
 
-Keep `scope-revised` available for supervised tasks. Human-authorized supervised changes and charter-authorized documented project decisions create new scope versions. Verify their authority, update owning documents and ADRs where material, invalidate affected package assumptions, increment the scope version, preserve cumulative usage, reset only the per-scope review count, update durable intent, and require a new full phase-zero review.
+Keep `scope-revised` available in author control blocks before a successful review. Only a material change authorized by the responsible actor creates a new scope version, signaled by `scope-revised` during ordinary development or a material `post-review-changes-started` after successful review. When the author reports a direct human instruction, verify it in the author transcript, update the scope, and return the new control block without requesting duplicate approval. Increment the scope version, preserve cumulative usage, reset only the per-scope review count, update durable intent, and require a new full phase-zero review. After the configured scope-revision threshold, provide a progress and cost summary before continuing.
 
 Escalate repeated findings, no-progress fixes, contradictory events, author-reviewer deadlock, unexpected head changes, overlapping work, or long-running notices according to the safety reference. Do not respond by spawning another agent or silently widening the task.
 
 ### 10. Route finalization through the human
 
-A valid `review-passed` for the unchanged current head creates a `ready-candidate`. Reconcile the reviewed head, remaining risk, specification alignment, decisions, verification, limitations, and review usage.
+A valid `review-passed` for the unchanged current head creates a `ready-candidate`. Summarize the reviewed head, remaining risk, verification, limitations, and review-round usage. Ask the human whether the reviewer may finalize in the default workflow; in builder mode, make that decision against the charter.
 
-In supervised mode, ask for explicit human finalization authorization. In autonomous-project mode, the active charter permits the orchestrator to authorize reviewer finalization after every package evidence gate passes. Require `pull-request-finalized` for the exact head.
+Only after authorization from the responsible actor may the reviewer use the preparing-pull-requests skill to reconcile reviewer-owned context and mark that exact head ready for integration. Require the reviewer to emit `pull-request-finalized` afterward.
 
-Validate the finalized head, ready state, integration base, issue linkage, description, source citations, decisions, verification, and package completion criteria. In supervised mode, mark it `ready-for-team-review` and return merge authority to the human. In autonomous-project mode, set the delivery and package to `merge-ready`, then invoke `./scripts/project-squash-merge` with the exact project record, package record, repository key, PR, base, and head. Persist the returned merge commit, verify one squash commit reached the integration branch, run required post-merge evidence, and only then unlock successors.
+Validate the finalized head, ready state, issue linkage, description, verification summary, and material deviations from the original task brief. If they agree, mark the task `ready-for-team-review`. In the default workflow, ask the human to perform the final GitHub review and merge decision. In builder mode, squash-merge the exact reviewed head into its chartered non-main integration branch, verify the resulting commit, update the progress note, and continue with dependency-ready work. If the delivered result materially deviates, resolve it within the charter or return an out-of-charter decision to the human.
 
-Never merge except through the guarded autonomous-project squash procedure. Never enable auto-merge, use administrator bypass, use merge/rebase strategies, push an integration branch directly after creation, begin unauthorized work, or mutate or merge `main`.
+Outside builder authority, never merge, enable auto-merge, begin another unauthorized task, or treat readiness as GitHub approval. Builder authority never permits auto-merge, administrator bypass, another merge strategy, or any action involving `main`.
 
 ### 11. Reenter review after human feedback
 
-Supervised human-selected feedback or autonomous orchestrator-selected material findings after `review-passed` or `pull-request-finalized` return the task to the original author-reviewer loop. Follow the workflow-state and role contracts: bind only the selected feedback, invalidate prior reviewed and finalized heads, classify the change as `small-fix` or `material`, and apply the configured draft-state policy without transferring independent review ownership.
+Human-selected feedback after `review-passed` or `pull-request-finalized` returns the task to the original author-reviewer loop. Follow the post-review transition in [Workflow State and Events](references/workflow-state.md) and the role boundaries in [Managed Agent Contracts](references/agent-contracts.md): bind only the selected feedback, invalidate prior reviewed and finalized heads, classify the change as `small-fix` or `material`, and apply the configured draft-state policy without transferring readiness ownership to the orchestrator or author.
 
-Route the selected set through the finding-resolution contract. Any new head requires complete rereview by the same reviewer and new authorization from the recorded approval actor; GitHub replies and thread resolution remain separate actions.
+Route the selected set through the finding-resolution contract. Any new head requires a complete rereview by the same reviewer and new human-authorized finalization; GitHub replies and thread resolution remain separate explicit actions.
 
 ### 12. Clean up task resources
 
-After a verified merge or explicit human cleanup request, follow the guarded cleanup procedure. Autonomous project workspaces may instead return to the configured pool only after the project-control lease audit. Remove or re-lease only recorded resources after proving recoverability; preserve ambiguity. Treat PR closure, branch deletion, and other worktrees separately.
+After a verified merge or explicit human cleanup request, follow the complete guarded cleanup procedure in the workflow-state and safety references. Remove only the recorded task workspace and worktree after proving recoverability; preserve ambiguous state. Treat pull-request closure, branch deletion, and other task worktrees as separate concerns.
 
 ## Status reporting
 
-For an autonomous project check-in or final report, first show the project title, charter state, source-document commit, integration head per repository, working-agent usage, completed/total package count, current critical path, verification summary, and important ADRs since the previous report. Include blocked and eligible packages even when they have no task workspace yet. Do not expose private local configuration.
-
-End every user-visible response with one row for each non-`cleaned` task or nonterminal project package; a newly cleaned task or integrated package may appear once. Use exactly four columns:
+End every user-visible response with one row for each non-`cleaned` task; a newly cleaned task may appear once. Use exactly four columns:
 
 | Workspace / work item | Stage | Agents | PR |
 | --- | --- | --- | --- |
 | 🟡 `settings-button-rows` · [example-app#772 Settings button rows](<issue-url>) | `<state>` | `Author idle · fixed r1; Reviewer idle · passed r2 → you` | `[#<pr>](<pr-url>) or —` |
 
-Above the table, show `🔴 needs you · 🟡 in progress · 🟢 orchestration complete`. Derive color after reconciliation: settled task states (`ready-for-team-review`, `review-complete`, `delegated-complete`, `merged`, `closed`) and integrated packages are green; other items with `attention_required` are red; all others are yellow. Do not persist color or inherit it from dependencies.
+Above the table, show `🔴 needs you · 🟡 in progress · 🟢 orchestration complete`. Derive color after reconciliation: settled states (`ready-for-team-review`, `review-complete`, `delegated-complete`, `merged`, `closed`) are green; other tasks with `attention_required` are red; all others are yellow. Do not persist color or inherit it from dependencies.
 
 Formatting rules:
 
@@ -193,4 +197,4 @@ Formatting rules:
 - Link the PR when known. Keep CI, dependencies, internal wait state, and notes out of the table unless they require human disposition.
 - Preserve task order. Use one bounded Herdr inventory for live labels and lifecycle, and durable records for workflow state. Persist renamed workspace labels; flag missing live workspaces instead of substituting issue numbers.
 
-Finish with a section titled exactly `Needs your attention`. List concrete decisions outside the active authority profile first, then supervised handoffs awaiting final human review or merge. Chartered project decisions, ordinary dependency waits, and informational status do not belong here. Each item starts with the same workspace or package label and contains one action. Write `None.` when no human action is required. Nothing follows this section.
+Finish with a section titled exactly `Needs your attention`. List concrete blocking decisions first, then completed handoffs awaiting final human review or merge. Each item starts with the same workspace label and contains one action. Omit passive waits and informational status; write `None.` when no action is required. Nothing follows this section.

@@ -16,7 +16,7 @@ the skill it distributes.
 
 | Skill | Role | Invocation point | Consumes | Produces |
 | --- | --- | --- | --- | --- |
-| `orchestrating-development` | Orchestrator | Explicit request in the dedicated control workspace | Human-authorized task or autonomous charter, local policy, durable records, authoritative plans, and managed-role events | Herdr topology, dependency scheduling, validated transitions, guarded integration, and human attention requests |
+| `orchestrating-development` | Orchestrator | Explicit request in the dedicated control workspace | Human-authorized task, local policy, task records, and managed-role events | Herdr topology, validated transitions, and human attention requests |
 | `herdr` | Orchestrator | When inspecting or controlling Herdr resources | Recorded workspace, pane, worktree, or agent identity | Observable runtime state or a bounded Herdr operation |
 | `writing-specifications` | Human and author | Optional architectural work before implementation | Goals, constraints, boundaries, and design questions | An agreed design artifact or implementation context |
 | `preparing-pull-requests` | Author | After implementation is ready and Stagehand requests draft creation | Confirmed intent, current branch, verification evidence, and issue context | Intent-bearing draft pull request and `draft-pr-ready` handoff |
@@ -25,12 +25,12 @@ the skill it distributes.
 | `resolving-findings` | Original author | After the human selects findings for this pull request | Selected findings, current intent, and author context | Focused fixes, verification evidence, and `fixes-ready` handoff |
 | `preparing-pull-requests` | Reviewer | After a current-head pass and explicit human authorization | Reviewed head, final evidence, limitations, and existing PR description | Reconciled description, ready-for-review state, and `pull-request-finalized` handoff |
 
-## Supervised End-to-End Handoffs
+## End-to-End Handoffs
 
 1. **Select and provision.** The human authorizes a task. Stagehand records its
    boundaries and uses the Herdr skill to create one isolated workspace and
    worktree.
-2. **Plan with the author.** The author explores and proposes a plan. In this supervised path, the human
+2. **Plan with the author.** The author explores and proposes a plan. The human
    approves implementation directly with that author. Architectural work may use
    `writing-specifications`, but ordinary changes do not require a permanent spec.
 3. **Implement and draft.** The author implements and verifies the approved
@@ -48,14 +48,6 @@ the skill it distributes.
 7. **Finalize deliberately.** After a passing review, the human may authorize the
    reviewer to use `preparing-pull-requests` in finalization mode. GitHub team
    review and merge remain outside the managed loop.
-
-For an autonomous project, the charter replaces repeated task and plan
-checkpoints with a durable dependency graph and evidence contract. Authors still
-work on isolated task branches, reviewers remain independent, and every changed
-head receives complete review. The orchestrator alone may finalize integration
-by invoking the guarded squash merge into the exact recorded non-main branch.
-Material changes to approved product intent update the owning specification and
-a checked-in ADR before or with dependent code.
 
 For reviewer-only work on another developer's pull request, Stagehand invokes
 `reviewing-code` without an author, fixer, or Hunk requirement. The reviewer
@@ -76,13 +68,9 @@ and preserves its workspace and agent unless reuse would mix or endanger work.
 
 The orchestrator coordinates state and authority; it does not implement, review,
 or fix product code. It treats Herdr lifecycle as observation rather than proof,
-validates semantic handoffs against durable artifacts, and prevents task
-overlap. Under an autonomous charter it also schedules ready packages, approves
-bounded plans, records specification decisions, and performs squash-only
-integration through the guarded script. Semantic events are the fast path; a
-low-frequency reconciliation watchdog recovers missed handoffs without polling
-healthy workers aggressively. Privilege elevation and host-network mutation
-remain human-owned, while portable simulations stay inside managed work.
+validates semantic handoffs against durable artifacts, and warns about task
+overlap. It stops at human decisions by default; a local builder charter may make
+it the delivery and non-main squash-integration decision maker.
 
 ### `writing-specifications`
 
@@ -132,10 +120,7 @@ unless the human explicitly expands scope.
 - Every changed head requires complete independent review before finalization.
 - Neither a favorable review nor green CI authorizes readiness, publication, or
   merge by itself.
-- Stagehand may route supervised work between skills, but it never automatically
-  begins a task or converts a reviewer observation into authorized scope. A
-  project charter may instead authorize dependency-ready package starts and
-  documented in-charter decisions.
-- The human performs every supervised final GitHub review and merge. An
-  autonomous charter may delegate only reviewed squash merges into its exact
-  non-main integration branches; promotion to `main` remains human-owned.
+- Stagehand may route work between skills, but it never automatically begins a
+  new task or converts a reviewer observation into authorized scope.
+- The human performs the final GitHub review and merge by default. A builder
+  charter may grant the orchestrator exact non-main squash-merge authority.

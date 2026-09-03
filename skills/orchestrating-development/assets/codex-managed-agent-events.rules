@@ -1,31 +1,6 @@
 # Managed authors and reviewers may identify their own pane, deliver semantic
 # events, and use the bounded Hunk session API. Other Herdr control and
 # destructive Hunk comment operations retain their normal approval policy.
-
-# Managed product roles never own merge or privilege-escalation authority.
-# Task-worktree Git publication restrictions live in codex-managed-role.rules;
-# keeping them workspace-local avoids changing unrelated Codex sessions.
-prefix_rule(
-    pattern = [["sudo", "su", "pkexec"]],
-    decision = "forbidden",
-    justification = "Managed roles must never attempt privilege escalation; privileged host work requires direct human control.",
-    match = [
-        "sudo ip link add test0 type dummy",
-        "su root",
-        "pkexec ip route add 192.0.2.0/24 dev test0",
-    ],
-)
-
-prefix_rule(
-    pattern = ["gh", "pr", "merge"],
-    decision = "forbidden",
-    justification = "Only the autonomous project orchestrator may merge, and only through its guarded squash script.",
-    match = [
-        "gh pr merge 42 --squash",
-        "gh pr merge https://example.invalid/pull/42",
-    ],
-)
-
 prefix_rule(
     pattern = ["herdr", "pane", "current"],
     decision = "allow",

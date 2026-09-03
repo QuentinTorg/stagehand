@@ -4,7 +4,7 @@
 
 The orchestration repository's tracked `AGENTS.md` must declare that orchestration is enabled. It may require an ignored local configuration file for allowed repository roots or named repositories, repository-resolution rules, GitHub hosts, and local limit overrides. Model preferences, workspace-label conventions, repository-specific initialization, and a task-record directory may also live in that local file. Read the complete configuration chain before acting; a referenced local file is part of the activation contract, not an optional hint.
 
-When no task-record directory is configured, use `.orchestrator/tasks` inside the orchestration repository. Autonomous project and package records use `.orchestrator/projects/<project-id>` unless configured otherwise. Keep runtime records out of product repositories and ignore them from version control when they contain machine-specific paths or private task context. Checked-in ADRs are product documentation, not orchestration state.
+When no task-record directory is configured, use `.orchestrator/tasks` inside the orchestration repository. Keep runtime task records out of product repositories and ignore them from version control when they contain machine-specific paths or private task context.
 
 Missing configuration is not permission to search the filesystem or guess among similarly named checkouts. Ask the human for the exact repository path and record it only in the local configuration when requested. Never copy the complete local configuration into a managed-agent prompt or a public artifact.
 
@@ -20,13 +20,11 @@ The following per-task limits still apply unless the workspace configuration is 
 - each task receives at most six accepted review outcomes total; and
 - a third material scope revision requires a progress and cost check.
 
-An active autonomous project charter replaces only these workload and loop defaults: enforce its global working-agent ceiling, permit only dependency-ready nonconflicting packages, and use recorded convergence signals rather than fixed review-round or scope-revision stops. For the vehicle-communications project, at most five managed roles may be working concurrently, excluding the orchestrator; parallel builds are permitted. The charter does not waive role cardinality, independent review, scope reservations, or evidence gates.
-
 ## Parallel-work overlap checks
 
-Every supervised task requires explicit human authorization. A chartered package requires recorded eligibility and orchestrator authorization. Before starting either, compare it with executing tasks using repository identity, base, task brief, known affected paths, public contracts, generated outputs, shared fakes, current diffs, submodule revisions, dependent pull requests, and shared build state.
+Every task requires explicit human authorization. Before starting it, compare it with executing tasks using repository identity, base, task brief, known affected paths, current diffs, submodule revisions, dependent pull requests, and shared build state.
 
-When supervised tasks may modify the same contract, files, generated artifacts, submodule pointer, database schema, deployment surface, or shared build output, explain the likely conflict and ask the human whether to wait or proceed. In autonomous-project mode, the orchestrator must sequence conflicting reservations and may not authorize overlap. Never solve overlap by putting two tasks into one workspace.
+When tasks may modify the same contract, files, generated artifacts, submodule pointer, database schema, deployment surface, or shared build output, explain the likely conflict and recommend sequencing. Ask the human whether to wait or proceed; do not silently block an explicitly confirmed parallel task. Never solve overlap by putting two tasks into one workspace.
 
 ## Herdr worktree-group safety
 
@@ -37,8 +35,6 @@ For a worktree-backed task:
 1. Reconcile the existing canonical primary workspace and linked task workspaces.
 2. Run `herdr worktree create` once, using that primary workspace or confirmed checkout as the source.
 3. Parse and record the task workspace returned by Herdr.
-
-Autonomous-project worktrees must remain beneath the chartered project root and use complete containing-repository worktrees when local policy requires their build context. A completed worktree may become a new package lease only after the project-control pool audit. Pool reuse does not weaken Herdr worktree-group safety or permit destructive cleanup.
 
 Do not create a provisional workspace at the primary checkout, create a second non-linked parent, or use `herdr workspace close` during provisioning or cleanup. Never use pane or tab closure to bypass that prohibition when it would close a non-linked workspace. If a duplicate parent or mistaken workspace is created, preserve it, stop further topology changes, and ask the human; do not assume it can be closed independently.
 
@@ -59,17 +55,9 @@ The orchestrator never interacts with an agent's permission UI. When Herdr repor
 
 Do not send Enter, approval keys, credentials, or broad authorization to unblock an agent. Routine workflow language is not an allowlist; automatic approval requires a separately installed, evaluated rule with a narrow command boundary.
 
-## Privileged host and network operations
-
-Managed roles never attempt privilege escalation. Treat `sudo`, `su`, `pkexec`, password entry, Linux capabilities, privileged containers, host networking, device access, and equivalent mechanisms as human-only even when a command appears harmless or temporary.
-
-Human approval is also required before any host interface, route, firewall, namespace, tunnel, resolver, kernel setting, network service, or persistent system configuration is changed. The orchestrator may not approve these under autonomous project authority. If a repository scenario needs them, allow the author to create a clearly isolated manual test with an exact preflight snapshot and rollback procedure, but do not execute it, require it for the chartered proof-of-concept milestone, or report it as passing. Continue to require all portable non-privileged verification that can exercise the same contracts and logic.
-
-Ordinary loopback sockets, ephemeral user ports, and explicitly configured unprivileged process-local simulation are allowed. A repository-defined isolated container bridge is allowed only when local configuration authorizes the existing container workflow and it uses no host network, privileged mode, added network capability, host device, or host configuration mutation. When classification is uncertain, preserve state and ask the human before running it.
-
 ## No-progress and cost controls
 
-Escalate or invoke autonomous convergence recovery instead of looping when any of these occurs:
+Escalate instead of looping when any of these occurs:
 
 - the per-scope or total review budget is reached;
 - substantially the same finding returns after an attempted resolution;
@@ -80,28 +68,25 @@ Escalate or invoke autonomous convergence recovery instead of looping when any o
 - an agent remains working beyond the configured notice interval; or
 - repository overlap appears after work begins.
 
-A long-running build is not automatically failure. Report its elapsed time and observed output without canceling it unless the human, charter, or repository policy supplies a timeout. Because Herdr does not report token usage, use task counts, turns, rounds, elapsed-time notices, active-agent counts, and explicit status summaries to provide cost visibility. Autonomous recovery may clarify, narrow, repair, resume, or replace within the charter; it may not add speculative roles or repeat unchanged work.
+A long-running build is not automatically failure. Report its elapsed time and observed output without canceling it unless the human or repository policy supplies a timeout. Because Herdr does not report token usage, use task counts, turns, rounds, elapsed-time notices, and explicit status summaries to give the human useful cost visibility.
 
-## Human checkpoints
+## Approval checkpoints
 
-Always require the human for:
+Always require the responsible approval actor for:
 
 - initial task authorization and the decision to proceed with likely conflicting parallel work;
 - implementation-plan approval in the author session;
 - material intent or scope changes;
 - disposition not covered by an explicit selected-finding policy;
 - risky, destructive, external, credentialed, or out-of-root operations;
-- privilege escalation or host networking/system mutation, including temporary test setup;
 - continuation beyond review or scope-revision budgets;
 - reviewer finalization of a ready candidate; and
 - publication of a reviewer-only task's proposed GitHub review; and
 - conflict resolution between parallel tasks.
 
-For an active autonomous project, the charter is standing human authority for package selection, author-plan approval, in-charter specification decisions recorded through ADRs, selected-finding disposition, conflict sequencing, convergence recovery, reviewer finalization, and guarded squash merges into the recorded integration branch. It is not authority for credentials, out-of-root work, destructive data loss, policy bypass, force push, deployment to vehicles, production-security acceptance, hardware-dependent acceptance, or any mutation or merge involving `main`.
+The responsible approval actor is the human by default. A valid builder charter may delegate initial task selection, plan approval, finding disposition, review-budget continuation, and reviewer finalization to the orchestrator. It may also grant squash-merge authority for exact non-main integration branches. Credentials, risky host operations, ambiguous cleanup, reviewer-only publication, and all actions involving `main` remain human-owned unless the skill expressly says otherwise.
 
-Routine tool incompatibilities, absent optional CI, missing dependency initialization, recoverable sandbox/network retries, and ordinary build failures are not human checkpoints. Diagnose them, choose a safe in-scope recovery, and continue. Escalate only when recovery needs one of the excluded authorities above or would discard ambiguous work.
-
-Initial supervised development-task authorization covers routine feature-branch publication and initial draft creation by the author. It does not cover reviewer finalization, publication of reviewer-only output, policy exceptions, or merge. In autonomous-project mode, the orchestrator may authorize reviewer finalization and perform only the guarded squash merge into the recorded integration branch. No agent may merge or push to `main`.
+Initial development-task authorization covers routine feature-branch publication and initial draft creation by the author. It does not independently cover reviewer finalization, publication of reviewer-only output, policy exceptions, or merge.
 
 Selected post-readiness feedback authorizes only its bounded resolution. Returning a materially changing pull request to draft requires explicit human authority or a standing workspace policy; ambiguity returns to the human. Neither feedback selection nor draft return authorizes GitHub thread replies, thread resolution, unrelated PR edits, or reuse of the previous review conclusion.
 
@@ -109,7 +94,7 @@ Selected post-readiness feedback authorizes only its bounded resolution. Returni
 
 A human request to clean up a uniquely identified task, workspace, or review workspace means guarded cleanup of that task's recorded linked workspace and worktree. The human need not distinguish those implementation details. This wording never authorizes `herdr workspace close`; ask only when task identity or cleanup scope is ambiguous.
 
-A verified merge or explicit human request authorizes cleanup of that task's linked workspace and worktree through `herdr worktree remove`. A chartered project may instead retain the audited workspace as an idle pool lease. Neither outcome authorizes `herdr workspace close`, primary-workspace closure, PR closure, branch deletion, or data loss. Before removal or reuse, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
+A verified merge or explicit human request authorizes cleanup of that task's linked workspace and worktree through `herdr worktree remove`. It does not authorize `herdr workspace close`, primary-workspace closure, PR closure, branch deletion, or data loss. Before removal, verify task ownership, PR state when applicable, and agent/process state. For meta-repositories, audit separately:
 
 1. **Each initialized submodule:** no tracked or untracked changes; all target commits durably recoverable from the recorded remote branch, PR, merge, or explicit reference; non-targets at their expected pins; no process with state that must survive.
 2. **The containing repository:** no tracked or untracked changes except the recorded target's gitlink difference when `containing_repository_pointer_update: not-planned` and the target passed the first audit. Preserve planned or ambiguous pointer updates.
@@ -136,4 +121,4 @@ Audit completed predecessors independently from active successors when their req
 
 ## Prohibited behavior
 
-The orchestrator must not perform managed task work, create speculative tasks, start work merely because capacity exists, recursively spawn agents, push to or merge into `main`, force-push, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own. Merge is permitted only for an active autonomous charter, through the guarded squash script, into that repository's exact recorded non-main integration branch.
+The orchestrator must not perform managed task work, create speculative tasks outside an active builder charter, recursively spawn agents, push to `main`, force-push, enable auto-merge, bypass checks, change policy, clean unknown worktrees, or terminate processes it does not own. It may merge only when a builder charter grants exact non-main squash-merge authority.
