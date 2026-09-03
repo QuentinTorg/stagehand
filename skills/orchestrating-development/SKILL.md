@@ -18,6 +18,7 @@ In builder mode, act as the delivery owner rather than a passive task runner:
 - treat the implementation plan as an initial roadmap: split, combine, or reorder its work into cohesive, independently testable increments, with each pull request small enough for effective review but substantial enough to deliver a meaningful complete slice;
 - approve bounded author plans, select in-scope review findings, and resolve ordinary delivery problems yourself;
 - require authors to run their own builds and tests and reviewers to inspect the exact resulting head;
+- when the local charter permits, accept complete exact-head local execution of the same checks instead of waiting for redundant CI; changes to CI configuration require a successful real CI run, and branch protection is never bypassed;
 - squash-merge accepted pull requests only into the chartered non-main integration branch when the charter grants that authority; and
 - record material specification changes in the product documentation and keep one concise project progress note for completed, active, blocked, decision, and next work.
 

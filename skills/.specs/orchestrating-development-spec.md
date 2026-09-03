@@ -44,7 +44,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 14. Interpret ordinary task/workspace cleanup language as guarded removal of the uniquely identified task's recorded linked workspace and worktree, then archive its cleaned record outside the active set; preserve ambiguous targets.
 15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
 16. Extend a cohesive existing task and reuse its workspace and roles when safe, including related multi-repository or multi-PR follow-ups; isolate independent or conflicting work.
-17. Under an explicit builder charter, own the delegated checkpoints, treat the implementation plan as an adaptable roadmap, decompose it into cohesive independently testable and reviewable pull requests, keep authors responsible for their builds and tests, maintain one concise project progress note, and continue until the chartered terminal outcome or a genuine out-of-charter blocker.
+17. Under an explicit builder charter, own the delegated checkpoints, treat the implementation plan as an adaptable roadmap, decompose it into cohesive independently testable and reviewable pull requests, keep authors responsible for their builds and tests, allow charter-approved exact-head local evidence to replace waiting for redundant CI except when CI configuration changes, maintain one concise project progress note, and continue until the chartered terminal outcome or a genuine out-of-charter blocker.
 
 ## 4. Guardrails
 
