@@ -91,9 +91,9 @@ printf '%s\n' "$*" >>"$log_file"
 case "$1 $2" in
     "api --paginate")
         if [ "${PROJECT_MERGE_TEST_QUEUE:-0}" = 1 ]; then
-            printf '%s\n' '[[{"type":"required_status_checks"}],[{"type":"merge_queue"}]]'
+            printf '%s\n' '{"type":"required_status_checks"}' '{"type":"merge_queue"}'
         else
-            printf '%s\n' '[[{"type":"required_status_checks"}],[]]'
+            printf '%s\n' '{"type":"required_status_checks"}'
         fi
         ;;
     "pr view")
@@ -103,7 +103,17 @@ case "$1 $2" in
             printf '%s\n' '{"state":"OPEN","isDraft":false,"baseRefName":"qtorgerson/gears-vehicle-comms","headRefName":"qtorgerson/wp-r0","headRefOid":"0123456789012345678901234567890123456789","mergeStateStatus":"CLEAN","url":"https://github.example.com/GEARS/gears-vehicle-comms/pull/42"}'
         fi
         ;;
-    "pr checks") exit 0 ;;
+    "pr checks")
+        if [ "${PROJECT_MERGE_TEST_NO_REQUIRED_CHECKS:-0}" = 1 ]; then
+            echo "no checks reported on the 'qtorgerson/wp-r0' branch" >&2
+            exit 1
+        fi
+        if [ "${PROJECT_MERGE_TEST_FAILED_CHECKS:-0}" = 1 ]; then
+            echo "build fail 1m https://example.invalid/check" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
     "pr merge")
         case " $* " in
             *" --squash "*) ;;
@@ -163,6 +173,34 @@ merge_result=$(PATH="$test_root/bin:$PATH" "$guard_script" \
     --expected-head 0123456789012345678901234567890123456789)
 printf '%s\n' "$merge_result" \
     | jq -e '.status == "merged" and .merge_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' >/dev/null
+
+rm -f "$PROJECT_MERGE_TEST_STATE"
+empty_checks_result=$(PROJECT_MERGE_TEST_NO_REQUIRED_CHECKS=1 PATH="$test_root/bin:$PATH" \
+    "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789)
+printf '%s\n' "$empty_checks_result" \
+    | jq -e '.status == "merged" and .merge_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' >/dev/null
+
+rm -f "$PROJECT_MERGE_TEST_STATE"
+if PROJECT_MERGE_TEST_FAILED_CHECKS=1 PATH="$test_root/bin:$PATH" "$guard_script" \
+    --project-record "$project_record" \
+    --package-record "$package_record" \
+    --repository-key vehicle-comms \
+    --pr 42 \
+    --expected-base qtorgerson/gears-vehicle-comms \
+    --expected-head 0123456789012345678901234567890123456789 >/dev/null 2>&1; then
+    echo "guard accepted failed required checks" >&2
+    exit 1
+fi
+if [ -f "$PROJECT_MERGE_TEST_STATE" ]; then
+    echo "guard invoked merge before rejecting failed required checks" >&2
+    exit 1
+fi
 
 if PATH="$test_root/bin:$PATH" "$guard_script" \
     --project-record "$project_record" \

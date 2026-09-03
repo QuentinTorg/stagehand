@@ -250,20 +250,25 @@ if [ "$github_path" = "$github_repository" ] || [ "$github_name" = "$github_path
     exit 1
 fi
 encoded_base=$(printf '%s' "$expected_base" | jq -sRr @uri)
-branch_rules=$(gh api --paginate --slurp --method GET --hostname "$github_host" \
+branch_rules_stream=$(gh api --paginate --method GET --hostname "$github_host" \
     -H "Accept: application/vnd.github+json" \
     -f per_page=100 \
+    --jq '.[]' \
     "repos/$github_owner/$github_name/rules/branches/$encoded_base") || {
     echo "could not prove that the integration branch is free of merge-queue rules" >&2
     exit 1
 }
+branch_rules=$(printf '%s\n' "$branch_rules_stream" | jq -s '.') || {
+    echo "GitHub returned an invalid active-branch-rules response" >&2
+    exit 1
+}
 if ! printf '%s\n' "$branch_rules" | jq -e \
-    'type == "array" and all(.[]; type == "array")' >/dev/null; then
+    'type == "array" and all(.[]; type == "object")' >/dev/null; then
     echo "GitHub returned an invalid active-branch-rules response" >&2
     exit 1
 fi
 if printf '%s\n' "$branch_rules" | jq -e \
-    'any(.[][]; .type == "merge_queue")' >/dev/null; then
+    'any(.[]; .type == "merge_queue")' >/dev/null; then
     echo "refusing integration branch governed by a merge queue" >&2
     exit 1
 fi
@@ -298,11 +303,20 @@ if [ "$pr_merge_state" != CLEAN ]; then
     exit 1
 fi
 
-# GitHub's required-check result is independent evidence; never ask merge to
-# wait automatically because autonomous authority excludes auto-merge.
-if ! gh pr checks "$pr_number" -R "$github_repository" --required >/dev/null; then
-    echo "required pull-request checks are not successful" >&2
-    exit 1
+# GitHub CLI returns failure both when a required check failed and when the
+# required-check set is empty. An empty set satisfies the policy; every other
+# failure remains blocking, and autonomous authority still excludes auto-merge.
+required_checks_output=
+if ! required_checks_output=$(gh pr checks "$pr_number" -R "$github_repository" \
+    --required 2>&1); then
+    case "$required_checks_output" in
+        "no checks reported on the '"*"' branch") ;;
+        *)
+            echo "required pull-request checks are not successful" >&2
+            printf '%s\n' "$required_checks_output" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 gh pr merge "$pr_number" -R "$github_repository" \
