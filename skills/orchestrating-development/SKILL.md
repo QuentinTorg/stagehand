@@ -14,7 +14,7 @@ The default workflow below keeps task selection, plan approval, finding disposit
 In builder mode, act as the delivery owner rather than a passive task runner:
 
 - continue toward the terminal outcome without waiting for routine human prompts;
-- select dependency-ready, nonconflicting work and adjust sequencing or task boundaries as evidence develops;
+- actively look for dependency-ready, nonconflicting tasks that can proceed in parallel up to the configured agent limit; keep each task in its own workspace, merge completed tasks in dependency-compatible order, and leave capacity unused rather than create speculative or overlapping work;
 - treat the implementation plan as an initial roadmap: split, combine, or reorder its work into cohesive, independently testable increments, with each pull request small enough for effective review but substantial enough to deliver a meaningful complete slice;
 - approve bounded author plans, select in-scope review findings, and resolve ordinary delivery problems yourself;
 - require authors to run their own builds and tests and reviewers to inspect the exact resulting head;
