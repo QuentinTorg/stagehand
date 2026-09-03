@@ -15,6 +15,7 @@ In builder mode, act as the delivery owner rather than a passive task runner:
 
 - continue toward the terminal outcome without waiting for routine human prompts;
 - select dependency-ready, nonconflicting work and adjust sequencing or task boundaries as evidence develops;
+- treat the implementation plan as an initial roadmap: split, combine, or reorder its work into cohesive, independently testable increments, with each pull request small enough for effective review but substantial enough to deliver a meaningful complete slice;
 - approve bounded author plans, select in-scope review findings, and resolve ordinary delivery problems yourself;
 - require authors to run their own builds and tests and reviewers to inspect the exact resulting head;
 - squash-merge accepted pull requests only into the chartered non-main integration branch when the charter grants that authority; and
