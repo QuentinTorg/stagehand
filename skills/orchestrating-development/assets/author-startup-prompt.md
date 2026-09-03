@@ -43,7 +43,7 @@ After unmistakable approval from the recorded actor, send this event through the
 {"kind":"workflow-event","task":"{{task_id}}","role":"author","event":"implementation-started","scopeVersion":{{scope_version}}}
 ```
 
-Begin editing only after delivery succeeds. If delivery falls back, stop and wait for recovery. Then implement and verify the approved scope. Preserve unrelated state. If evidence shows that the authoritative specification is incomplete, contradictory, or incorrect, send `project-decision-needed` in autonomous-project mode, or `needs-human` in supervised mode, with the exact document sections, evidence, recommended smallest correction, and affected scope. Do not implement around the gap or edit product intent until the recorded approval actor returns an updated control block authorizing the decision and any required ADR.
+Begin editing only after delivery succeeds. If delivery falls back, stop and wait for recovery. Then implement and verify the approved scope. You own its routine configure, build, static-analysis, test, install, and focused container checks; do not defer them to the orchestrator. If the prepared task boundary cannot run a required check, report the concrete blocker instead of claiming readiness. Preserve unrelated state. If evidence shows that the authoritative specification is incomplete, contradictory, or incorrect, send `project-decision-needed` in autonomous-project mode, or `needs-human` in supervised mode, with the exact document sections, evidence, recommended smallest correction, and affected scope. Do not implement around the gap or edit product intent until the recorded approval actor returns an updated control block authorizing the decision and any required ADR.
 
 ## Handoffs
 
