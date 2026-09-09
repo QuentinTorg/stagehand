@@ -495,6 +495,24 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             note = "Draft save failed; keep this window open until saved."
 
 
+def draw_task_frame(screen, width, visible, selected, count, caption):
+    # Reserve the outer columns for the frame, independent of table content.
+    right, bottom = width - 2, 6 + visible
+    if right < 3:
+        return
+    title = clipped(" " + caption + " ", right - 1)
+    top = "┌" + title + "─" * (right - 1 - len(title)) + "┐"
+    thumb = 5 + round(selected * visible / max(1, count - 1)) if count > visible else None
+    try:
+        screen.addnstr(3, 0, top, right + 1)
+        for y in range(4, bottom):
+            screen.addnstr(y, 0, "│", 1)
+            screen.addnstr(y, right, "█" if y == thumb else "│", 1)
+        screen.addnstr(bottom, 0, "└" + "─" * (right - 1) + "┘", right + 1)
+    except curses.error:
+        pass  # A resize may invalidate the frame dimensions mid-draw.
+
+
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     try:
@@ -579,7 +597,7 @@ def display_loop(screen, args, executor):
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         # Share column widths across rows while reserving room for individual PR links.
         pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in rows), default=9)))
-        put(4, "    " + table_line(header, max(1, width - 6), pr_width), bold=True)
+        put(4, "    " + table_line(header, max(1, width - 8), pr_width), bold=True)
         table_links = {}
         # Keep selected-task instructions visible even when the task list is long.
         visible = max(1, (height - 17) // 2)
@@ -589,19 +607,13 @@ def display_loop(screen, args, executor):
             health += " · refresh delayed"
         if warnings:
             health += " · check warning below"
-        put(3, f"┌─ Tasks {offset + 1 if rows else 0}–{min(len(rows), offset + visible)} of {len(rows)} · {health} " + "─" * width)
-        for track in range(visible + 1):
-            try:
-                thumb = round(selected * visible / max(1, len(rows) - 1))
-                screen.addnstr(5 + track, width - 2, "█" if track == thumb else "│", 1)
-            except curses.error:
-                pass
+        caption = f"Tasks {offset + 1 if rows else 0}–{min(len(rows), offset + visible)} of {len(rows)} · {health}"
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
             y = 5 + i - offset + (1 if i > selected else 0)
-            put(y, f"{marker} ● {table_line(row, max(1, width - 6), pr_width)}", row["color"], highlight=i == selected)
-            if width - 6 >= 100 and row["prs"]:
-                pr_x = 5 + sum(columns(width - 6, pr_width)) + 6
+            put(y, f"{marker} ● {table_line(row, max(1, width - 8), pr_width)}", row["color"], highlight=i == selected)
+            if width - 8 >= 100 and row["prs"]:
+                pr_x = 5 + sum(columns(width - 8, pr_width)) + 6
                 end = min(pr_x + pr_width, width - 2)
                 for label, url in pr_labels(row):
                     length = min(len(label), end - pr_x)
@@ -620,9 +632,9 @@ def display_loop(screen, args, executor):
                 put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
         if not rows:
             put(5, "Loading tasks…" if pending else "No readable active tasks." if warnings else "No active tasks.")
+        draw_task_frame(screen, width, visible, selected, len(rows), caption)
 
         detail_y = 5 + visible + 2
-        put(detail_y, "─" * max(0, width - 3))
         detail_height = max(1, height - 9 - (detail_y + 2))
         details = detail_lines(current, width) if current else []
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))

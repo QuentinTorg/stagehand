@@ -13,6 +13,18 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_task_frame_has_matching_corners_and_separate_scroll_rail(self):
+        for width in (40, 140):
+            screen = Mock()
+            board.draw_task_frame(screen, width, 5, 9, 10, "Tasks 6–10 of 10")
+            calls = [call.args for call in screen.addnstr.call_args_list]
+            self.assertEqual(calls[0][2][0], "┌")
+            self.assertEqual(calls[0][2][-1], "┐")
+            self.assertEqual(len(calls[0][2]), width - 1)
+            self.assertNotIn("…", calls[0][2])
+            self.assertEqual(calls[-1], (11, 0, "└" + "─" * (width - 3) + "┘", width - 1))
+            self.assertIn((10, width - 2, "█", 1), calls)
+
     def test_enter_sends_and_ctrl_j_inserts_newline(self):
         for enter in ("\r", board.curses.KEY_ENTER):
             with tempfile.TemporaryDirectory() as root:
