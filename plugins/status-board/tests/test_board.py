@@ -33,6 +33,21 @@ class BoardTests(unittest.TestCase):
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertFalse(board.draft_path(args, row).exists())
 
+    def test_inline_composer_keeps_task_visible_and_saves_on_blur(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, 100)
+            screen.get_wch.side_effect = list("Investigate this") + [board.curses.KEY_MOUSE]
+            with patch.object(board.curses, "curs_set"), patch.object(board.curses, "ungetmouse") as mouse, patch.object(
+                board, "mouse_event", return_value=("select", 10, 6, 0)
+            ):
+                self.assertEqual(board.compose(screen, args, row, inline=True), "Draft saved.")
+            screen.erase.assert_not_called()
+            mouse.assert_called_once()
+            self.assertEqual(board.draft_path(args, row).read_text(), "Investigate this")
+
     def test_selected_objective_and_rows_below_it_are_clickable(self):
         task = self.task()
         task["objective"] = "Investigate reconnect failures without changing source."

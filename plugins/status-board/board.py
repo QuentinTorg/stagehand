@@ -258,7 +258,33 @@ def send_message(args, row, message):
     return False, "Delivery unconfirmed. Check orchestrator before retrying; draft kept."
 
 
-def compose(screen, args, row):
+def draw_message_box(screen, row, message, active=False):
+    height, width = screen.getmaxyx()
+    top, inner = max(0, height - 8), max(1, width - 6)
+    preview = textwrap.wrap(clean(message), inner)[:3] if message else []
+    title = "Message orchestrator · " + row["label"]
+    lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
+             *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
+             "│ [ Send ]  " + ("Ctrl-G sends · Esc keeps draft" if active else "Click inside to type"),
+             "└" + "─" * max(0, width - 4) + "┘"]
+    if not message and not active:
+        lines[1] = "│ Tell the orchestrator what you need for this workspace…"
+    box_width = max(4, width - 3)
+    heading = clipped(title, max(1, box_width - 4))
+    lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
+    for i in range(1, 5):
+        lines[i] = "│ " + clipped(lines[i][2:], box_width - 4).ljust(box_width - 4) + " │"
+    lines[-1] = "└" + "─" * (box_width - 2) + "┘"
+    for i, text in enumerate(lines):
+        try:
+            screen.move(top + i, 0)
+            screen.clrtoeol()
+            screen.addnstr(top + i, 1, clipped(text, max(1, width - 3)), max(0, width - 2))
+        except curses.error:
+            pass
+
+
+def compose(screen, args, row, inline=False, send_now=False):
     path = draft_path(args, row)
     try:
         message = path.read_text() if path.exists() else ""
@@ -267,7 +293,7 @@ def compose(screen, args, row):
     cursor, note = len(message), "Ctrl-G sends · Esc keeps draft and returns · Enter adds a line"
     while True:
         height, width = screen.getmaxyx()
-        line_width = max(1, width - 4)
+        line_width = max(1, width - (6 if inline else 4))
         lines, positions = [""], []
         for character in message:
             positions.append((len(lines) - 1, len(lines[-1])))
@@ -279,31 +305,63 @@ def compose(screen, args, row):
                     lines.append("")
         positions.append((len(lines) - 1, len(lines[-1])))
         cy, cx = positions[cursor]
-        visible = max(1, height - 7)
+        input_y = max(1, height - 7) if inline else 4
+        input_x = 3 if inline else 1
+        visible = 3 if inline else max(1, height - 7)
         offset = max(0, cy - visible + 1)
-        screen.erase()
-        content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + row["label"]),
-                   (2, "Repository: " + row["repository"])]
-        content += [(4 + i, line) for i, line in enumerate(lines[offset:offset + visible])]
-        content += [(height - 2, note), (height - 1, " [ Send ]  [ Back ]")]
+        if inline:
+            # Editing stays in the bottom panel; leave the selected task visible above.
+            draw_message_box(screen, row, "", active=True)
+            content = []
+        else:
+            screen.erase()
+            content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + row["label"]),
+                       (2, "Repository: " + row["repository"])]
+        content += [(height - 2, note), (height - 1, " Click outside / Esc to return" if inline else " [ Send ]  [ Back ]")]
         for y, text in content:
             try:
+                screen.move(y, 0)
+                screen.clrtoeol()
                 screen.addnstr(y, 1, text, max(0, width - 2))
+            except curses.error:
+                pass
+        for i, line in enumerate(lines[offset:offset + visible]):
+            try:
+                screen.addnstr(input_y + i, input_x, line, line_width)
             except curses.error:
                 pass
         try:
             curses.curs_set(1)
-            screen.move(min(height - 3, 4 + cy - offset), 1 + cx)
+            screen.move(min(height - 3, input_y + cy - offset), input_x + cx)
         except curses.error:
             pass
         screen.refresh()
-        try:
-            key = screen.get_wch()
-        except curses.error:
-            continue
+        if send_now:
+            key, send_now = "\x07", False
+        else:
+            try:
+                key = screen.get_wch()
+            except curses.error:
+                continue
         if key == curses.KEY_MOUSE:
             event = mouse_event()
-            if event and event[0] == "select" and event[2] == height - 1:
+            if inline and event and event[0] == "select":
+                _, x, y, _ = event
+                if y == height - 4 and 3 <= x <= 10:
+                    key = "\x07"
+                elif input_y <= y < input_y + visible:
+                    target_y, target_x = offset + y - input_y, max(0, x - input_x)
+                    cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - target_x)))
+                elif y < height - 8:
+                    try:
+                        save_draft(path, message)
+                        curses.ungetmouse((0, x, y, 0, curses.BUTTON1_CLICKED))
+                    except (OSError, curses.error):
+                        note = "Could not leave editor; draft remains here."
+                        continue
+                    curses.curs_set(0)
+                    return "Draft saved."
+            elif event and event[0] == "select" and event[2] == height - 1:
                 key = "\x07" if 2 <= event[1] <= 9 else "\x1b" if 12 <= event[1] <= 19 else key
         if key == "\x1b":
             try:
@@ -312,7 +370,7 @@ def compose(screen, args, row):
                 note = "Cannot save draft. Copy your text before closing."
                 continue
             curses.curs_set(0)
-            return "Draft saved. Press m to continue."
+            return "Draft saved. Click the message box to continue."
         if key == "\x07":
             if not message.strip():
                 note = "Write a message before sending."
@@ -339,6 +397,9 @@ def compose(screen, args, row):
             cursor = max(0, cursor - 1)
         elif key == curses.KEY_RIGHT:
             cursor = min(len(message), cursor + 1)
+        elif key in (curses.KEY_UP, curses.KEY_DOWN):
+            target_y = max(0, cy + (-1 if key == curses.KEY_UP else 1))
+            cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - cx)))
         elif key == curses.KEY_HOME:
             cursor = message.rfind("\n", 0, cursor) + 1
         elif key == curses.KEY_END:
@@ -419,7 +480,7 @@ def display(screen, args):
             purpose_lines[-1] = "… Enter for full purpose."
         purpose_extra = max(0, len(purpose_lines) - 1)
         # Keep selected-task instructions visible even when the task list is long.
-        visible = max(1, height - 20 - purpose_extra)
+        visible = max(1, height - 24 - purpose_extra)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
@@ -445,7 +506,12 @@ def display(screen, args):
                 put(detail_y + 5 + purpose_extra, "… Press Enter for the full task details.", bold=True)
             put(detail_y + 6 + purpose_extra, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
             put(detail_y + 7 + purpose_extra, current["pr"] or "No pull request", underline=bool(current["pr"]))
-            put(detail_y + 8 + purpose_extra, "[ Message orchestrator · m ]", bold=True)
+            try:
+                path = draft_path(args, current)
+                draft = path.read_text() if path.exists() else ""
+                draw_message_box(screen, current, draft)
+            except OSError:
+                put(height - 7, "Cannot read saved draft.", 1)
         if notice:
             put(height - 2, notice, bold=True)
         if warnings:
@@ -473,13 +539,16 @@ def display(screen, args):
         elif key in (10, 13, curses.KEY_ENTER) and current:
             notice = show_details(screen, current, args) or ""
         elif key == ord("m") and current:
-            notice = compose(screen, args, current)
+            notice = compose(screen, args, current, inline=True)
         elif key == curses.KEY_MOUSE:
             event = mouse_event()
             if event:
                 kind, x, y, delta = event
                 if kind == "wheel":
                     selected = max(0, min(len(rows) - 1, selected + delta))
+                elif current and height - 8 <= y < height - 2:
+                    notice = compose(screen, args, current, inline=True,
+                                     send_now=y == height - 4 and 3 <= x <= 10)
                 else:
                     index = clicked_row(x, y, width, offset, visible, len(rows), selected)
                     is_preview = y == 6 + selected - offset
@@ -494,8 +563,6 @@ def display(screen, args):
                             notice = show_details(screen, rows[index], args) or ""
                     elif current and y == detail_y + 7 + purpose_extra and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
                         open_pr(current["pr"])
-                    elif current and y == detail_y + 8 + purpose_extra and 1 <= x <= 28:
-                        notice = compose(screen, args, current)
                     elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6 + purpose_extra:
                         notice = show_details(screen, current, args) or ""
 

@@ -38,7 +38,7 @@ Add `--offline` to skip live Herdr queries and disable messaging. The board neve
 
 ## Message the orchestrator
 
-Select a task and press **m**, or click **Message orchestrator** in its detail area. Type your message; Enter adds a line, Ctrl-G or the Send button submits it, and Esc/Back saves it for later. Left/right, Home/End, Backspace, and Delete edit text. The board attaches the selected task ID, workspace, repository, and PR as routing context, then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
+Select a task and click the message box in the bottom detail panel to type there; **m** also focuses it. The selected task stays visible while you write. Enter adds a line, Ctrl-G or Send submits, and Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The expanded detail screen also offers a full-screen composer. The board attaches the selected task ID, workspace, repository, and PR as routing context, then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
 
 Drafts are saved privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Successful delivery clears the draft. Busy/blocked or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
 
