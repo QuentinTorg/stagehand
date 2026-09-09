@@ -241,7 +241,14 @@ def display(screen, args):
         attention = sum(bool(row["action"]) for row in rows)
         put(0, "STAGEHAND  /  WORKSPACE STATUS", bold=True)
         put(1, f"{attention} need your attention   ·   {sum(r['color'] == 2 for r in rows)} in progress   ·   {sum(r['color'] == 3 for r in rows)} complete", bold=True)
-        put(2, "Red: needs you   Yellow: ongoing   Green: handoff complete", color=0)
+        legend_x = 1
+        for label, color in (("● Needs you", 1), ("● Ongoing", 2), ("● Handoff complete", 3)):
+            try:
+                screen.addnstr(2, legend_x, label, max(0, width - legend_x - 1),
+                               curses.color_pair(color) if curses.has_colors() else 0)
+            except curses.error:
+                pass
+            legend_x += len(label) + 3
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
         # Keep selected-task instructions visible even when the task list is long.
