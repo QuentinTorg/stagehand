@@ -2,7 +2,7 @@
 
 A read-only terminal pane beside the orchestrator conversation. It renders existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-The board shows workspace names, repository, workflow stage, completed review count, expected next actor, PR URLs, and a human attention queue. Green means orchestration is complete, including a finalized PR awaiting human merge. An old record's save age and unavailable live state remain visible; runtime `idle` or `done` never advances workflow state. Records are displayed in filename order, archived/cleaned tasks are omitted, and invalid records produce visible warnings.
+The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -26,7 +26,7 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Arrow keys or j/k scroll; Page Up/Down page; r refreshes; q closes. Text wraps to pane width. A plain-text snapshot is also available:
+Arrow keys or j/k select a workspace; Page Up/Down page; a jumps to the next human action; Enter opens full task details; r refreshes; q closes. Narrow panes show fewer table columns while full details remain available. A plain-text snapshot is also available:
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once

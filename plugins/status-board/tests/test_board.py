@@ -18,29 +18,40 @@ class BoardTests(unittest.TestCase):
 
     def test_live_done_does_not_complete_review(self):
         task = self.task()
-        rows, action = board.task_lines(task, 0, [{"workspace_id": "w1", "label": "new-name"}],
+        row = board.task_summary(task, 0, [{"workspace_id": "w1", "label": "new-name"}],
             [{"name": "reviewer", "workspace_id": "w1", "agent_status": "done"}], 5)
-        self.assertEqual(rows[0], ("● new-name", 2))
-        self.assertIn("reviewing", rows[1][0])
-        self.assertIn("2 reviews completed", rows[1][0])
-        self.assertIn("Reviewer done → reviewer", rows[1][0])
-        self.assertIsNone(action)
+        self.assertEqual((row["label"], row["color"]), ("new-name", 2))
+        self.assertIn("reviewing r3", row["stage"])
+        self.assertIn("Reviewer done → reviewer", row["roles"])
+        self.assertIsNone(row["action"])
         self.assertEqual(task["workspace"]["label"], "old-name")
 
     def test_completed_pr_is_green_with_human_handoff(self):
-        rows, action = board.task_lines(self.task("ready-for-team-review"), 0, None, None, 5)
-        self.assertEqual(rows[0][1], 3)
-        self.assertIn("Review the ready PR", action)
+        row = board.task_summary(self.task("ready-for-team-review"), 0, None, None, 5)
+        self.assertEqual(row["color"], 3)
+        self.assertIn("Review the ready PR", row["action"])
 
     def test_attention_and_missing_identity(self):
         task = self.task()
         task["state"].update(attention_required=True, attention_reason="Approve the plan")
-        rows, action = board.task_lines(task, 0, [],
+        row = board.task_summary(task, 0, [],
             [{"name": "reviewer", "workspace_id": "other", "agent_status": "working"}], 5)
-        self.assertEqual(rows[0][1], 1)
-        self.assertIn("workspace missing", rows[0][0])
-        self.assertIn("Reviewer missing → you", rows[1][0])
-        self.assertIn("Approve the plan", action)
+        self.assertEqual(row["color"], 1)
+        self.assertIn("workspace missing", row["label"])
+        self.assertIn("Reviewer missing → you", row["roles"])
+        self.assertIn("Approve the plan", row["action"])
+
+    def test_decisions_precede_completed_handoffs_and_passive_work(self):
+        passive = self.task()
+        passive["task_id"] = "passive"
+        ready = self.task("ready-for-team-review")
+        ready["task_id"] = "ready"
+        decision = self.task("decision-required")
+        decision["task_id"] = "decision"
+        decision["state"].update(attention_required=True, attention_reason="Choose scope")
+        with patch.object(board, "read_tasks", return_value=([(t, 0) for t in [passive, ready, decision]], [])):
+            rows, _ = board.snapshot(Path("/unused"), offline=True)
+        self.assertEqual([row["id"] for row in rows], ["decision", "ready", "passive"])
 
     def test_bad_record_does_not_hide_other_tasks_or_modify_files(self):
         with tempfile.TemporaryDirectory() as directory:
