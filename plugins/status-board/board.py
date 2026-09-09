@@ -218,9 +218,26 @@ def detail_lines(row, width):
                ("YOUR ACTION: " + action, 1 if row["action"] else 0, None),
                (row["stage"] + " · " + row["roles"], 0, None),
                (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
-    entries += [(url, 0, url) for url in row["prs"]] or [("No pull request", 0, None)]
-    return [(line, color, url) for text, color, url in entries
-            for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
+    lines = [(line, color, []) for text, color, _ in entries
+             for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
+    text, links = "PRs: ", []
+    for url in row["prs"]:
+        parts = urlsplit(url).path.rstrip("/").split("/")
+        label = parts[-3] + "#" + parts[-1]
+        if links:
+            text += ", "
+        links.append((len(text), len(text) + len(label), url))
+        text += label
+    # Retain exact URL targets and character spans when compact labels wrap.
+    offset = 0
+    for line in textwrap.wrap(text if links else "No pull request", max(1, width - 4)):
+        start = text.find(line, offset) if links else 0
+        end = start + len(line)
+        spans = [(max(left, start) - start, min(right, end) - start, url)
+                 for left, right, url in links if left < end and right > start]
+        lines.append((line, 0, spans))
+        offset = end
+    return lines
 
 
 def mouse_event():
@@ -559,11 +576,15 @@ def display(screen, args):
         if current:
             scroll_hint = f" · {detail_offset + 1}–{min(len(details), detail_offset + detail_height)}/{len(details)} · wheel or [ ] to scroll" if len(details) > detail_height else ""
             put(detail_y + 1, current["label"] + scroll_hint, current["color"], bold=True)
-            for i, (line, color, url) in enumerate(details[detail_offset:detail_offset + detail_height]):
+            for i, (line, color, links) in enumerate(details[detail_offset:detail_offset + detail_height]):
                 y = detail_y + 2 + i
-                put(y, line, color, bold=bool(color), underline=bool(url))
-                if url:
-                    detail_links[y] = (url, len(line))
+                put(y, line, color, bold=bool(color))
+                detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
+                for left, right, _ in links:
+                    try:
+                        screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
+                    except curses.error:
+                        pass
             try:
                 path = draft_path(args, current)
                 draft = path.read_text() if path.exists() else ""
@@ -620,8 +641,11 @@ def display(screen, args):
                                 if left <= x < right:
                                     open_pr(url)
                                     break
-                    elif kind == "select" and y in detail_links and 1 <= x <= detail_links[y][1]:
-                        open_pr(detail_links[y][0])
+                    elif kind == "select":
+                        for left, right, url in detail_links.get(y, []):
+                            if left <= x < right:
+                                open_pr(url)
+                                break
 
 
 def main():

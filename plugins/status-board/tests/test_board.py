@@ -26,9 +26,14 @@ class BoardTests(unittest.TestCase):
         self.assertIn("#12, #12, #34", board.table_line(row, 140, 20))
         self.assertEqual(board.pr_labels(row), [("#12", public), ("#12", enterprise), ("#34", stacked)])
         lines = board.detail_lines(row, 40)
-        for url in row["prs"]:
-            self.assertEqual("".join(line for line, _, target in lines if target == url), url)
+        for url, label in [(public, "project#12"), (enterprise, "project#12"), (stacked, "meta#34")]:
+            self.assertEqual("".join(line[left:right] for line, _, spans in lines
+                                     for left, right, target in spans if target == url), label)
         self.assertTrue(all(len(line) <= 36 for line, _, _ in lines))
+        self.assertEqual(board.detail_lines(row, 140)[-1][0], "PRs: project#12, project#12, meta#34")
+        narrow = board.detail_lines(row, 10)
+        for url in row["prs"]:
+            self.assertTrue(any(target == url for _, _, spans in narrow for _, _, target in spans))
 
     def test_pr_collection_list_and_absent_prs(self):
         url = "https://github.com/team/project/pull/1"
