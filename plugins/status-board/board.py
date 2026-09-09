@@ -180,10 +180,14 @@ def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
 
-def columns(width):
+def columns(width, pr_width=9):
     name = min(48, width // 3)
     stage = min(36, width // 4)
-    return name, stage, max(10, width - name - stage - 15)
+    return name, stage, max(10, width - name - stage - pr_width - 6)
+
+
+def pr_labels(row):
+    return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1], url) for url in row.get("prs", [])]
 
 
 def open_pr(url):
@@ -197,15 +201,12 @@ def open_pr(url):
     return False
 
 
-def table_line(row, width):
+def table_line(row, width, pr_width=9):
     if width < 100:
         name_width = max(12, width // 2)
         return f"{clipped(row['label'], name_width):<{name_width}}  {row['stage']}"
-    name_width, stage_width, roles_width = columns(width)
-    pr_width = 9
-    pr = "#" + row["pr"].rstrip("/").split("/")[-1] if row["pr"] else "—"
-    if len(row.get("prs", [])) > 1:
-        pr = f"{len(row['prs'])} PRs"
+    name_width, stage_width, roles_width = columns(width, pr_width)
+    pr = ", ".join(label for label, _ in pr_labels(row)) or row.get("pr") or "—"
     return (f"{clipped(row['label'], name_width):<{name_width}}  "
             f"{clipped(row['stage'], stage_width):<{stage_width}}  "
             f"{clipped(row['roles'], roles_width):<{roles_width}}  {clipped(pr, pr_width)}")
@@ -517,24 +518,33 @@ def display(screen, args):
                 pass
             legend_x += len(label) + 3
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
-        put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
+        # Share column widths across rows while reserving room for individual PR links.
+        pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in rows), default=9)))
+        put(4, "    " + table_line(header, max(1, width - 6), pr_width), bold=True)
+        table_links = {}
         # Keep selected-task instructions visible even when the task list is long.
         visible = max(1, (height - 17) // 2)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
             y = 5 + i - offset + (1 if i > selected else 0)
-            put(y, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
+            put(y, f"{marker} ● {table_line(row, max(1, width - 6), pr_width)}", row["color"], highlight=i == selected)
             if width - 6 >= 100 and row["prs"]:
-                pr_x = 5 + sum(columns(width - 6)) + 6
-                label = f"{len(row['prs'])} PRs" if len(row["prs"]) > 1 else "#" + row["pr"].rstrip("/").split("/")[-1]
-                try:
-                    style = curses.A_UNDERLINE | (curses.color_pair(row["color"]) if curses.has_colors() else 0)
-                    if i == selected:
-                        style |= curses.A_REVERSE
-                    screen.addnstr(y, pr_x, label, max(0, min(9, width - pr_x - 1)), style)
-                except curses.error:
-                    pass
+                pr_x = 5 + sum(columns(width - 6, pr_width)) + 6
+                end = min(pr_x + pr_width, width - 2)
+                for label, url in pr_labels(row):
+                    length = min(len(label), end - pr_x)
+                    if length <= 0:
+                        break
+                    try:
+                        style = curses.A_UNDERLINE | (curses.color_pair(row["color"]) if curses.has_colors() else 0)
+                        if i == selected:
+                            style |= curses.A_REVERSE
+                        screen.addnstr(y, pr_x, label, length, style)
+                        table_links.setdefault(y, []).append((pr_x, pr_x + length, url))
+                    except curses.error:
+                        pass
+                    pr_x += len(label) + 2
             if i == selected:
                 put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
         if not rows:
@@ -605,15 +615,11 @@ def display(screen, args):
                     is_preview = y == 6 + selected - offset
                     if index is not None:
                         selected = index
-                        table_width = max(1, width - 6)
-                        pr_x = 5 + sum(columns(table_width)) + 6
-                        if not is_preview and table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
-                            if kind == "select":
-                                if len(rows[index]["prs"]) == 1:
-                                    open_pr(rows[index]["pr"])
-                                else:
-                                    detail_task = rows[index]["id"]
-                                    detail_offset = next(i for i, (_, _, url) in enumerate(detail_lines(rows[index], width)) if url)
+                        if not is_preview and kind == "select":
+                            for left, right, url in table_links.get(y, []):
+                                if left <= x < right:
+                                    open_pr(url)
+                                    break
                     elif kind == "select" and y in detail_links and 1 <= x <= detail_links[y][1]:
                         open_pr(detail_links[y][0])
 

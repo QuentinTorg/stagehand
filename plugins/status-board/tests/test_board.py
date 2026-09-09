@@ -23,7 +23,8 @@ class BoardTests(unittest.TestCase):
                     stacked_pull_request={"url": stacked})
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual(row["prs"], [public, enterprise, stacked])
-        self.assertIn("3 PRs", board.table_line(row, 140))
+        self.assertIn("#12, #12, #34", board.table_line(row, 140, 20))
+        self.assertEqual(board.pr_labels(row), [("#12", public), ("#12", enterprise), ("#34", stacked)])
         lines = board.detail_lines(row, 40)
         for url in row["prs"]:
             self.assertEqual("".join(line for line, _, target in lines if target == url), url)
