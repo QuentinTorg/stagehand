@@ -410,8 +410,14 @@ def display(screen, args):
             legend_x += len(label) + 3
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
+        purpose_lines = textwrap.wrap("PURPOSE: " + current["objective"], max(1, width - 4)) if current else []
+        purpose_limit = max(1, height // 3)
+        if len(purpose_lines) > purpose_limit:
+            purpose_lines = purpose_lines[:purpose_limit]
+            purpose_lines[-1] = "… Enter for full purpose."
+        purpose_extra = max(0, len(purpose_lines) - 1)
         # Keep selected-task instructions visible even when the task list is long.
-        visible = max(1, height - 20)
+        visible = max(1, height - 20 - purpose_extra)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
@@ -426,17 +432,18 @@ def display(screen, args):
         put(detail_y, "─" * max(0, width - 3))
         if current:
             put(detail_y + 1, current["label"], current["color"], bold=True)
-            put(detail_y + 2, "PURPOSE: " + current["objective"])
+            for i, line in enumerate(purpose_lines):
+                put(detail_y + 2 + i, line)
             action = current["action"] or f"No action needed from you. Next: {current['next']}."
             prefix = "YOUR ACTION: " if current["action"] else "STATUS: "
             wrapped = textwrap.wrap(prefix + action, max(1, width - 4))
             for i, line in enumerate(wrapped[:3]):
-                put(detail_y + 3 + i, line, 1 if current["action"] else 0, bold=bool(current["action"]))
+                put(detail_y + 3 + purpose_extra + i, line, 1 if current["action"] else 0, bold=bool(current["action"]))
             if len(wrapped) > 3:
-                put(detail_y + 5, "… Press Enter for the full task details.", bold=True)
-            put(detail_y + 6, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
-            put(detail_y + 7, current["pr"] or "No pull request", underline=bool(current["pr"]))
-            put(detail_y + 8, "[ Message orchestrator · m ]", bold=True)
+                put(detail_y + 5 + purpose_extra, "… Press Enter for the full task details.", bold=True)
+            put(detail_y + 6 + purpose_extra, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
+            put(detail_y + 7 + purpose_extra, current["pr"] or "No pull request", underline=bool(current["pr"]))
+            put(detail_y + 8 + purpose_extra, "[ Message orchestrator · m ]", bold=True)
         if notice:
             put(height - 2, notice, bold=True)
         if warnings:
@@ -483,11 +490,11 @@ def display(screen, args):
                                 open_pr(rows[index]["pr"])
                         elif kind == "open":
                             notice = show_details(screen, rows[index], args) or ""
-                    elif current and y == detail_y + 7 and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
+                    elif current and y == detail_y + 7 + purpose_extra and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
                         open_pr(current["pr"])
-                    elif current and y == detail_y + 8 and 1 <= x <= 28:
+                    elif current and y == detail_y + 8 + purpose_extra and 1 <= x <= 28:
                         notice = compose(screen, args, current)
-                    elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6:
+                    elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6 + purpose_extra:
                         notice = show_details(screen, current, args) or ""
 
 
