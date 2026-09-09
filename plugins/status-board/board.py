@@ -240,12 +240,18 @@ def controller_lines(controller, width):
                 for line in controller["output"].splitlines()]
     lines = []
     for line in content:
-        # Terminal rules are decoration; wrapping them would bury the response.
+        color = 0
+        # Style the terminal's own recap; do not infer or generate a new summary.
+        if line.strip(" ─━-_").casefold() == "conversation recap":
+            line, color = "CONVERSATION RECAP", 10
+        # Repeated terminal rules crowd out prose in the smaller preview panel.
         if line.strip() and set(line.strip()) <= set("─━-_"):
-            wrapped = [line[:max(1, width - 4)]]
+            wrapped = [""]
         else:
             wrapped = textwrap.wrap(line, max(1, width - 4), replace_whitespace=False) or [""]
-        lines.extend((text, 0, []) for text in wrapped)
+        for text in wrapped:
+            if text or not lines or lines[-1][0]:
+                lines.append((text, color, []))
     return lines
 
 
@@ -417,6 +423,8 @@ def draw_message_box(screen, row, message, active=False):
             screen.addnstr(top + i, 1, clipped(text, max(1, width - 3)), max(0, width - 2))
         except curses.error:
             pass
+    draw_button(screen, top + 4, 3, "  Send  ", active=True)
+    draw_button(screen, top + 4, 12, "  x Clear  ")
 
 
 def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
@@ -588,23 +596,36 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
 
+def draw_button(screen, y, x, text, active=False):
+    style = curses.A_REVERSE | curses.A_BOLD
+    try:
+        if curses.has_colors():
+            style = curses.color_pair(8 if active else 9) | curses.A_BOLD
+    except curses.error:
+        pass  # Monochrome/test terminals still get a filled button.
+    try:
+        height, width = screen.getmaxyx()
+        if y >= height - 1 or x + len(text) > width - 1:
+            return False
+        screen.addnstr(y, x, text, len(text), style)
+        return True
+    except curses.error:
+        return False
+
+
 def draw_actions(screen, top, width, general):
     actions = [("task", "Task details"), ("controller", "Orchestrator / new task"),
                ("workspace", "Open workspace"), ("open-controller", "Open orchestrator")]
     hits, x, y = [], 1, top
     for action, label in actions:
-        text = "[ " + label + " ]"
+        text = "  " + label + "  "
         if x > 1 and x + len(text) > width - 1:
             x, y = 1, y + 1
         if len(text) > width - 2:
             continue
-        try:
-            style = curses.A_REVERSE if action == ("controller" if general else "task") else curses.A_BOLD
-            screen.addnstr(y, x, text, len(text), style)
+        if draw_button(screen, y, x, text, action == ("controller" if general else "task")):
             hits.append((y, x, x + len(text), action))
-        except curses.error:
-            pass
-        x += len(text) + 1
+        x += len(text) + (3 if action == "controller" else 1)
     return hits, y + 1
 
 
@@ -633,6 +654,11 @@ def display_loop(screen, args, executor):
             curses.init_pair(number, color, -1)
         for number, color in enumerate((curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN), 5):
             curses.init_pair(number, curses.COLOR_WHITE, color)
+        # ANSI palette slots inherit the terminal theme; cyan denotes UI controls,
+        # leaving red/yellow/green reserved for workflow status.
+        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        curses.init_pair(10, curses.COLOR_CYAN, -1)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice = ""
@@ -751,8 +777,8 @@ def display_loop(screen, args, executor):
         detail_links = {}
         if details:
             scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)} · [ ] scroll" if len(details) > detail_height else ""
-            title = f"Orchestrator: {controller['status']} · Recent terminal output" if viewing_controller else current["label"]
-            color = (1 if controller["status"] in {"blocked", "unavailable"} else 0) if viewing_controller else current["color"]
+            title = f"ORCHESTRATOR · {controller['status']} · Recent output" if viewing_controller else current["label"]
+            color = (1 if controller["status"] in {"blocked", "unavailable"} else 10) if viewing_controller else current["color"]
             put(title_y, title + scroll_hint, color, bold=True)
             for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
                 y = title_y + 1 + i

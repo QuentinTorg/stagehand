@@ -54,6 +54,8 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Appearance
 
+Filled buttons distinguish actions from text: cyan marks the active view and Send, while other actions use a neutral background. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
+
 Font, text/background defaults, and ANSI colors come from the hosting terminal. The board sets no fixed RGB palette or font. Herdr's separate UI palette is not exposed by its plugin API, so a custom Herdr UI theme may differ from the terminal colors. Status meaning stays human-oriented: red needs you, yellow is ongoing, green is a completed workflow handoff (not Herdr's transient unseen-response state).
 
 ## Validation

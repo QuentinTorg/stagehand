@@ -127,7 +127,9 @@ class BoardTests(unittest.TestCase):
 
     def test_actions_wrap_and_hit_targets_do_not_overlap(self):
         for width in (40, 80, 140):
-            actions, bottom = board.draw_actions(Mock(), 8, width, True)
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, width)
+            actions, bottom = board.draw_actions(screen, 8, width, True)
             self.assertEqual(len(actions), 4)
             for y, left, right, _ in actions:
                 self.assertLess(y, bottom)
@@ -135,6 +137,27 @@ class BoardTests(unittest.TestCase):
             for i, (y, left, right, _) in enumerate(actions):
                 for other_y, other_left, other_right, _ in actions[i + 1:]:
                     self.assertTrue(y != other_y or right <= other_left or other_right <= left)
+
+    def test_buttons_have_filled_styles_without_brackets(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (38, 140)
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "color_pair", side_effect=lambda number: number
+        ):
+            board.draw_actions(screen, 8, 140, True)
+        calls = [call.args for call in screen.addnstr.call_args_list]
+        self.assertTrue(all("[" not in args[2] for args in calls))
+        self.assertEqual(calls[1][-1], 8 | board.curses.A_BOLD)
+        self.assertEqual(calls[0][-1], 9 | board.curses.A_BOLD)
+
+    def test_recap_heading_is_highlighted_without_dropping_prose(self):
+        controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n─ Conversation recap ───\n\nA useful summary.\n\n\n› Your prompt"}
+        lines = board.controller_lines(controller, 40)
+        self.assertIn(("CONVERSATION RECAP", 10, []), lines)
+        output = "\n".join(line for line, _, _ in lines)
+        for text in ("Tool output", "A useful summary.", "› Your prompt"):
+            self.assertIn(text, output)
+        self.assertNotIn("\n\n\n", output)
 
     def test_multiple_prs_preserve_hosts_and_ignore_historical_links(self):
         public = "https://github.com/team/project/pull/12"
