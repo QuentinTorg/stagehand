@@ -2,7 +2,7 @@ id = "quentintorg.stagehand-board"
 name = "Stagehand Status Board"
 version = "0.1.0"
 min_herdr_version = "0.8.2"
-description = "A persistent, read-only view of Stagehand tasks beside the orchestrator."
+description = "View Stagehand task progress and send task-specific messages to the orchestrator."
 platforms = ["linux", "macos"]
 
 [[panes]]

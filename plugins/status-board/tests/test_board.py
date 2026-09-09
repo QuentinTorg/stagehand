@@ -1,8 +1,9 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 spec = importlib.util.spec_from_file_location("board", Path(__file__).parents[1] / "board.py")
@@ -11,6 +12,90 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_composer_preserves_failed_message_then_restores_and_sends(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            screen = Mock()
+            screen.getmaxyx.return_value = (24, 80)
+            screen.get_wch.side_effect = list("Please investigate\nfirst") + ["\x07", "\x1b"]
+            with patch.object(board.curses, "curs_set"), patch.object(
+                board, "send_message", return_value=(False, "Busy; draft kept")
+            ) as send:
+                board.compose(screen, args, row)
+                self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
+            self.assertEqual(board.draft_path(args, row).read_text(), "Please investigate\nfirst")
+            screen.get_wch.side_effect = ["\x07"]
+            with patch.object(board.curses, "curs_set"), patch.object(
+                board, "send_message", return_value=(True, "Delivered")
+            ) as send:
+                self.assertEqual(board.compose(screen, args, row), "Delivered")
+                self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
+            self.assertFalse(board.draft_path(args, row).exists())
+
+    def test_objective_is_available_and_two_line_rows_are_clickable(self):
+        task = self.task()
+        task["objective"] = "Investigate reconnect failures without changing source."
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["objective"], task["objective"])
+        self.assertEqual(board.clicked_row(10, 6, 100, 0, 5, 10, 2), 0)
+        self.assertEqual(board.clicked_row(10, 7, 100, 0, 5, 10, 2), 1)
+
+    def test_send_preserves_exact_human_message_and_routes_only_to_controller(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        args = SimpleNamespace(offline=False, tasks=Path("/control/.orchestrator/tasks"))
+        response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+            "workspace_id": "control", "agent_status": "idle"}}}))
+        delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+        message = 'Please investigate this first.\nDo not implement yet: "scope".'
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+            board.subprocess, "run", side_effect=[response, delivered]
+        ) as run:
+            success, _ = board.send_message(args, row, message)
+        self.assertTrue(success)
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[1:4], ["agent", "prompt", "workflow_orchestrator"])
+        self.assertTrue(command[-1].endswith("Human request:\n" + message))
+        self.assertIn('"task": "example"', command[-1])
+
+    def test_busy_or_wrong_workspace_never_receives_prompt(self):
+        args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        for workspace, status in [("control", "working"), ("control", "blocked"), ("other", "idle")]:
+            response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+                "workspace_id": workspace, "agent_status": status}}}))
+            with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+                board.subprocess, "run", return_value=response
+            ) as run:
+                success, _ = board.send_message(args, row, "Hello")
+            self.assertFalse(success)
+            self.assertEqual(run.call_count, 1)
+
+    def test_uncertain_delivery_is_not_retried(self):
+        args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+            "workspace_id": "control", "agent_status": "idle"}}}))
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+            board.subprocess, "run", side_effect=[response, board.subprocess.TimeoutExpired("herdr", 10)]
+        ) as run:
+            success, note = board.send_message(args, row, "Hello")
+        self.assertFalse(success)
+        self.assertIn("Check orchestrator before retrying", note)
+        self.assertEqual(run.call_count, 2)
+
+    def test_private_draft_survives_reopen_without_touching_task_records(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks")
+            path = board.draft_path(args, {"id": "../../example"})
+            board.save_draft(path, "Original\nmessage")
+            self.assertEqual(path.parent, Path(root) / "board-drafts")
+            self.assertEqual(path.read_text(), "Original\nmessage")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            board.save_draft(path, "Updated")
+            self.assertEqual(path.read_text(), "Updated")
+            self.assertFalse(args.tasks.exists())
+
     def test_mouse_clicks_map_only_visible_task_rows(self):
         self.assertEqual(board.clicked_row(10, 6, 100, 3, 5, 10), 4)
         for x, y in [(0, 6), (100, 6), (10, 4), (10, 10)]:

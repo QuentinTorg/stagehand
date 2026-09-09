@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Render saved coordination state without becoming another workflow controller."""
+"""Show saved task progress and route human messages to the orchestrator."""
 
 import argparse
 import curses
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 from urllib.parse import urlsplit
@@ -127,6 +129,8 @@ def task_summary(task, modified, workspaces, agents, now):
     elif stage == "ready-for-team-review":
         action = "Review the ready PR on GitHub; merge when satisfied."
     return {"id": str(task["task_id"]), "label": label, "color": color,
+            "objective": clean(task.get("objective")) or "No objective recorded.",
+            "workspace_id": workspace_id,
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if stage in COMPLETE else "Awaiting workflow update")}
@@ -193,11 +197,159 @@ def mouse_event():
     return None
 
 
-def clicked_row(x, y, width, offset, visible, count):
-    index = offset + y - 5
-    if 1 <= x < width - 1 and 5 <= y < 5 + visible and 0 <= index < count:
+def clicked_row(x, y, width, offset, visible, count, row_height=1):
+    index = offset + (y - 5) // row_height
+    if 1 <= x < width - 1 and 5 <= y < 5 + visible * row_height and 0 <= index < count:
         return index
     return None
+
+
+def draft_path(args, row):
+    identity = hashlib.sha256(row["id"].encode()).hexdigest()
+    return args.tasks.parent / "board-drafts" / (identity + ".txt")
+
+
+def save_draft(path, text):
+    # Atomic private drafts survive a display restart without touching task records.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
+        temporary.replace(path)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
+
+
+def send_message(args, row, message):
+    if args.offline or os.environ.get("HERDR_ENV") != "1":
+        return False, "Sending requires a live Herdr session. Draft kept."
+    context = {"task": row["id"], "workspace": row["label"],
+               "workspace_id": row["workspace_id"], "repository": row["repository"],
+               "pull_request": row["pr"], "task_directory": str(args.tasks)}
+    prompt = ("Human message from the Stagehand board. Interpret the human request using your normal workflow; "
+              "routing context is not evidence of a workflow transition.\n"
+              + "Routing context: " + json.dumps(context, ensure_ascii=False)
+              + "\n\nHuman request:\n" + message)
+    command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
+    try:
+        result = subprocess.run(command + ["get", "workflow_orchestrator"],
+                                capture_output=True, text=True, timeout=5, check=True)
+        agent = json.loads(result.stdout)["result"]["agent"]
+        if not os.environ.get("HERDR_WORKSPACE_ID") or agent.get("workspace_id") != os.environ["HERDR_WORKSPACE_ID"]:
+            return False, "Orchestrator is not in this control workspace. Draft kept."
+        if agent.get("agent_status") not in {"idle", "done"}:
+            return False, "Orchestrator is busy or blocked. Draft kept; send when it is ready."
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return False, "Cannot verify the orchestrator. Nothing sent; draft kept."
+    try:
+        # No automatic retry: a timeout may occur after Herdr has delivered the input.
+        result = subprocess.run(command + ["prompt", "workflow_orchestrator", prompt],
+                                capture_output=True, text=True, timeout=10, check=True)
+        if json.loads(result.stdout)["result"]["type"] == "agent_prompted":
+            return True, "Delivered to orchestrator (not yet processed)."
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass
+    return False, "Delivery unconfirmed. Check orchestrator before retrying; draft kept."
+
+
+def compose(screen, args, row):
+    path = draft_path(args, row)
+    try:
+        message = path.read_text() if path.exists() else ""
+    except OSError:
+        return "Cannot read saved draft; nothing sent."
+    cursor, note = len(message), "Ctrl-G sends · Esc keeps draft and returns · Enter adds a line"
+    while True:
+        height, width = screen.getmaxyx()
+        line_width = max(1, width - 4)
+        lines, positions = [""], []
+        for character in message:
+            positions.append((len(lines) - 1, len(lines[-1])))
+            if character == "\n":
+                lines.append("")
+            else:
+                lines[-1] += character
+                if len(lines[-1]) >= line_width:
+                    lines.append("")
+        positions.append((len(lines) - 1, len(lines[-1])))
+        cy, cx = positions[cursor]
+        visible = max(1, height - 7)
+        offset = max(0, cy - visible + 1)
+        screen.erase()
+        content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + row["label"]),
+                   (2, "Repository: " + row["repository"])]
+        content += [(4 + i, line) for i, line in enumerate(lines[offset:offset + visible])]
+        content += [(height - 2, note), (height - 1, " [ Send ]  [ Back ]")]
+        for y, text in content:
+            try:
+                screen.addnstr(y, 1, text, max(0, width - 2))
+            except curses.error:
+                pass
+        try:
+            curses.curs_set(1)
+            screen.move(min(height - 3, 4 + cy - offset), 1 + cx)
+        except curses.error:
+            pass
+        screen.refresh()
+        try:
+            key = screen.get_wch()
+        except curses.error:
+            continue
+        if key == curses.KEY_MOUSE:
+            event = mouse_event()
+            if event and event[0] == "select" and event[2] == height - 1:
+                key = "\x07" if 2 <= event[1] <= 9 else "\x1b" if 12 <= event[1] <= 19 else key
+        if key == "\x1b":
+            try:
+                save_draft(path, message)
+            except OSError:
+                note = "Cannot save draft. Copy your text before closing."
+                continue
+            curses.curs_set(0)
+            return "Draft saved. Press m to continue."
+        if key == "\x07":
+            if not message.strip():
+                note = "Write a message before sending."
+                continue
+            try:
+                save_draft(path, message)
+            except OSError:
+                note = "Cannot save draft. Nothing sent."
+                continue
+            success, note = send_message(args, row, message)
+            if success:
+                try:
+                    path.unlink()
+                except OSError:
+                    note += " Saved copy remains; do not resend."
+                curses.curs_set(0)
+                return note
+            continue
+        if key in (curses.KEY_BACKSPACE, "\x7f", "\b") and cursor:
+            message, cursor = message[:cursor - 1] + message[cursor:], cursor - 1
+        elif key == curses.KEY_DC:
+            message = message[:cursor] + message[cursor + 1:]
+        elif key == curses.KEY_LEFT:
+            cursor = max(0, cursor - 1)
+        elif key == curses.KEY_RIGHT:
+            cursor = min(len(message), cursor + 1)
+        elif key == curses.KEY_HOME:
+            cursor = message.rfind("\n", 0, cursor) + 1
+        elif key == curses.KEY_END:
+            end = message.find("\n", cursor)
+            cursor = len(message) if end < 0 else end
+        elif isinstance(key, str) and (key.isprintable() or key in ("\n", "\r")):
+            key = "\n" if key == "\r" else key
+            message, cursor = message[:cursor] + key + message[cursor:], cursor + len(key)
+        else:
+            continue
+        try:
+            save_draft(path, message)
+        except OSError:
+            note = "Draft save failed; keep this window open until saved."
 
 
 def display(screen, args):
@@ -215,6 +367,7 @@ def display(screen, args):
             curses.init_pair(number, color, -1)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
+    notice = ""
     while True:
         if time.monotonic() >= refresh_at:
             rows, warnings = snapshot(args.tasks, args.offline)
@@ -252,31 +405,38 @@ def display(screen, args):
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
         # Keep selected-task instructions visible even when the task list is long.
-        visible = max(1, height - 17)
+        row_height = 2
+        visible = max(1, (height - 19) // row_height)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
-            put(5 + i - offset, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
+            y = 5 + (i - offset) * row_height
+            put(y, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
+            put(y + 1, "    " + row["objective"])
         if not rows:
             put(5, "No readable active tasks." if warnings else "No active tasks.")
 
-        detail_y = min(5 + visible + 1, max(6, height - 10))
+        detail_y = 5 + visible * row_height + 1
         put(detail_y, "─" * max(0, width - 3))
         if current:
             put(detail_y + 1, current["label"], current["color"], bold=True)
+            put(detail_y + 2, "PURPOSE: " + current["objective"])
             action = current["action"] or f"No action needed from you. Next: {current['next']}."
             prefix = "YOUR ACTION: " if current["action"] else "STATUS: "
             wrapped = textwrap.wrap(prefix + action, max(1, width - 4))
             for i, line in enumerate(wrapped[:3]):
-                put(detail_y + 2 + i, line, 1 if current["action"] else 0, bold=bool(current["action"]))
+                put(detail_y + 3 + i, line, 1 if current["action"] else 0, bold=bool(current["action"]))
             if len(wrapped) > 3:
-                put(detail_y + 4, "… Press Enter for the full task details.", bold=True)
-            put(detail_y + 5, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
-            put(detail_y + 6, current["pr"] or "No pull request", underline=bool(current["pr"]))
+                put(detail_y + 5, "… Press Enter for the full task details.", bold=True)
+            put(detail_y + 6, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
+            put(detail_y + 7, current["pr"] or "No pull request", underline=bool(current["pr"]))
+            put(detail_y + 8, "[ Message orchestrator · m ]", bold=True)
+        if notice:
+            put(height - 2, notice, bold=True)
         if warnings:
             put(height - 2, "! " + " | ".join(warnings), 1)
         try:
-            screen.addnstr(height - 1, 0, " Click row: select · Click PR: browser · Wheel / ↑↓ scroll · Double-click / Enter details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m: message orchestrator · Click PR: browser · Wheel / ↑↓ select · Enter details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
@@ -296,7 +456,9 @@ def display(screen, args):
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["action"]), selected)
         elif key in (10, 13, curses.KEY_ENTER) and current:
-            show_details(screen, current)
+            notice = show_details(screen, current, args) or ""
+        elif key == ord("m") and current:
+            notice = compose(screen, args, current)
         elif key == curses.KEY_MOUSE:
             event = mouse_event()
             if event:
@@ -304,32 +466,34 @@ def display(screen, args):
                 if kind == "wheel":
                     selected = max(0, min(len(rows) - 1, selected + delta))
                 else:
-                    index = clicked_row(x, y, width, offset, visible, len(rows))
+                    index = clicked_row(x, y, width, offset, visible, len(rows), row_height)
                     if index is not None:
                         selected = index
                         table_width = max(1, width - 6)
                         pr_x = 5 + sum(columns(table_width)) + 6
-                        if table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
+                        if (y - 5) % row_height == 0 and table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
                             if kind == "select":
                                 open_pr(rows[index]["pr"])
                         elif kind == "open":
-                            show_details(screen, rows[index])
-                    elif current and y == detail_y + 6 and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
+                            notice = show_details(screen, rows[index], args) or ""
+                    elif current and y == detail_y + 7 and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
                         open_pr(current["pr"])
+                    elif current and y == detail_y + 8 and 1 <= x <= 28:
+                        notice = compose(screen, args, current)
                     elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6:
-                        show_details(screen, current)
+                        notice = show_details(screen, current, args) or ""
 
 
-def show_details(screen, row):
+def show_details(screen, row, args):
     """Keep long human-authored reasons accessible instead of silently truncating them."""
     offset = 0
     while True:
         height, width = screen.getmaxyx()
-        texts = [row["label"], "", "YOUR ACTION" if row["action"] else "STATUS",
+        texts = [row["label"], "PURPOSE", row["objective"], "", "YOUR ACTION" if row["action"] else "STATUS",
                  row["action"] or f"No action needed from you. Next: {row['next']}.", "",
                  row["stage"], row["roles"], row["repository"], row["pr"],
                  f"Record saved {row['saved']} ago. Workflow state is saved; runtime is observed."]
-        lines = [(line, i == 8 and bool(row["pr"])) for i, text in enumerate(texts)
+        lines = [(line, i == 10 and bool(row["pr"])) for i, text in enumerate(texts)
                  for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
         visible = max(1, height - 2)
         offset = min(offset, max(0, len(lines) - visible))
@@ -340,13 +504,15 @@ def show_details(screen, row):
             except curses.error:
                 pass
         try:
-            screen.addnstr(height - 1, 0, " [ Back ]  Wheel / ↑↓ scroll · Enter / Esc back", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " [ Back ]  [ Message orchestrator · m ]  Wheel / ↑↓ scroll", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
         key = screen.getch()
         if key in (10, 13, 27, ord("q"), curses.KEY_ENTER):
             return
+        if key == ord("m"):
+            return compose(screen, args, row)
         if key in (curses.KEY_DOWN, ord("j")):
             offset += 1
         elif key in (curses.KEY_UP, ord("k")):
@@ -359,6 +525,8 @@ def show_details(screen, row):
                     offset = max(0, offset + delta)
                 elif y == height - 1 and 1 <= x <= 8:
                     return
+                elif y == height - 1 and 11 <= x <= 37:
+                    return compose(screen, args, row)
                 elif 0 <= y < visible and offset + y < len(lines):
                     line, link = lines[offset + y]
                     if link and 1 <= x <= len(line):
@@ -382,6 +550,7 @@ def main():
             print("! " + warning)
         for row in rows:
             print(f"● {row['label']} | {row['stage']} | {row['roles']}")
+            print(f"  PURPOSE: {row['objective']}")
             if row["action"]:
                 print(f"  YOUR ACTION: {row['action']}")
             print(f"  {row['repository']} | {row['pr'] or 'No PR'} | saved {row['saved']} ago")

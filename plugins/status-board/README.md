@@ -1,8 +1,8 @@
 # Stagehand Status Board
 
-A read-only terminal pane beside the orchestrator conversation. It renders existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
+A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
+The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Each workspace includes a preview of its saved objective; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -34,7 +34,17 @@ Click a PR number or its full URL to open the recorded HTTPS link in your defaul
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
 ```
 
-Add `--offline` to skip live Herdr queries. The board makes only bounded inventory reads; it never prompts agents, reads transcripts, modifies records, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
+Add `--offline` to skip live Herdr queries and disable messaging. The board never modifies task records, reads transcripts, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
+
+## Message the orchestrator
+
+Select a task and press **m**, or click **Message orchestrator** in its detail area. Type your message; Enter adds a line, Ctrl-G or the Send button submits it, and Esc/Back saves it for later. Left/right, Home/End, Backspace, and Delete edit text. The board attaches the selected task ID, workspace, repository, and PR as routing context, then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
+
+Drafts are saved privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Successful delivery clears the draft. Busy/blocked or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
+
+## Appearance
+
+Font, text/background defaults, and ANSI colors come from the hosting terminal. The board sets no fixed RGB palette or font. Herdr's separate UI palette is not exposed by its plugin API, so a custom Herdr UI theme may differ from the terminal colors. Status meaning stays human-oriented: red needs you, yellow is ongoing, green is a completed workflow handoff (not Herdr's transient unseen-response state).
 
 ## Validation
 
