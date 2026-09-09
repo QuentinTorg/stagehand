@@ -293,13 +293,8 @@ def save_draft(path, text):
 def send_message(args, row, message):
     if args.offline or os.environ.get("HERDR_ENV") != "1":
         return False, "Sending requires a live Herdr session. Draft kept."
-    context = {"task": row["id"], "workspace": row["label"],
-               "workspace_id": row["workspace_id"], "repository": row["repository"],
-               "pull_request": row["pr"], "pull_requests": row["prs"], "task_directory": str(args.tasks)}
-    prompt = ("Human message from the Stagehand board. Interpret the human request using your normal workflow; "
-              "routing context is not evidence of a workflow transition.\n"
-              + "Routing context: " + json.dumps(context, ensure_ascii=False)
-              + "\n\nHuman request:\n" + message)
+    # The controller already owns the task record; send identity, not a duplicate brief.
+    prompt = f"Human message about {row['label']} (task: {row['id']}):\n\n{message}"
     command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
     try:
         result = subprocess.run(command + ["get", "workflow_orchestrator"],
