@@ -294,7 +294,8 @@ def send_message(args, row, message):
     if args.offline or os.environ.get("HERDR_ENV") != "1":
         return False, "Sending requires a live Herdr session. Draft kept."
     # The controller already owns the task record; send identity, not a duplicate brief.
-    prompt = f"Human message about {row['label']} (task: {row['id']}):\n\n{message}"
+    target = row['workspace_id'] or f"task: {row['id']}"
+    prompt = f"Human message about {row['label']} ({target}):\n\n{message}"
     command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
     try:
         result = subprocess.run(command + ["get", "workflow_orchestrator"],

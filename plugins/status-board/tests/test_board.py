@@ -166,7 +166,7 @@ class BoardTests(unittest.TestCase):
         self.assertTrue(success)
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[1:4], ["agent", "prompt", "workflow_orchestrator"])
-        self.assertEqual(command[-1], f"Human message about {row['label']} (task: example):\n\n{message}")
+        self.assertEqual(command[-1], f"Human message about {row['label']} (w1):\n\n{message}")
 
     def test_busy_or_wrong_workspace_never_receives_prompt(self):
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
