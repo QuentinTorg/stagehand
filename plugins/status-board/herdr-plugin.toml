@@ -1,0 +1,12 @@
+id = "quentintorg.stagehand-board"
+name = "Stagehand Status Board"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "A persistent, read-only view of Stagehand tasks beside the orchestrator."
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Stagehand status"
+placement = "split"
+command = ["python3", "board.py"]

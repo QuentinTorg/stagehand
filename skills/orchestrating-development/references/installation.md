@@ -63,6 +63,10 @@ herdr plugin list
 
 The generic plugin is bundled with Stagehand but reacts only to one-shot watches in explicitly configured consumer state directories. Stagehand uses task IDs as opaque keys and roles as metadata. The relay does not decide that work succeeded or change task state; existing role events remain the semantic handoff and fallback.
 
+## Orchestrator status pane
+
+Follow the [status-board setup](../../../plugins/status-board/README.md#setup) to install its Python dependency, link the bundled plugin, and open one board beside the existing orchestrator pane. Pass the exact configured task-record directory and reuse the pane on subsequent turns. This changes only the control workspace layout; it adds no worker instructions or permissions. If unavailable, the orchestrator retains its text dashboard fallback.
+
 ## Managed-role skills
 
 Stagehand does not vendor its managed-role skills. Clone [SkillDex](https://github.com/QuentinTorg/skilldex) and [Hunk](https://github.com/modem-dev/hunk), then install the required skill directories individually where product-worktree agents can discover them:

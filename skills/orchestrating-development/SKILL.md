@@ -164,7 +164,11 @@ After a verified merge or explicit human cleanup request, follow the complete gu
 
 ## Status reporting
 
-End every user-visible response with one row for each non-`cleaned` task; a newly cleaned task may appear once. Use exactly four columns:
+Keep one [status board](../../plugins/status-board/README.md) beside the orchestrator conversation, reusing it across turns. It reads the configured active task records and live Herdr inventory; workers have no additional reporting duties. Save reconciled progress, expected role, and human attention in the existing records. The board displays state but never validates or advances it.
+
+With the board running, keep chat focused on the requested result and actionable decisions; omit the repeated dashboard. If the board is unavailable or the human asks for a text inventory, use the fallback below.
+
+In a text inventory, include one row for each non-`cleaned` task; a newly cleaned task may appear once. Use exactly four columns:
 
 | Workspace / work item | Stage | Agents | PR |
 | --- | --- | --- | --- |
