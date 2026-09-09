@@ -11,6 +11,33 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_mouse_clicks_map_only_visible_task_rows(self):
+        self.assertEqual(board.clicked_row(10, 6, 100, 3, 5, 10), 4)
+        for x, y in [(0, 6), (100, 6), (10, 4), (10, 10)]:
+            self.assertIsNone(board.clicked_row(x, y, 100, 3, 5, 10))
+        self.assertIsNone(board.clicked_row(10, 9, 100, 3, 5, 6))
+
+    def test_mouse_reports_clicks_and_wheel_direction(self):
+        for flag, expected in [(board.curses.BUTTON1_CLICKED, "select"),
+                               (board.curses.BUTTON1_DOUBLE_CLICKED, "open"),
+                               (board.curses.BUTTON4_PRESSED, "wheel")]:
+            with patch.object(board.curses, "getmouse", return_value=(0, 10, 6, 0, flag)):
+                event = board.mouse_event()
+                self.assertEqual(event[0], expected)
+                if expected == "wheel":
+                    self.assertEqual(event[3], -1)
+
+    def test_pr_links_preserve_public_and_enterprise_urls(self):
+        with patch.object(board.webbrowser, "open", return_value=True) as launch:
+            for host in ["github.com", "github.carnegierobotics.com"]:
+                url = f"https://{host}/team/repo/pull/123"
+                self.assertTrue(board.open_pr(url))
+                launch.assert_called_with(url, new=2)
+            launch.reset_mock()
+            for url in ["file:///tmp/example", "javascript:alert(1)", "https://[broken"]:
+                self.assertFalse(board.open_pr(url))
+            launch.assert_not_called()
+
     def task(self, stage="reviewing"):
         return {"task_id": "example", "workspace": {"id": "w1", "label": "old-name"},
                 "agents": {"reviewer": "reviewer"}, "state": {"name": stage},

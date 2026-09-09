@@ -10,6 +10,8 @@ import subprocess
 import sys
 import textwrap
 import time
+from urllib.parse import urlsplit
+import webbrowser
 
 import yaml
 
@@ -145,18 +147,57 @@ def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
 
+def columns(width):
+    name = min(48, width // 3)
+    stage = min(36, width // 4)
+    return name, stage, max(10, width - name - stage - 15)
+
+
+def open_pr(url):
+    # Open the recorded host, never reconstruct an Enterprise URL as github.com.
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme == "https" and parsed.hostname and not parsed.username:
+            return webbrowser.open(url, new=2)
+    except (ValueError, webbrowser.Error):
+        pass
+    return False
+
+
 def table_line(row, width):
     if width < 100:
         name_width = max(12, width // 2)
         return f"{clipped(row['label'], name_width):<{name_width}}  {row['stage']}"
-    name_width = min(48, width // 3)
-    stage_width = min(36, width // 4)
+    name_width, stage_width, roles_width = columns(width)
     pr_width = 9
-    roles_width = max(10, width - name_width - stage_width - pr_width - 6)
     pr = "#" + row["pr"].rstrip("/").split("/")[-1] if row["pr"] else "—"
     return (f"{clipped(row['label'], name_width):<{name_width}}  "
             f"{clipped(row['stage'], stage_width):<{stage_width}}  "
             f"{clipped(row['roles'], roles_width):<{roles_width}}  {clipped(pr, pr_width)}")
+
+
+def mouse_event():
+    """Translate terminal mouse reports; unsupported mouse input leaves keys usable."""
+    try:
+        _, x, y, _, buttons = curses.getmouse()
+    except curses.error:
+        return None
+    if buttons & curses.BUTTON4_PRESSED:
+        return ("wheel", x, y, -1)
+    if buttons & getattr(curses, "BUTTON5_PRESSED", 0):
+        return ("wheel", x, y, 1)
+    if buttons & curses.BUTTON1_DOUBLE_CLICKED:
+        return ("open", x, y, 0)
+    if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+        return ("select", x, y, 0)
+    return None
+
+
+def clicked_row(x, y, width, offset, visible, count):
+    index = offset + y - 5
+    if 1 <= x < width - 1 and 5 <= y < 5 + visible and 0 <= index < count:
+        return index
+    return None
 
 
 def display(screen, args):
@@ -164,6 +205,9 @@ def display(screen, args):
         curses.curs_set(0)
     except curses.error:
         pass
+    # Request ordinary terminal mouse reporting; Herdr retains its own pane chrome.
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    curses.mouseinterval(150)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
@@ -182,12 +226,13 @@ def display(screen, args):
         selected_id = current["id"] if current else None
         screen.erase()
 
-        def put(y, text, color=0, bold=False, highlight=False):
+        def put(y, text, color=0, bold=False, highlight=False, underline=False):
             if not 0 <= y < height - 1:
                 return
             style = curses.color_pair(color) if curses.has_colors() else 0
             style |= curses.A_BOLD if bold else 0
             style |= curses.A_REVERSE if highlight else 0
+            style |= curses.A_UNDERLINE if underline else 0
             try:
                 screen.addnstr(y, 1, clipped(text, max(1, width - 3)), max(0, width - 2), style)
             except curses.error:
@@ -220,11 +265,11 @@ def display(screen, args):
             if len(wrapped) > 3:
                 put(detail_y + 4, "… Press Enter for the full task details.", bold=True)
             put(detail_y + 5, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
-            put(detail_y + 6, current["pr"] or "No pull request")
+            put(detail_y + 6, current["pr"] or "No pull request", underline=bool(current["pr"]))
         if warnings:
             put(height - 2, "! " + " | ".join(warnings), 1)
         try:
-            screen.addnstr(height - 1, 0, " ↑↓ select · Enter details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " Click row: select · Click PR: browser · Wheel / ↑↓ scroll · Double-click / Enter details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
@@ -245,6 +290,27 @@ def display(screen, args):
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["action"]), selected)
         elif key in (10, 13, curses.KEY_ENTER) and current:
             show_details(screen, current)
+        elif key == curses.KEY_MOUSE:
+            event = mouse_event()
+            if event:
+                kind, x, y, delta = event
+                if kind == "wheel":
+                    selected = max(0, min(len(rows) - 1, selected + delta))
+                else:
+                    index = clicked_row(x, y, width, offset, visible, len(rows))
+                    if index is not None:
+                        selected = index
+                        table_width = max(1, width - 6)
+                        pr_x = 5 + sum(columns(table_width)) + 6
+                        if table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
+                            if kind == "select":
+                                open_pr(rows[index]["pr"])
+                        elif kind == "open":
+                            show_details(screen, rows[index])
+                    elif current and y == detail_y + 6 and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
+                        open_pr(current["pr"])
+                    elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6:
+                        show_details(screen, current)
 
 
 def show_details(screen, row):
@@ -256,17 +322,18 @@ def show_details(screen, row):
                  row["action"] or f"No action needed from you. Next: {row['next']}.", "",
                  row["stage"], row["roles"], row["repository"], row["pr"],
                  f"Record saved {row['saved']} ago. Workflow state is saved; runtime is observed."]
-        lines = [line for text in texts for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
+        lines = [(line, i == 8 and bool(row["pr"])) for i, text in enumerate(texts)
+                 for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
         visible = max(1, height - 2)
         offset = min(offset, max(0, len(lines) - visible))
         screen.erase()
-        for y, line in enumerate(lines[offset:offset + visible]):
+        for y, (line, link) in enumerate(lines[offset:offset + visible]):
             try:
-                screen.addnstr(y, 1, line, max(0, width - 2))
+                screen.addnstr(y, 1, line, max(0, width - 2), curses.A_UNDERLINE if link else 0)
             except curses.error:
                 pass
         try:
-            screen.addnstr(height - 1, 0, " ↑↓ scroll · Enter / Esc back", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " [ Back ]  Wheel / ↑↓ scroll · Enter / Esc back", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
@@ -277,6 +344,18 @@ def show_details(screen, row):
             offset += 1
         elif key in (curses.KEY_UP, ord("k")):
             offset = max(0, offset - 1)
+        elif key == curses.KEY_MOUSE:
+            event = mouse_event()
+            if event:
+                kind, x, y, delta = event
+                if kind == "wheel":
+                    offset = max(0, offset + delta)
+                elif y == height - 1 and 1 <= x <= 8:
+                    return
+                elif 0 <= y < visible and offset + y < len(lines):
+                    line, link = lines[offset + y]
+                    if link and 1 <= x <= len(line):
+                        open_pr(row["pr"])
 
 
 def main():

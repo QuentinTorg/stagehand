@@ -26,7 +26,9 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Arrow keys or j/k select a workspace; Page Up/Down page; a jumps to the next human action; Enter opens full task details; r refreshes; q closes. Narrow panes show fewer table columns while full details remain available. A plain-text snapshot is also available:
+Click a task row to select it; double-click or click its action panel for full details. The mouse wheel moves through tasks or scrolls details; click Back to return. Arrow keys or j/k also select a workspace; Page Up/Down page; a jumps to the next human action; Enter opens details; r refreshes; q closes. Mouse input requires terminal mouse forwarding; keyboard controls remain available. Narrow panes show fewer table columns while full details remain available. A plain-text snapshot is also available:
+
+Click a PR number or its full URL to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
