@@ -13,12 +13,26 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_enter_sends_and_ctrl_j_inserts_newline(self):
+        for enter in ("\r", board.curses.KEY_ENTER):
+            with tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
+                row = board.task_summary(self.task(), 0, None, None, 5)
+                screen = Mock()
+                screen.getmaxyx.return_value = (38, 140)
+                screen.get_wch.side_effect = [*"First", "\n", *"Second", enter]
+                with patch.object(board.curses, "curs_set"), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    self.assertEqual(board.compose(screen, args, row, inline=True), "Delivered")
+                send.assert_called_once_with(args, row, "First\nSecond")
+
     def run_display(self, executor, keys):
         screen = Mock()
         screen.getmaxyx.return_value = (38, 140)
         screen.getch.side_effect = keys
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
-        with patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
+        with patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
             board.curses, "mouseinterval"
         ) as interval, patch.object(board.curses, "has_colors", return_value=False):
             board.display_loop(screen, args, executor)

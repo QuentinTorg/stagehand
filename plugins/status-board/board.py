@@ -329,7 +329,7 @@ def draw_message_box(screen, row, message, active=False):
     title = "Message orchestrator · " + row["label"]
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
-             "│ [ Send ] [ x Clear ]  " + ("Esc keeps draft" if active else "Click inside to type"),
+             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc keeps draft" if active else "Click inside to type"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ Tell the orchestrator what you need for this workspace…"
@@ -360,7 +360,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             return "Draft cleared; nothing sent."
         except OSError:
             return "Cannot clear saved draft; nothing sent."
-    cursor, note = len(message), "Ctrl-G sends · Esc keeps draft and returns · Enter adds a line"
+    cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
     while True:
         height, width = screen.getmaxyx()
         line_width = max(1, width - (6 if inline else 4))
@@ -448,7 +448,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                 continue
             curses.curs_set(0)
             return "Draft saved. Click the message box to continue."
-        if key == "\x07":
+        if key in ("\r", curses.KEY_ENTER, "\x07"):
             if not message.strip():
                 note = "Write a message before sending."
                 continue
@@ -489,8 +489,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         elif key == curses.KEY_END:
             end = message.find("\n", cursor)
             cursor = len(message) if end < 0 else end
-        elif isinstance(key, str) and (key.isprintable() or key in ("\n", "\r")):
-            key = "\n" if key == "\r" else key
+        elif isinstance(key, str) and (key.isprintable() or key == "\n"):
             message, cursor = message[:cursor] + key + message[cursor:], cursor + len(key)
         else:
             continue
@@ -509,6 +508,8 @@ def display(screen, args):
 
 
 def display_loop(screen, args, executor):
+    # Preserve Enter (CR) separately from Ctrl-J (LF) for send versus newline.
+    curses.nonl()
     try:
         curses.curs_set(0)
     except curses.error:
