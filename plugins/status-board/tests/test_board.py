@@ -1,4 +1,5 @@
 import importlib.util
+from concurrent.futures import Future
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -12,6 +13,35 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def run_display(self, executor, keys):
+        screen = Mock()
+        screen.getmaxyx.return_value = (38, 140)
+        screen.getch.side_effect = keys
+        args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
+        with patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
+            board.curses, "mouseinterval"
+        ) as interval, patch.object(board.curses, "has_colors", return_value=False):
+            board.display_loop(screen, args, executor)
+        interval.assert_called_once_with(0)
+        return screen
+
+    def test_slow_refresh_does_not_block_input_or_queue_more_work(self):
+        executor = Mock()
+        pending = Future()
+        executor.submit.return_value = pending
+        screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
+        self.assertFalse(pending.done())
+        executor.submit.assert_called_once_with(board.snapshot, Path("/unused/tasks"), True)
+        self.assertEqual(screen.getch.call_count, 4)
+
+    def test_failed_background_refresh_is_visible_without_crashing(self):
+        executor = Mock()
+        pending = Future()
+        pending.set_exception(OSError("inventory unavailable"))
+        executor.submit.return_value = pending
+        screen = self.run_display(executor, [-1, ord("q")])
+        self.assertTrue(any("Refresh failed" in str(call) for call in screen.addnstr.call_args_list))
+
     def test_multiple_prs_preserve_hosts_and_ignore_historical_links(self):
         public = "https://github.com/team/project/pull/12"
         enterprise = "https://github.carnegierobotics.com/team/project/pull/12"

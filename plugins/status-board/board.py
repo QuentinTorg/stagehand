@@ -2,6 +2,7 @@
 """Show saved task progress and route human messages to the orchestrator."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import curses
 import hashlib
 import json
@@ -477,13 +478,21 @@ def compose(screen, args, row, inline=False, send_now=False):
 
 
 def display(screen, args):
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
+    try:
+        return display_loop(screen, args, executor)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def display_loop(screen, args, executor):
     try:
         curses.curs_set(0)
     except curses.error:
         pass
     # Request ordinary terminal mouse reporting; Herdr retains its own pane chrome.
-    curses.mousemask(curses.ALL_MOUSE_EVENTS)
-    curses.mouseinterval(150)
+    curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0))
+    curses.mouseinterval(0)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
@@ -494,12 +503,21 @@ def display(screen, args):
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice = ""
+    pending = None
     detail_offset, detail_task = 0, None
     while True:
-        if time.monotonic() >= refresh_at:
-            rows, warnings = snapshot(args.tasks, args.offline)
+        # Only the UI thread touches curses; slow inventory reads never block input.
+        if pending is not None and pending.done():
+            selected_id = rows[min(selected, len(rows) - 1)]["id"] if rows else None
+            try:
+                rows, warnings = pending.result()
+            except Exception as error:
+                warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
+            pending = None
+        if pending is None and time.monotonic() >= refresh_at:
+            pending = executor.submit(snapshot, args.tasks, args.offline)
         height, width = screen.getmaxyx()
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
@@ -565,7 +583,7 @@ def display(screen, args):
             if i == selected:
                 put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
         if not rows:
-            put(5, "No readable active tasks." if warnings else "No active tasks.")
+            put(5, "Loading tasks…" if pending else "No readable active tasks." if warnings else "No active tasks.")
 
         detail_y = 5 + visible + 2
         put(detail_y, "─" * max(0, width - 3))
