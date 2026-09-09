@@ -159,6 +159,7 @@ def task_summary(task, modified, workspaces, agents, now):
     elif stage == "ready-for-team-review":
         action = "Review the ready PR on GitHub; merge when satisfied."
     return {"id": str(task["task_id"]), "label": label, "color": color,
+            "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
             "stage": details, "roles": roles, "repository": repository,
@@ -219,6 +220,8 @@ def detail_lines(row, width):
                ("YOUR ACTION: " + action, 1 if row["action"] else 0, None),
                (row["stage"] + " · " + row["roles"], 0, None),
                (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+    if row.get("location"):
+        entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
     lines = [(line, color, []) for text, color, _ in entries
              for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
     text, links = "PRs: ", []
@@ -326,7 +329,7 @@ def draw_message_box(screen, row, message, active=False):
     title = "Message orchestrator · " + row["label"]
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
-             "│ [ Send ]  " + ("Ctrl-G sends · Esc keeps draft" if active else "Click inside to type"),
+             "│ [ Send ] [ x Clear ]  " + ("Esc keeps draft" if active else "Click inside to type"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ Tell the orchestrator what you need for this workspace…"
@@ -345,12 +348,18 @@ def draw_message_box(screen, row, message, active=False):
             pass
 
 
-def compose(screen, args, row, inline=False, send_now=False):
+def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
     path = draft_path(args, row)
     try:
         message = path.read_text() if path.exists() else ""
     except OSError:
         return "Cannot read saved draft; nothing sent."
+    if clear_now:
+        try:
+            save_draft(path, "")
+            return "Draft cleared; nothing sent."
+        except OSError:
+            return "Cannot clear saved draft; nothing sent."
     cursor, note = len(message), "Ctrl-G sends · Esc keeps draft and returns · Enter adds a line"
     while True:
         height, width = screen.getmaxyx()
@@ -410,18 +419,25 @@ def compose(screen, args, row, inline=False, send_now=False):
                 _, x, y, _ = event
                 if y == height - 4 and 3 <= x <= 10:
                     key = "\x07"
+                elif y == height - 4 and 12 <= x <= 22:
+                    try:
+                        save_draft(path, "")
+                    except OSError:
+                        note = "Cannot clear saved draft."
+                        continue
+                    message, cursor = "", 0
+                    note = "Draft cleared; nothing sent."
                 elif input_y <= y < input_y + visible:
                     target_y, target_x = offset + y - input_y, max(0, x - input_x)
                     cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - target_x)))
-                elif y < height - 8:
+                elif not (1 <= x < width - 2 and height - 8 <= y < height - 2):
                     try:
                         save_draft(path, message)
-                        curses.ungetmouse((0, x, y, 0, curses.BUTTON1_CLICKED))
-                    except (OSError, curses.error):
+                    except OSError:
                         note = "Could not leave editor; draft remains here."
                         continue
-                    curses.curs_set(0)
-                    return "Draft saved."
+                    # Hand the click back directly; do not synthesize terminal input.
+                    return ("Draft saved; nothing sent.", event)
             elif event and event[0] == "select" and event[2] == height - 1:
                 key = "\x07" if 2 <= event[1] <= 9 else "\x1b" if 12 <= event[1] <= 19 else key
         if key == "\x1b":
@@ -441,6 +457,13 @@ def compose(screen, args, row, inline=False, send_now=False):
             except OSError:
                 note = "Cannot save draft. Nothing sent."
                 continue
+            try:
+                screen.move(height - 2, 0)
+                screen.clrtoeol()
+                screen.addnstr(height - 2, 1, "Sending to orchestrator…", max(0, width - 2))
+                screen.refresh()
+            except curses.error:
+                pass
             success, note = send_message(args, row, message)
             if success:
                 try:
@@ -504,6 +527,8 @@ def display_loop(screen, args, executor):
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice = ""
     pending = None
+    queued_mouse = None
+    last_refresh, refresh_started = None, None
     detail_offset, detail_task = 0, None
     while True:
         # Only the UI thread touches curses; slow inventory reads never block input.
@@ -515,9 +540,11 @@ def display_loop(screen, args, executor):
                 warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
+            last_refresh = time.monotonic()
             pending = None
         if pending is None and time.monotonic() >= refresh_at:
             pending = executor.submit(snapshot, args.tasks, args.offline)
+            refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
@@ -560,6 +587,18 @@ def display_loop(screen, args, executor):
         # Keep selected-task instructions visible even when the task list is long.
         visible = max(1, (height - 17) // 2)
         offset = max(0, selected - visible + 1)
+        health = "Loading" if last_refresh is None else f"Updated {age(last_refresh, time.monotonic())} ago"
+        if pending and time.monotonic() - refresh_started > 2:
+            health += " · refresh delayed"
+        if warnings:
+            health += " · check warning below"
+        put(3, f"┌─ Tasks {offset + 1 if rows else 0}–{min(len(rows), offset + visible)} of {len(rows)} · {health} " + "─" * width)
+        for track in range(visible + 1):
+            try:
+                thumb = round(selected * visible / max(1, len(rows) - 1))
+                screen.addnstr(5 + track, width - 2, "█" if track == thumb else "│", 1)
+            except curses.error:
+                pass
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
             y = 5 + i - offset + (1 if i > selected else 0)
@@ -618,8 +657,8 @@ def display_loop(screen, args, executor):
         except curses.error:
             pass
         screen.refresh()
-        key = screen.getch()
-        if key in (ord("q"), 27):
+        key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        if key == ord("q"):
             return
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
@@ -638,7 +677,7 @@ def display_loop(screen, args, executor):
         elif key == ord("m") and current:
             notice = compose(screen, args, current, inline=True)
         elif key == curses.KEY_MOUSE:
-            event = mouse_event()
+            event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
                 if kind == "wheel":
@@ -646,9 +685,12 @@ def display_loop(screen, args, executor):
                         detail_offset += delta
                     else:
                         selected = max(0, min(len(rows) - 1, selected + delta))
+                elif kind == "select" and x == width - 2 and 5 <= y <= 5 + visible and rows:
+                    selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif current and height - 8 <= y < height - 2:
                     notice = compose(screen, args, current, inline=True,
-                                     send_now=y == height - 4 and 3 <= x <= 10)
+                                     send_now=y == height - 4 and 3 <= x <= 10,
+                                     clear_now=y == height - 4 and 12 <= x <= 22)
                 else:
                     index = clicked_row(x, y, width, offset, visible, len(rows), selected)
                     is_preview = y == 6 + selected - offset
@@ -664,6 +706,12 @@ def display_loop(screen, args, executor):
                             if left <= x < right:
                                 open_pr(url)
                                 break
+        if isinstance(notice, tuple):
+            notice, queued_mouse = notice
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
 
 
 def main():

@@ -101,10 +101,30 @@ class BoardTests(unittest.TestCase):
             with patch.object(board.curses, "curs_set"), patch.object(board.curses, "ungetmouse") as mouse, patch.object(
                 board, "mouse_event", return_value=("select", 10, 6, 0)
             ):
-                self.assertEqual(board.compose(screen, args, row, inline=True), "Draft saved.")
+                self.assertEqual(board.compose(screen, args, row, inline=True),
+                                 ("Draft saved; nothing sent.", ("select", 10, 6, 0)))
             screen.erase.assert_not_called()
-            mouse.assert_called_once()
+            mouse.assert_not_called()
             self.assertEqual(board.draft_path(args, row).read_text(), "Investigate this")
+
+    def test_clear_only_removes_selected_task_draft_and_never_sends(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            other = dict(row, id="another-task")
+            board.save_draft(board.draft_path(args, row), "discard this")
+            board.save_draft(board.draft_path(args, other), "keep this")
+            with patch.object(board, "send_message") as send:
+                self.assertIn("cleared", board.compose(Mock(), args, row, inline=True, clear_now=True))
+            send.assert_not_called()
+            self.assertEqual(board.draft_path(args, row).read_text(), "")
+            self.assertEqual(board.draft_path(args, other).read_text(), "keep this")
+
+    def test_escape_outside_editor_does_not_close_board(self):
+        executor = Mock()
+        executor.submit.return_value = Future()
+        screen = self.run_display(executor, [27, ord("q")])
+        self.assertEqual(screen.getch.call_count, 2)
 
     def test_selected_objective_and_rows_below_it_are_clickable(self):
         task = self.task()

@@ -28,7 +28,9 @@ The explicit task directory scopes the board to this controller; it never discov
 
 Click a task row to select it. The lower panel contains its full details; scroll there with the mouse wheel or **[ / ]**. There is no separate detail screen. Arrow keys or j/k select a workspace; Page Up/Down page; a jumps to the next human action; r refreshes; q closes. Underlined PR links open GitHub, including Enterprise hosts. Multiple PRs appear as comma-separated, individually clickable numbers. The lower panel lists clickable repo#number labels, including any that do not fit in the table. Narrow panes hide table columns, but the lower panel retains all PR links. Mouse input requires terminal mouse forwarding. A plain-text snapshot is also available:
 
-Click a PR number or its full URL to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
+Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
+
+The task list has a position indicator and clickable scroll rail. Snapshot age and delayed-refresh warnings expose update health, not agent progress. Workspace IDs and checkout paths in the details distinguish same-named workspaces; the board never merges or removes them.
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
@@ -40,7 +42,7 @@ Add `--offline` to skip live Herdr queries and disable messaging. The board neve
 
 Select a task and click the message box in the bottom detail panel to type there; **m** also focuses it. The selected task stays visible while you write. Enter adds a line, Ctrl-G or Send submits, and Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board attaches the selected task ID, workspace, repository, and PR links as routing context, then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
 
-Drafts are saved privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Successful delivery clears the draft. Busy/blocked or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
+Drafts are saved per task privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Clicking away or switching tasks never sends; **x Clear** discards only the selected task's draft. Escape leaves editing but does not close the board. Successful delivery clears the draft. Busy/blocked or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
 
 ## Appearance
 
