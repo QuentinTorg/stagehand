@@ -33,13 +33,17 @@ class BoardTests(unittest.TestCase):
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertFalse(board.draft_path(args, row).exists())
 
-    def test_objective_is_available_and_two_line_rows_are_clickable(self):
+    def test_selected_objective_and_rows_below_it_are_clickable(self):
         task = self.task()
         task["objective"] = "Investigate reconnect failures without changing source."
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual(row["objective"], task["objective"])
-        self.assertEqual(board.clicked_row(10, 6, 100, 0, 5, 10, 2), 0)
-        self.assertEqual(board.clicked_row(10, 7, 100, 0, 5, 10, 2), 1)
+        self.assertEqual(board.clicked_row(10, 6, 100, 0, 5, 10, 0), 0)
+        self.assertEqual(board.clicked_row(10, 7, 100, 0, 5, 10, 0), 1)
+        self.assertEqual(board.clicked_row(10, 6, 100, 0, 5, 10, 2), 1)
+        self.assertEqual(board.clicked_row(10, 8, 100, 0, 5, 10, 2), 2)
+        self.assertEqual(board.clicked_row(10, 9, 100, 0, 5, 10, 2), 3)
+        self.assertIsNone(board.clicked_row(10, 11, 100, 0, 5, 10, 2))
 
     def test_send_preserves_exact_human_message_and_routes_only_to_controller(self):
         row = board.task_summary(self.task(), 0, None, None, 5)

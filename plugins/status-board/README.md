@@ -2,7 +2,7 @@
 
 A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Each workspace includes a preview of its saved objective; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
+The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Only the selected workspace expands an indented objective preview, highlighted together with its heading; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
 
 ## Setup
 

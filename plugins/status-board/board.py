@@ -197,9 +197,12 @@ def mouse_event():
     return None
 
 
-def clicked_row(x, y, width, offset, visible, count, row_height=1):
-    index = offset + (y - 5) // row_height
-    if 1 <= x < width - 1 and 5 <= y < 5 + visible * row_height and 0 <= index < count:
+def clicked_row(x, y, width, offset, visible, count, expanded=None):
+    line = y - 5
+    if expanded is not None and offset <= expanded < offset + visible and line > expanded - offset:
+        line -= 1  # The selected objective belongs to the same task as its heading.
+    index = offset + line
+    if 1 <= x < width - 1 and 0 <= line < visible and 0 <= index < count:
         return index
     return None
 
@@ -387,7 +390,10 @@ def display(screen, args):
             style |= curses.A_REVERSE if highlight else 0
             style |= curses.A_UNDERLINE if underline else 0
             try:
-                screen.addnstr(y, 1, clipped(text, max(1, width - 3)), max(0, width - 2), style)
+                text = clipped(text, max(1, width - 3))
+                if highlight:
+                    text = text.ljust(max(1, width - 3))
+                screen.addnstr(y, 1, text, max(0, width - 2), style)
             except curses.error:
                 pass  # A resize or wide glyph can exhaust the last cell.
 
@@ -405,18 +411,18 @@ def display(screen, args):
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
         # Keep selected-task instructions visible even when the task list is long.
-        row_height = 2
-        visible = max(1, (height - 19) // row_height)
+        visible = max(1, height - 20)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
-            y = 5 + (i - offset) * row_height
+            y = 5 + i - offset + (1 if i > selected else 0)
             put(y, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
-            put(y + 1, "    " + row["objective"])
+            if i == selected:
+                put(y + 1, "      ↳ " + row["objective"], row["color"], highlight=True)
         if not rows:
             put(5, "No readable active tasks." if warnings else "No active tasks.")
 
-        detail_y = 5 + visible * row_height + 1
+        detail_y = 5 + visible + 2
         put(detail_y, "─" * max(0, width - 3))
         if current:
             put(detail_y + 1, current["label"], current["color"], bold=True)
@@ -466,12 +472,13 @@ def display(screen, args):
                 if kind == "wheel":
                     selected = max(0, min(len(rows) - 1, selected + delta))
                 else:
-                    index = clicked_row(x, y, width, offset, visible, len(rows), row_height)
+                    index = clicked_row(x, y, width, offset, visible, len(rows), selected)
+                    is_preview = y == 6 + selected - offset
                     if index is not None:
                         selected = index
                         table_width = max(1, width - 6)
                         pr_x = 5 + sum(columns(table_width)) + 6
-                        if (y - 5) % row_height == 0 and table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
+                        if not is_preview and table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
                             if kind == "select":
                                 open_pr(rows[index]["pr"])
                         elif kind == "open":
