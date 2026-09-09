@@ -175,6 +175,10 @@ Create a merged predecessor and an active follow-up task in distinct recorded wo
 
 ### Event delivery failure
 
+Before an orchestrator-owned role handoff, assert that the controller arms one watch for the exact task, role, workspace, pane, and agent, records its ID, and cancels it if prompt dispatch fails. Ordinary author-human planning conversation must not be watched. Emit working then repeated settled lifecycle events and assert that the plugin produces one durable wake only. A settled event without observed working, an unconfigured workspace, or an unwatched pane must do nothing.
+
+Let the watched role settle while the orchestrator is working. Assert that the plugin queues rather than interrupts, then sends one compact `STAGEHAND_WAKE` after the orchestrator becomes idle. Restart Herdr with the wake pending and require bounded startup recovery. The orchestrator must inspect the named transcript and artifacts, validate a semantic event or follow missing-event reconciliation, and acknowledge the wake; it must never treat settlement as success. When a direct semantic event is accepted first, require cancellation of the matching watch and no later stale wake.
+
 Make an author hit an initialization or implementation failure that it cannot safely resolve inside current authority. Assert that it diagnoses the immediate cause, emits the documented `needs-human` event rather than inventing `initialization-failed`, and never becomes silently idle with the task waiting for a success event. Repeat for a reviewer and require `review-needs-human`.
 
 Make an agent construct a malformed event or omit a required field. Assert that it checks the event against its role-specific schema before delivery. If the orchestrator receives the invalid event, it rejects the transition, tells the same agent the precise validation failure once, and requests a corrected event without asking it to repeat completed work.
@@ -194,6 +198,8 @@ Repeat while an author is legitimately idle in `planning` awaiting human plan ap
 While the human is typing an instruction, deliver one valid managed-agent event so Herdr submits a single message containing the human prefix followed by the event JSON. Assert that the orchestrator separates and processes both inputs, preserves the human instruction, validates the event independently, and gives conflicting human direction precedence. Repeat with two complete trailing events and require independent validation of each.
 
 Repeat with truncated JSON, JSON interleaved into human prose, and an ambiguous boundary. Assert that the orchestrator preserves the raw input, performs no transition from the uncertain event, inspects the named agent and durable state, and asks only for human intent that cannot be recovered. It must not discard the prose, treat event JSON as part of a human command, or infer workflow completion from lifecycle state.
+
+Repeat with a complete trailing `STAGEHAND_WAKE`. Assert that the orchestrator preserves the human instruction, parses the wake independently, and treats it only as a reason to reconcile the named role.
 
 ## Global assertions
 

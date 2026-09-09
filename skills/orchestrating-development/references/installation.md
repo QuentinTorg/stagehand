@@ -1,6 +1,6 @@
 # Installation
 
-The checkout already tracks a relative `.codex/skills/orchestrating-development` link to its bundled skill and a `.codex/rules/herdr.rules` policy for orchestrator-side Herdr operations. Keep both in place. Install the external Herdr skill only in the dedicated orchestration workspace. Separately install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
+The checkout already tracks a relative `.codex/skills/orchestrating-development` link to its bundled skill and a `.codex/rules/herdr.rules` policy for orchestrator-side Herdr operations. Keep both in place. Install the bundled Herdr wake plugin and the external Herdr skill only in the dedicated orchestration workspace. Separately install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
 
 ## Guided setup
 
@@ -28,7 +28,7 @@ git check-ignore .local/AGENTS.md
 
 The command must identify a repository ignore rule. Stop and repair `.gitignore` if it does not.
 
-The orchestration host must provide Git and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there.
+The orchestration host must provide Git, Python 3, and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there.
 
 `herdr --skill` prints guidance matching the installed Herdr version. During guided setup, use it when the Herdr skill is not yet discoverable; a workspace-local link remains preferred for automatic skill routing.
 
@@ -46,6 +46,22 @@ The two rule files have different consumers and installation scopes:
 
 - `.codex/rules/herdr.rules` is tracked in this workspace and grants the orchestrator bounded Herdr inspection and task-management operations.
 - `assets/codex-managed-agent-events.rules` is linked into `~/.codex/rules/` and grants managed authors and reviewers only event delivery, caller-pane discovery, and bounded Hunk operations.
+
+## Managed-agent wake plugin
+
+Link the bundled plugin, enable it, and register this exact control workspace:
+
+```sh
+herdr plugin link /absolute/path/to/orchestration-workspace/plugins/stagehand-wake --enabled
+/absolute/path/to/orchestration-workspace/plugins/stagehand-wake/stagehand-wake \
+  configure --workspace /absolute/path/to/orchestration-workspace \
+  --orchestrator workflow_orchestrator
+herdr plugin list
+/absolute/path/to/orchestration-workspace/plugins/stagehand-wake/stagehand-wake \
+  status --workspace /absolute/path/to/orchestration-workspace
+```
+
+The plugin is user-global but reacts only to one-shot watches stored in explicitly configured Stagehand workspaces. It wakes the orchestrator after a watched role turn settles; it does not decide that work succeeded or change task state. Existing role events remain the semantic handoff and fallback.
 
 ## Managed-role skills
 

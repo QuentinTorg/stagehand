@@ -38,6 +38,10 @@ event_recovery:
   expected_events: []
   attempts: 0
   last_attempt_reason: null
+wake:
+  watch_id: null
+  role: null
+  pane: null
 result:
   summary: null
   ref: null
