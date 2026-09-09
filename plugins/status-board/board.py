@@ -662,7 +662,7 @@ def display_loop(screen, args, executor):
         if warnings:
             put(height - 2, "! " + " | ".join(warnings), 1)
         try:
-            screen.addnstr(height - 1, 0, " Click message box to type · Click PR: open links · ↑↓ select · [ ] scroll details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m / click box: message orchestrator · Click PR: open links · ↑↓ select · [ ] scroll details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
