@@ -2,7 +2,7 @@
 
 A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Only the selected workspace expands an indented objective preview, highlighted together with its heading; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, full PR URL, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
+The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Only the selected workspace expands an indented objective preview, highlighted together with its heading; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, PR links, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -36,7 +36,15 @@ The task list has a position indicator and clickable scroll rail. Snapshot age a
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
 ```
 
-Add `--offline` to skip live Herdr queries and disable messaging. The board never modifies task records, reads transcripts, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
+Add `--offline` to skip live Herdr queries and disable messaging/navigation. The board never modifies task records, reads private session files, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
+
+## Navigation and orchestrator view
+
+- **Open workspace** (**o**) focuses the selected task's existing Herdr workspace. Selecting a row alone never navigates away.
+- **Orchestrator / new task** (**c**) shows the controller's runtime state and a scrollable preview of recent terminal output. **[ / ]** or the wheel scrolls; reselect this view to follow the latest output. Selecting a task or **Task details** returns to task-specific messaging.
+- **Open orchestrator** (**O**, Shift-O) focuses its native agent pane for full conversations, permissions, or setup problems. It does not approve prompts or start agents.
+
+With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. The preview reads at most 120 terminal lines per background refresh, not a guaranteed complete or final assistant response; it may contain tool output. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
 
 ## Message the orchestrator
 

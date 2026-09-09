@@ -178,6 +178,77 @@ def snapshot(directory, offline=False):
     return rows, warnings
 
 
+def herdr_call(*arguments):
+    return subprocess.run([os.environ.get("HERDR_BIN_PATH", "herdr"), *arguments],
+                          capture_output=True, text=True, timeout=3, check=True).stdout
+
+
+def controller_identity():
+    agent = json.loads(herdr_call("agent", "get", "workflow_orchestrator"))["result"]["agent"]
+    workspace = os.environ.get("HERDR_WORKSPACE_ID")
+    if not workspace or agent.get("workspace_id") != workspace or not agent.get("pane_id"):
+        raise ValueError("Orchestrator is not in this control workspace")
+    return agent
+
+
+def controller_snapshot(offline=False):
+    if offline or os.environ.get("HERDR_ENV") != "1":
+        return {"status": "offline", "output": "Live orchestrator output is unavailable in offline mode."}
+    try:
+        agent = controller_identity()
+        # Read a bounded terminal preview, not private session files or a model summary.
+        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
+        return {"status": clean(agent.get("agent_status", "unknown")), "output": output[-32000:]}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return {"status": "unavailable", "output": f"Cannot read orchestrator: {clean(error)}\nOpen its native session to check setup or permissions."}
+
+
+def board_snapshot(directory, offline=False):
+    rows, warnings = snapshot(directory, offline)
+    return rows, warnings, controller_snapshot(offline)
+
+
+def open_target(args, row=None):
+    if args.offline or os.environ.get("HERDR_ENV") != "1":
+        return "Navigation requires a live Herdr session."
+    try:
+        if row is None:
+            agent = controller_identity()
+            herdr_call("agent", "focus", agent["pane_id"])
+            return "Opened orchestrator."
+        target = row.get("workspace_id")
+        if not target:
+            return "This task has no workspace yet."
+        workspace = json.loads(herdr_call("workspace", "get", target))["result"]["workspace"]
+        if workspace.get("workspace_id") != target:
+            raise ValueError("Workspace identity changed")
+        herdr_call("workspace", "focus", target)
+        return f"Opened {row['label']}."
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return f"Could not open target: {clean(error)}"
+
+
+def controller_lines(controller, width):
+    status = controller["status"]
+    hint = {"blocked": "Needs you — open orchestrator for its permission or question dialog.",
+            "working": "Working — messages can be sent when it is ready.",
+            "idle": "Ready for a message, setup question, or new task.",
+            "done": "Ready for a message, setup question, or new task."}.get(status, "Open orchestrator to check its state.")
+    content = [hint, "Recent terminal output (may include tools or omit earlier responses):", ""]
+    # Preserve line breaks/indentation without allowing terminal control characters.
+    content += ["".join(c for c in line.expandtabs(4) if c.isprintable())
+                for line in controller["output"].splitlines()]
+    lines = []
+    for line in content:
+        # Terminal rules are decoration; wrapping them would bury the response.
+        if line.strip() and set(line.strip()) <= set("─━-_"):
+            wrapped = [line[:max(1, width - 4)]]
+        else:
+            wrapped = textwrap.wrap(line, max(1, width - 4), replace_whitespace=False) or [""]
+        lines.extend((text, 0, []) for text in wrapped)
+    return lines
+
+
 def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
@@ -272,6 +343,8 @@ def clicked_row(x, y, width, offset, visible, count, expanded=None):
 
 
 def draft_path(args, row):
+    if row is None:
+        return args.tasks.parent / "board-drafts" / "orchestrator.txt"
     identity = hashlib.sha256(row["id"].encode()).hexdigest()
     return args.tasks.parent / "board-drafts" / (identity + ".txt")
 
@@ -294,8 +367,10 @@ def send_message(args, row, message):
     if args.offline or os.environ.get("HERDR_ENV") != "1":
         return False, "Sending requires a live Herdr session. Draft kept."
     # The controller already owns the task record; send identity, not a duplicate brief.
-    target = row['workspace_id'] or f"task: {row['id']}"
-    prompt = f"Human message about {row['label']} ({target}):\n\n{message}"
+    prompt = message
+    if row is not None:
+        target = row['workspace_id'] or f"task: {row['id']}"
+        prompt = f"Human message about {row['label']} ({target}):\n\n{message}"
     command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
     try:
         result = subprocess.run(command + ["get", "workflow_orchestrator"],
@@ -322,13 +397,13 @@ def draw_message_box(screen, row, message, active=False):
     height, width = screen.getmaxyx()
     top, inner = max(0, height - 8), max(1, width - 6)
     preview = textwrap.wrap(clean(message), inner)[:3] if message else []
-    title = "Message orchestrator · " + row["label"]
+    title = "Message orchestrator · " + (row["label"] if row else "General / new task")
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
              "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc keeps draft" if active else "Click inside to type"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
-        lines[1] = "│ Tell the orchestrator what you need for this workspace…"
+        lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
     box_width = max(4, width - 3)
     heading = clipped(title, max(1, box_width - 4))
     lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
@@ -381,8 +456,8 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             content = []
         else:
             screen.erase()
-            content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + row["label"]),
-                       (2, "Repository: " + row["repository"])]
+            content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + (row["label"] if row else "General / new task")),
+                       (2, "Repository: " + (row["repository"] if row else "Not task-specific"))]
         content += [(height - 2, note), (height - 1, " Click outside / Esc to return" if inline else " [ Send ]  [ Back ]")]
         for y, text in content:
             try:
@@ -513,6 +588,26 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
 
+def draw_actions(screen, top, width, general):
+    actions = [("task", "Task details"), ("controller", "Orchestrator / new task"),
+               ("workspace", "Open workspace"), ("open-controller", "Open orchestrator")]
+    hits, x, y = [], 1, top
+    for action, label in actions:
+        text = "[ " + label + " ]"
+        if x > 1 and x + len(text) > width - 1:
+            x, y = 1, y + 1
+        if len(text) > width - 2:
+            continue
+        try:
+            style = curses.A_REVERSE if action == ("controller" if general else "task") else curses.A_BOLD
+            screen.addnstr(y, x, text, len(text), style)
+            hits.append((y, x, x + len(text), action))
+        except curses.error:
+            pass
+        x += len(text) + 1
+    return hits, y + 1
+
+
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     try:
@@ -545,12 +640,15 @@ def display_loop(screen, args, executor):
     queued_mouse = None
     last_refresh, refresh_started = None, None
     detail_offset, detail_task = 0, None
+    general = False
+    controller_offset = None
+    controller = {"status": "loading", "output": "Waiting for live inventory…"}
     while True:
         # Only the UI thread touches curses; slow inventory reads never block input.
         if pending is not None and pending.done():
             selected_id = rows[min(selected, len(rows) - 1)]["id"] if rows else None
             try:
-                rows, warnings = pending.result()
+                rows, warnings, controller = pending.result()
             except Exception as error:
                 warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
@@ -558,11 +656,13 @@ def display_loop(screen, args, executor):
             last_refresh = time.monotonic()
             pending = None
         if pending is None and time.monotonic() >= refresh_at:
-            pending = executor.submit(snapshot, args.tasks, args.offline)
+            pending = executor.submit(board_snapshot, args.tasks, args.offline)
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
+        viewing_controller = general or current is None
+        message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
@@ -601,6 +701,8 @@ def display_loop(screen, args, executor):
         table_links = {}
         # Keep selected-task instructions visible even when the task list is long.
         visible = max(1, (height - 17) // 2)
+        if viewing_controller:
+            visible = min(visible, 3)
         offset = max(0, selected - visible + 1)
         health = "Loading" if last_refresh is None else f"Updated {age(last_refresh, time.monotonic())} ago"
         if pending and time.monotonic() - refresh_started > 2:
@@ -635,15 +737,25 @@ def display_loop(screen, args, executor):
         draw_task_frame(screen, width, visible, selected, len(rows), caption)
 
         detail_y = 5 + visible + 2
-        detail_height = max(1, height - 9 - (detail_y + 2))
-        details = detail_lines(current, width) if current else []
+        actions, title_y = draw_actions(screen, detail_y, width, viewing_controller)
+        detail_height = max(1, height - 9 - (title_y + 1))
+        details = controller_lines(controller, width) if viewing_controller else detail_lines(current, width)
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
+        if viewing_controller:
+            if controller_offset is None:
+                active_offset = max(0, len(details) - detail_height)
+            else:
+                active_offset = max(0, min(controller_offset, len(details) - detail_height))
+        else:
+            active_offset = detail_offset
         detail_links = {}
-        if current:
-            scroll_hint = f" · {detail_offset + 1}–{min(len(details), detail_offset + detail_height)}/{len(details)} · wheel or [ ] to scroll" if len(details) > detail_height else ""
-            put(detail_y + 1, current["label"] + scroll_hint, current["color"], bold=True)
-            for i, (line, color, links) in enumerate(details[detail_offset:detail_offset + detail_height]):
-                y = detail_y + 2 + i
+        if details:
+            scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)} · [ ] scroll" if len(details) > detail_height else ""
+            title = f"Orchestrator: {controller['status']} · Recent terminal output" if viewing_controller else current["label"]
+            color = (1 if controller["status"] in {"blocked", "unavailable"} else 0) if viewing_controller else current["color"]
+            put(title_y, title + scroll_hint, color, bold=True)
+            for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
+                y = title_y + 1 + i
                 put(y, line, color, bold=bool(color))
                 detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
                 for left, right, _ in links:
@@ -651,18 +763,18 @@ def display_loop(screen, args, executor):
                         screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
                     except curses.error:
                         pass
-            try:
-                path = draft_path(args, current)
-                draft = path.read_text() if path.exists() else ""
-                draw_message_box(screen, current, draft)
-            except OSError:
-                put(height - 7, "Cannot read saved draft.", 1)
+        try:
+            path = draft_path(args, message_target)
+            draft = path.read_text() if path.exists() else ""
+            draw_message_box(screen, message_target, draft)
+        except OSError:
+            put(height - 7, "Cannot read saved draft.", 1)
         if notice:
             put(height - 2, notice, bold=True)
         if warnings:
             put(height - 2, "! " + " | ".join(warnings), 1)
         try:
-            screen.addnstr(height - 1, 0, " m / click box: message orchestrator · Click PR: open links · ↑↓ select · [ ] scroll details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m: message · c: orchestrator · o: workspace · O: open orchestrator · ↑↓ tasks · [ ] scroll · r refresh · q close", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
@@ -673,8 +785,10 @@ def display_loop(screen, args, executor):
             refresh_at = 0
         elif key in (curses.KEY_DOWN, ord("j")):
             selected += 1
+            general = False
         elif key in (curses.KEY_UP, ord("k")):
             selected = max(0, selected - 1)
+            general = False
         elif key == curses.KEY_NPAGE:
             selected += visible
         elif key == curses.KEY_PPAGE:
@@ -682,22 +796,44 @@ def display_loop(screen, args, executor):
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["action"]), selected)
         elif key in (ord("["), ord("]")):
-            detail_offset += -1 if key == ord("[") else 1
-        elif key == ord("m") and current:
-            notice = compose(screen, args, current, inline=True)
+            if viewing_controller:
+                controller_offset = max(0, active_offset + (-1 if key == ord("[") else 1))
+            else:
+                detail_offset += -1 if key == ord("[") else 1
+        elif key == ord("c"):
+            general, controller_offset = True, None
+        elif key == ord("o"):
+            notice = open_target(args, current) if current else "Select a task workspace first."
+        elif key == ord("O"):
+            notice = open_target(args)
+        elif key == ord("m"):
+            notice = compose(screen, args, message_target, inline=True)
         elif key == curses.KEY_MOUSE:
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
+                action = next((name for line, left, right, name in actions if y == line and left <= x < right), None)
                 if kind == "wheel":
                     if detail_y <= y < height - 8:
-                        detail_offset += delta
+                        if viewing_controller:
+                            controller_offset = max(0, active_offset + delta)
+                        else:
+                            detail_offset += delta
                     else:
                         selected = max(0, min(len(rows) - 1, selected + delta))
+                elif kind == "select" and action:
+                    if action == "task":
+                        general = False
+                    elif action == "controller":
+                        general, controller_offset = True, None
+                    elif action == "workspace":
+                        notice = open_target(args, current) if current else "Select a task workspace first."
+                    else:
+                        notice = open_target(args)
                 elif kind == "select" and x == width - 2 and 5 <= y <= 5 + visible and rows:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
-                elif current and height - 8 <= y < height - 2:
-                    notice = compose(screen, args, current, inline=True,
+                elif height - 8 <= y < height - 2:
+                    notice = compose(screen, args, message_target, inline=True,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
                 else:
@@ -705,6 +841,7 @@ def display_loop(screen, args, executor):
                     is_preview = y == 6 + selected - offset
                     if index is not None:
                         selected = index
+                        general = False
                         if not is_preview and kind == "select":
                             for left, right, url in table_links.get(y, []):
                                 if left <= x < right:

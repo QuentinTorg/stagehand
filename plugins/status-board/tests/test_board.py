@@ -57,7 +57,7 @@ class BoardTests(unittest.TestCase):
         executor.submit.return_value = pending
         screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
         self.assertFalse(pending.done())
-        executor.submit.assert_called_once_with(board.snapshot, Path("/unused/tasks"), True)
+        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True)
         self.assertEqual(screen.getch.call_count, 4)
 
     def test_failed_background_refresh_is_visible_without_crashing(self):
@@ -67,6 +67,74 @@ class BoardTests(unittest.TestCase):
         executor.submit.return_value = pending
         screen = self.run_display(executor, [-1, ord("q")])
         self.assertTrue(any("Refresh failed" in str(call) for call in screen.addnstr.call_args_list))
+
+    def test_empty_board_has_general_message_and_controller_actions(self):
+        executor = Mock()
+        pending = Future()
+        pending.set_result(([], [], {"status": "idle", "output": "What would you like to work on?"}))
+        executor.submit.return_value = pending
+        with patch.object(board, "compose", return_value="Draft saved.") as compose:
+            screen = self.run_display(executor, [-1, ord("m"), ord("q")])
+        self.assertIsNone(compose.call_args.args[2])
+        output = " ".join(str(call) for call in screen.addnstr.call_args_list)
+        for text in ("Open orchestrator", "General / new task", "What would you like to work on?"):
+            self.assertIn(text, output)
+
+    def test_navigation_uses_exact_workspace_id(self):
+        args = SimpleNamespace(offline=False)
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        reply = board.json.dumps({"result": {"workspace": {"workspace_id": "w1"}}})
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1"}), patch.object(
+            board, "herdr_call", side_effect=[reply, "{}"]
+        ) as call:
+            self.assertIn("Opened", board.open_target(args, row))
+        self.assertEqual([c.args for c in call.call_args_list], [("workspace", "get", "w1"), ("workspace", "focus", "w1")])
+
+    def test_orchestrator_navigation_rejects_wrong_control_workspace(self):
+        args = SimpleNamespace(offline=False)
+        for workspace in ("control", "other"):
+            reply = board.json.dumps({"result": {"agent": {"workspace_id": workspace, "pane_id": "control:p1"}}})
+            with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+                board, "herdr_call", side_effect=[reply, "{}"]
+            ) as call:
+                result = board.open_target(args)
+            self.assertEqual(call.call_count, 2 if workspace == "control" else 1)
+            if workspace == "control":
+                self.assertEqual(call.call_args.args, ("agent", "focus", "control:p1"))
+            else:
+                self.assertIn("Could not open", result)
+
+    def test_missing_workspace_is_not_recreated(self):
+        args = SimpleNamespace(offline=False)
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1"}), patch.object(
+            board, "herdr_call", side_effect=OSError("workspace not found")
+        ) as call:
+            self.assertIn("Could not open", board.open_target(args, row))
+        call.assert_called_once_with("workspace", "get", "w1")
+
+    def test_controller_preview_is_bounded_and_read_only(self):
+        agent = {"workspace_id": "control", "pane_id": "control:p1", "agent_status": "blocked"}
+        reply = board.json.dumps({"result": {"agent": agent}})
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+            board, "herdr_call", side_effect=[reply, "x" * 40000]
+        ) as call:
+            result = board.controller_snapshot()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(len(result["output"]), 32000)
+        self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120"))
+        self.assertIn("Needs you", board.controller_lines(result, 80)[0][0])
+
+    def test_actions_wrap_and_hit_targets_do_not_overlap(self):
+        for width in (40, 80, 140):
+            actions, bottom = board.draw_actions(Mock(), 8, width, True)
+            self.assertEqual(len(actions), 4)
+            for y, left, right, _ in actions:
+                self.assertLess(y, bottom)
+                self.assertTrue(0 < left < right <= width - 1)
+            for i, (y, left, right, _) in enumerate(actions):
+                for other_y, other_left, other_right, _ in actions[i + 1:]:
+                    self.assertTrue(y != other_y or right <= other_left or other_right <= left)
 
     def test_multiple_prs_preserve_hosts_and_ignore_historical_links(self):
         public = "https://github.com/team/project/pull/12"
@@ -179,6 +247,19 @@ class BoardTests(unittest.TestCase):
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[1:4], ["agent", "prompt", "workflow_orchestrator"])
         self.assertEqual(command[-1], f"Human message about {row['label']} (w1):\n\n{message}")
+
+    def test_general_message_has_no_task_context_and_its_own_draft(self):
+        args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        self.assertNotEqual(board.draft_path(args, row), board.draft_path(args, None))
+        reply = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {"workspace_id": "control", "agent_status": "idle"}}}))
+        delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+        message = "Let's discuss a new task.\nDo not start yet."
+        with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+            board.subprocess, "run", side_effect=[reply, delivered]
+        ) as run:
+            self.assertTrue(board.send_message(args, None, message)[0])
+        self.assertEqual(run.call_args.args[0][-1], message)
 
     def test_busy_or_wrong_workspace_never_receives_prompt(self):
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
