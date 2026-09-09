@@ -368,6 +368,8 @@ def display(screen, args):
         curses.use_default_colors()
         for number, color in enumerate((curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN, curses.COLOR_WHITE), 1):
             curses.init_pair(number, color, -1)
+        for number, color in enumerate((curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN), 5):
+            curses.init_pair(number, curses.COLOR_WHITE, color)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice = ""
@@ -424,7 +426,7 @@ def display(screen, args):
             y = 5 + i - offset + (1 if i > selected else 0)
             put(y, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
             if i == selected:
-                put(y + 1, "      ↳ " + row["objective"], color=4)
+                put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
         if not rows:
             put(5, "No readable active tasks." if warnings else "No active tasks.")
 
