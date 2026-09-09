@@ -13,6 +13,58 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_responsive_views_stay_inside_terminal_bounds(self):
+        for height, width in ((24, 60), (28, 80), (38, 110), (44, 160), (60, 240), (72, 320)):
+            for view in ("t", "c", "?"):
+                executor = Mock()
+                pending = Future()
+                row = board.task_summary(self.task(), 0, None, None, 5)
+                pending.set_result(([row], [], {"status": "idle", "output": "A response.\n" * 60}))
+                executor.submit.return_value = pending
+                screen = self.run_display(executor, [-1, ord(view), ord("q")], (height, width))
+                for call in screen.addnstr.call_args_list:
+                    y, x, text, count, *_ = call.args
+                    self.assertTrue(0 <= y < height and 0 <= x < width, (height, width, call))
+                    self.assertLessEqual(x + min(len(text), count), width, (height, width, call))
+                self.assertTrue(any("Message orchestrator" in str(call) for call in screen.addnstr.call_args_list))
+
+    def test_task_details_put_action_first_and_keep_technical_info_optional(self):
+        task = self.task("decision-required")
+        task["state"].update(attention_required=True, attention_reason="Approve the plan")
+        row = board.task_summary(task, 0, None, None, 5)
+        row["location"] = "/private/worktree/path"
+        compact = "\n".join(line for line, _, _ in board.detail_lines(row, 140))
+        expanded = "\n".join(line for line, _, _ in board.detail_lines(row, 140, info=True))
+        self.assertTrue(compact.startswith("NEXT: Approve the plan"))
+        self.assertNotIn("record saved", compact)
+        self.assertNotIn(row["location"], compact)
+        self.assertIn("record saved", expanded)
+        self.assertIn(row["location"], expanded)
+
+    def test_task_and_controller_navigation_keep_message_context_separate(self):
+        executor = Mock()
+        pending = Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        pending.set_result(([row], [], {"status": "idle", "output": "Ready"}))
+        executor.submit.return_value = pending
+        with patch.object(board, "compose", return_value="Draft saved.") as compose, patch.object(board, "open_target") as navigate:
+            self.run_display(executor, [-1, ord("c"), ord("m"), ord("t"), ord("m"), ord("q")])
+        self.assertIsNone(compose.call_args_list[0].args[2])
+        self.assertEqual(compose.call_args_list[1].args[2]["id"], row["id"])
+        navigate.assert_not_called()
+
+    def test_compact_stages_keep_active_review_rounds(self):
+        row = board.task_summary(self.task("reviewing"), 0, None, None, 5)
+        self.assertEqual(board.task_stage(row), "In review · round 3")
+        row = board.task_summary(self.task("resolving"), 0, None, None, 5)
+        self.assertEqual(board.task_stage(row), "Fixing findings · round 2")
+
+    def test_prose_does_not_stretch_across_ultrawide_screen(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["objective"] = "An intentionally long description. " * 40
+        self.assertTrue(all(len(line) <= 110 for line, _, _ in board.detail_lines(row, 320)))
+        self.assertTrue(all(len(line) <= 120 for line, _, _ in board.controller_lines({"status": "idle", "output": row["objective"]}, 320)))
+
     def test_task_frame_has_matching_corners_and_separate_scroll_rail(self):
         for width in (40, 140):
             screen = Mock()
@@ -39,9 +91,9 @@ class BoardTests(unittest.TestCase):
                     self.assertEqual(board.compose(screen, args, row, inline=True), "Delivered")
                 send.assert_called_once_with(args, row, "First\nSecond")
 
-    def run_display(self, executor, keys):
+    def run_display(self, executor, keys, size=(38, 140)):
         screen = Mock()
-        screen.getmaxyx.return_value = (38, 140)
+        screen.getmaxyx.return_value = size
         screen.getch.side_effect = keys
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
         with patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
@@ -66,7 +118,7 @@ class BoardTests(unittest.TestCase):
         pending.set_exception(OSError("inventory unavailable"))
         executor.submit.return_value = pending
         screen = self.run_display(executor, [-1, ord("q")])
-        self.assertTrue(any("Refresh failed" in str(call) for call in screen.addnstr.call_args_list))
+        self.assertTrue(any("Updates need attention" in str(call) for call in screen.addnstr.call_args_list))
 
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
@@ -129,7 +181,8 @@ class BoardTests(unittest.TestCase):
         for width in (40, 80, 140):
             screen = Mock()
             screen.getmaxyx.return_value = (38, width)
-            actions, bottom = board.draw_actions(screen, 8, width, True)
+            actions, bottom = board.draw_actions(screen, 8, width,
+                [("task", "Tasks"), ("controller", "Orchestrator"), ("workspace", "Open workspace"), ("open-controller", "Open orchestrator")], "controller")
             self.assertEqual(len(actions), 4)
             for y, left, right, _ in actions:
                 self.assertLess(y, bottom)
@@ -144,7 +197,7 @@ class BoardTests(unittest.TestCase):
         with patch.object(board.curses, "has_colors", return_value=True), patch.object(
             board.curses, "color_pair", side_effect=lambda number: number
         ):
-            board.draw_actions(screen, 8, 140, True)
+            board.draw_actions(screen, 8, 140, [("task", "Tasks"), ("controller", "Orchestrator")], "controller")
         calls = [call.args for call in screen.addnstr.call_args_list]
         self.assertTrue(all("[" not in args[2] for args in calls))
         self.assertEqual(calls[1][-1], 8 | board.curses.A_BOLD)

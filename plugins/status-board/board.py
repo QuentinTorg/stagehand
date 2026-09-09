@@ -159,6 +159,7 @@ def task_summary(task, modified, workspaces, agents, now):
     elif stage == "ready-for-team-review":
         action = "Review the ready PR on GitHub; merge when satisfied."
     return {"id": str(task["task_id"]), "label": label, "color": color,
+            "phase": stage, "rounds": rounds,
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
@@ -229,6 +230,7 @@ def open_target(args, row=None):
 
 
 def controller_lines(controller, width):
+    width = min(width, 124)
     status = controller["status"]
     hint = {"blocked": "Needs you — open orchestrator for its permission or question dialog.",
             "working": "Working — messages can be sent when it is ready.",
@@ -255,18 +257,57 @@ def controller_lines(controller, width):
     return lines
 
 
+def help_lines(width, warnings):
+    text = ["Tasks: select a workspace to see its next action, purpose, and PRs.",
+            "Orchestrator: discuss setup or new work, and read recent agent output.",
+            "", "Open workspace / Open orchestrator switches to the native Herdr session.",
+            "Use the native session for direct agent work, permissions, or the full transcript.",
+            "", "m or click the box: write a message. All messages go to the orchestrator.",
+            "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
+            "Clear removes only the current draft. Task and general drafts stay separate.",
+            "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
+            "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
+            "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
+            "a: next task needing you. i: task info. r: refresh. q: close this board."]
+    if warnings:
+        text += ["", "UPDATE WARNINGS", *warnings]
+    return [(line, 0, []) for paragraph in text
+            for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
+
+
 def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
 
 def columns(width, pr_width=9):
-    name = min(48, width // 3)
-    stage = min(36, width // 4)
-    return name, stage, max(10, width - name - stage - pr_width - 6)
+    budget = max(1, width - pr_width - 6)
+    name, stage = min(48, budget // 2), min(30, budget // 3)
+    return name, stage, min(20, max(1, budget - name - stage))
 
 
 def pr_labels(row):
     return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1], url) for url in row.get("prs", [])]
+
+
+def task_stage(row):
+    phase = row.get("phase", "")
+    label = {"ready-candidate": "Ready to finalize", "ready-for-team-review": "Ready on GitHub",
+             "decision-required": "Needs a decision", "delegated-complete": "Work complete",
+             "review-complete": "Review complete", "implementation-ready": "Ready for review",
+             "reviewing": "In review", "resolving": "Fixing findings"}.get(phase, phase.replace("-", " ").capitalize())
+    rounds = row.get("rounds", 0)
+    if isinstance(rounds, int) and phase in {"reviewing", "resolving"}:
+        label += f" · round {rounds + 1 if phase == 'reviewing' else rounds}"
+    return label or row["stage"]
+
+
+def task_next(row):
+    if row["color"] == 3:
+        return "GitHub review" if row.get("phase") == "ready-for-team-review" else "—"
+    if row["action"]:
+        return "You"
+    actor = row["next"]
+    return actor.replace("_", " ").capitalize() if actor not in {"Awaiting workflow update", "Complete"} else "Agents"
 
 
 def open_pr(url):
@@ -291,13 +332,15 @@ def table_line(row, width, pr_width=9):
             f"{clipped(row['roles'], roles_width):<{roles_width}}  {clipped(pr, pr_width)}")
 
 
-def detail_lines(row, width):
-    action = row["action"] or f"Nothing needed from you. Next: {row['next']}."
-    entries = [("PURPOSE: " + row["objective"], 0, None),
-               ("YOUR ACTION: " + action, 1 if row["action"] else 0, None),
-               (row["stage"] + " · " + row["roles"], 0, None),
-               (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
-    if row.get("location"):
+def detail_lines(row, width, info=False):
+    width = min(width, 114)
+    action = row["action"] or ("Work is handed off; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
+    entries = [("NEXT: " + action, 1 if row["action"] and row["color"] != 3 else 0, None),
+               ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
+    if info:
+        entries += [(row["stage"] + " · " + row["roles"], 0, None),
+                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+    if info and row.get("location"):
         entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
     lines = [(line, color, []) for text, color, _ in entries
              for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
@@ -399,14 +442,14 @@ def send_message(args, row, message):
     return False, "Delivery unconfirmed. Check orchestrator before retrying; draft kept."
 
 
-def draw_message_box(screen, row, message, active=False):
+def draw_message_box(screen, row, message, active=False, can_send=None):
     height, width = screen.getmaxyx()
-    top, inner = max(0, height - 8), max(1, width - 6)
+    top, inner = max(0, height - 8), max(1, min(120, width - 6))
     preview = textwrap.wrap(clean(message), inner)[:3] if message else []
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
-             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc keeps draft" if active else "Click inside to type"),
+             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
@@ -423,7 +466,7 @@ def draw_message_box(screen, row, message, active=False):
             screen.addnstr(top + i, 1, clipped(text, max(1, width - 3)), max(0, width - 2))
         except curses.error:
             pass
-    draw_button(screen, top + 4, 3, "  Send  ", active=True)
+    draw_button(screen, top + 4, 3, "  Send  ", active=bool(message.strip()) if can_send is None else can_send)
     draw_button(screen, top + 4, 12, "  x Clear  ")
 
 
@@ -442,7 +485,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
     cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
     while True:
         height, width = screen.getmaxyx()
-        line_width = max(1, width - (6 if inline else 4))
+        line_width = max(1, min(120, width - (6 if inline else 4)))
         lines, positions = [""], []
         for character in message:
             positions.append((len(lines) - 1, len(lines[-1])))
@@ -460,7 +503,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         offset = max(0, cy - visible + 1)
         if inline:
             # Editing stays in the bottom panel; leave the selected task visible above.
-            draw_message_box(screen, row, "", active=True)
+            draw_message_box(screen, row, "", active=True, can_send=bool(message.strip()))
             content = []
         else:
             screen.erase()
@@ -613,9 +656,7 @@ def draw_button(screen, y, x, text, active=False):
         return False
 
 
-def draw_actions(screen, top, width, general):
-    actions = [("task", "Task details"), ("controller", "Orchestrator / new task"),
-               ("workspace", "Open workspace"), ("open-controller", "Open orchestrator")]
+def draw_actions(screen, top, width, actions, active=None):
     hits, x, y = [], 1, top
     for action, label in actions:
         text = "  " + label + "  "
@@ -623,9 +664,9 @@ def draw_actions(screen, top, width, general):
             x, y = 1, y + 1
         if len(text) > width - 2:
             continue
-        if draw_button(screen, y, x, text, action == ("controller" if general else "task")):
+        if draw_button(screen, y, x, text, action == active):
             hits.append((y, x, x + len(text), action))
-        x += len(text) + (3 if action == "controller" else 1)
+        x += len(text) + 2
     return hits, y + 1
 
 
@@ -644,7 +685,6 @@ def display_loop(screen, args, executor):
         curses.curs_set(0)
     except curses.error:
         pass
-    # Request ordinary terminal mouse reporting; Herdr retains its own pane chrome.
     curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0))
     curses.mouseinterval(0)
     if curses.has_colors():
@@ -654,24 +694,22 @@ def display_loop(screen, args, executor):
             curses.init_pair(number, color, -1)
         for number, color in enumerate((curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_GREEN), 5):
             curses.init_pair(number, curses.COLOR_WHITE, color)
-        # ANSI palette slots inherit the terminal theme; cyan denotes UI controls,
-        # leaving red/yellow/green reserved for workflow status.
+        # Cyan denotes controls; red/yellow/green remain workflow status.
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(10, curses.COLOR_CYAN, -1)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
-    notice = ""
-    pending = None
-    queued_mouse = None
-    last_refresh, refresh_started = None, None
+    notice, pending, queued_mouse = "", None, None
+    refresh_started = None
     detail_offset, detail_task = 0, None
-    general = False
+    general, info, show_help = False, False, False
     controller_offset = None
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     while True:
-        # Only the UI thread touches curses; slow inventory reads never block input.
-        if pending is not None and pending.done():
+        # Preserve click coordinates until a blur event is handled; a refresh may
+        # otherwise reorder the task rows between leaving the editor and selection.
+        if pending is not None and pending.done() and queued_mouse is None:
             selected_id = rows[min(selected, len(rows) - 1)]["id"] if rows else None
             try:
                 rows, warnings, controller = pending.result()
@@ -679,19 +717,11 @@ def display_loop(screen, args, executor):
                 warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
-            last_refresh = time.monotonic()
             pending = None
         if pending is None and time.monotonic() >= refresh_at:
             pending = executor.submit(board_snapshot, args.tasks, args.offline)
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
-        selected = min(selected, max(0, len(rows) - 1))
-        current = rows[selected] if rows else None
-        viewing_controller = general or current is None
-        message_target = None if viewing_controller else current
-        selected_id = current["id"] if current else None
-        if selected_id != detail_task:
-            detail_offset, detail_task = 0, selected_id
         screen.erase()
 
         def put(y, text, color=0, bold=False, highlight=False, underline=False):
@@ -707,177 +737,212 @@ def display_loop(screen, args, executor):
                     text = text.ljust(max(1, width - 3))
                 screen.addnstr(y, 1, text, max(0, width - 2), style)
             except curses.error:
-                pass  # A resize or wide glyph can exhaust the last cell.
+                pass
 
-        attention = sum(bool(row["action"]) for row in rows)
-        put(0, "STAGEHAND  /  WORKSPACE STATUS", bold=True)
-        put(1, f"{attention} need your attention   ·   {sum(r['color'] == 2 for r in rows)} in progress   ·   {sum(r['color'] == 3 for r in rows)} complete", bold=True)
+        # Avoid overlapping controls on a transient tiny resize. No input is sent.
+        if width < 60 or height < 24:
+            put(0, "STAGEHAND — enlarge this pane to at least 60 × 24.")
+            put(2, "Your drafts are saved. q closes the board.")
+            screen.refresh()
+            if screen.getch() == ord("q"):
+                return
+            continue
+
+        selected = min(selected, max(0, len(rows) - 1))
+        current = rows[selected] if rows else None
+        viewing_controller = general or current is None
+        message_target = None if viewing_controller else current
+        selected_id = current["id"] if current else None
+        if selected_id != detail_task:
+            detail_offset, detail_task = 0, selected_id
+            info = False
+
+        health = " · Offline" if args.offline else ""
+        if pending and time.monotonic() - refresh_started > 2:
+            health = " · Updates delayed"
+        put(0, "STAGEHAND" + health, bold=True)
+        actions, _ = draw_actions(screen, 1, width,
+                                 [("task", "Tasks"), ("controller", "Orchestrator"), ("help", "?")],
+                                 "help" if show_help else "controller" if viewing_controller else "task")
         legend_x = 1
-        for label, color in (("● Needs you", 1), ("● Ongoing", 2), ("● Handoff complete", 3)):
+        for color, label in ((1, "need you"), (2, "in progress"), (3, "handed off")):
+            text = f"● {sum(row['color'] == color for row in rows)} {label}"
             try:
-                screen.addnstr(2, legend_x, label, max(0, width - legend_x - 1),
+                screen.addnstr(2, legend_x, text, max(0, width - legend_x - 1),
                                curses.color_pair(color) if curses.has_colors() else 0)
             except curses.error:
                 pass
-            legend_x += len(label) + 3
-        header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
-        # Share column widths across rows while reserving room for individual PR links.
-        pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in rows), default=9)))
-        put(4, "    " + table_line(header, max(1, width - 8), pr_width), bold=True)
-        table_links = {}
-        # Keep selected-task instructions visible even when the task list is long.
-        visible = max(1, (height - 17) // 2)
-        if viewing_controller:
-            visible = min(visible, 3)
-        offset = max(0, selected - visible + 1)
-        health = "Loading" if last_refresh is None else f"Updated {age(last_refresh, time.monotonic())} ago"
-        if pending and time.monotonic() - refresh_started > 2:
-            health += " · refresh delayed"
-        if warnings:
-            health += " · check warning below"
-        caption = f"Tasks {offset + 1 if rows else 0}–{min(len(rows), offset + visible)} of {len(rows)} · {health}"
-        for i, row in enumerate(rows[offset:offset + visible], offset):
-            marker = "›" if i == selected else " "
-            y = 5 + i - offset + (1 if i > selected else 0)
-            put(y, f"{marker} ● {table_line(row, max(1, width - 8), pr_width)}", row["color"], highlight=i == selected)
-            if width - 8 >= 100 and row["prs"]:
-                pr_x = 5 + sum(columns(width - 8, pr_width)) + 6
-                end = min(pr_x + pr_width, width - 2)
-                for label, url in pr_labels(row):
-                    length = min(len(label), end - pr_x)
-                    if length <= 0:
-                        break
-                    try:
-                        style = curses.A_UNDERLINE | (curses.color_pair(row["color"]) if curses.has_colors() else 0)
-                        if i == selected:
-                            style |= curses.A_REVERSE
-                        screen.addnstr(y, pr_x, label, length, style)
-                        table_links.setdefault(y, []).append((pr_x, pr_x + length, url))
-                    except curses.error:
-                        pass
-                    pr_x += len(label) + 2
-            if i == selected:
-                put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
-        if not rows:
-            put(5, "Loading tasks…" if pending else "No readable active tasks." if warnings else "No active tasks.")
-        draw_task_frame(screen, width, visible, selected, len(rows), caption)
+            legend_x += len(text) + 3
 
-        detail_y = 5 + visible + 2
-        actions, title_y = draw_actions(screen, detail_y, width, viewing_controller)
+        table_links, detail_links = {}, {}
+        visible = max(1, min(12, len(rows), (height - 20) // 2))
+        offset = max(0, selected - visible + 1)
+        show_tasks = not (viewing_controller or show_help)
+        if show_tasks:
+            header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
+            pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in rows), default=9)))
+            put(4, "    " + table_line(header, width - 8, pr_width), bold=True)
+            for i, row in enumerate(rows[offset:offset + visible], offset):
+                marker, y = ("›" if i == selected else " "), 5 + i - offset
+                summary = dict(row, stage=task_stage(row), roles=task_next(row))
+                # Color only the dot on unselected rows; a long red/yellow row
+                # competes with the selected task and its requested action.
+                put(y, f"{marker} ● {table_line(summary, width - 8, pr_width)}",
+                    highlight=i == selected)
+                try:
+                    style = curses.color_pair(row["color"]) if curses.has_colors() else 0
+                    screen.addnstr(y, 3, "●", 1, style | (curses.A_REVERSE if i == selected else 0))
+                except curses.error:
+                    pass
+                if width - 8 >= 100 and row["prs"]:
+                    pr_x = 5 + sum(columns(width - 8, pr_width)) + 6
+                    end = min(pr_x + pr_width, width - 2)
+                    for label, url in pr_labels(row):
+                        length = min(len(label), end - pr_x)
+                        if length <= 0:
+                            break
+                        try:
+                            style = curses.A_UNDERLINE | (curses.A_REVERSE if i == selected else 0)
+                            screen.addnstr(y, pr_x, label, length, style)
+                            table_links.setdefault(y, []).append((pr_x, pr_x + length, url))
+                        except curses.error:
+                            pass
+                        pr_x += len(label) + 2
+            draw_task_frame(screen, width, visible, selected, len(rows),
+                            f"Workspaces {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
+            detail_y = 7 + visible
+        else:
+            detail_y = 3
+
+        if show_help:
+            context_actions = [("help", "Back")]
+        elif viewing_controller:
+            context_actions = [("open-controller", "Open orchestrator"), ("latest", "Follow latest")]
+        else:
+            context_actions = [("workspace", "Open workspace"), ("info", "Hide info" if info else "Info")]
+        context_hits, title_y = draw_actions(screen, detail_y, width, context_actions)
+        actions += context_hits
         detail_height = max(1, height - 9 - (title_y + 1))
-        details = controller_lines(controller, width) if viewing_controller else detail_lines(current, width)
+        if show_help:
+            details = help_lines(width, warnings)
+            title, color = "Help · buttons and underlined PRs are clickable", 10
+        elif viewing_controller:
+            details = controller_lines(controller, width)
+            status = {"idle": "Ready for you", "done": "Ready for you", "blocked": "Needs you — open native session",
+                      "working": "Working", "unavailable": "Unavailable — check native session"}.get(controller["status"], controller["status"].capitalize())
+            title, color = f"Orchestrator · {status}", 1 if controller["status"] in {"blocked", "unavailable"} else 10
+        else:
+            details = detail_lines(current, width, info)
+            title, color = current["label"], 10
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
-        if viewing_controller:
-            if controller_offset is None:
-                active_offset = max(0, len(details) - detail_height)
-            else:
-                active_offset = max(0, min(controller_offset, len(details) - detail_height))
+        if viewing_controller and not show_help:
+            active_offset = max(0, len(details) - detail_height) if controller_offset is None else max(0, min(controller_offset, len(details) - detail_height))
         else:
             active_offset = detail_offset
-        detail_links = {}
-        if details:
-            scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)} · [ ] scroll" if len(details) > detail_height else ""
-            title = f"ORCHESTRATOR · {controller['status']} · Recent output" if viewing_controller else current["label"]
-            color = (1 if controller["status"] in {"blocked", "unavailable"} else 10) if viewing_controller else current["color"]
-            put(title_y, title + scroll_hint, color, bold=True)
-            for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
-                y = title_y + 1 + i
-                put(y, line, color, bold=bool(color))
-                detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
-                for left, right, _ in links:
-                    try:
-                        screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
-                    except curses.error:
-                        pass
+        scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)}" if len(details) > detail_height else ""
+        put(title_y, title + scroll_hint, color, bold=True)
+        for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
+            y = title_y + 1 + i
+            put(y, line, color, bold=bool(color))
+            detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
+            for left, right, _ in links:
+                try:
+                    screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
+                except curses.error:
+                    pass
         try:
             path = draft_path(args, message_target)
             draft = path.read_text() if path.exists() else ""
             draw_message_box(screen, message_target, draft)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
-        if notice:
-            put(height - 2, notice, bold=True)
         if warnings:
-            put(height - 2, "! " + " | ".join(warnings), 1)
+            put(height - 2, f"Updates need attention ({len(warnings)}) · ? for details", 1)
+        elif notice:
+            put(height - 2, notice, bold=True)
         try:
-            screen.addnstr(height - 1, 0, " m: message · c: orchestrator · o: workspace · O: open orchestrator · ↑↓ tasks · [ ] scroll · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · ? Help · q Close", width - 1, curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
         key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        action = None
         if key == ord("q"):
             return
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
-        elif key in (curses.KEY_DOWN, ord("j")):
-            selected += 1
-            general = False
-        elif key in (curses.KEY_UP, ord("k")):
-            selected = max(0, selected - 1)
-            general = False
-        elif key == curses.KEY_NPAGE:
-            selected += visible
-        elif key == curses.KEY_PPAGE:
-            selected = max(0, selected - visible)
-        elif key == ord("a") and rows:
-            selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["action"]), selected)
-        elif key in (ord("["), ord("]")):
-            if viewing_controller:
-                controller_offset = max(0, active_offset + (-1 if key == ord("[") else 1))
-            else:
-                detail_offset += -1 if key == ord("[") else 1
-        elif key == ord("c"):
-            general, controller_offset = True, None
-        elif key == ord("o"):
-            notice = open_target(args, current) if current else "Select a task workspace first."
-        elif key == ord("O"):
-            notice = open_target(args)
+        elif key in (ord("t"), ord("c"), ord("?")):
+            action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help"}[key]
+        elif key == 27:
+            show_help = False
+        elif key in (ord("o"), ord("O")):
+            action = "open-controller" if key == ord("O") or viewing_controller else "workspace"
+        elif key == ord("i") and not viewing_controller:
+            action = "info"
         elif key == ord("m"):
             notice = compose(screen, args, message_target, inline=True)
+        elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
+            delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
+            if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+                delta *= detail_height if viewing_controller or show_help else visible
+            if viewing_controller and not show_help:
+                controller_offset = max(0, active_offset + delta)
+            elif show_help or key in (ord("["), ord("]")):
+                detail_offset = max(0, active_offset + delta)
+            else:
+                selected = max(0, min(len(rows) - 1, selected + delta))
+        elif key == curses.KEY_END and viewing_controller:
+            controller_offset = None
+        elif key == ord("a") and rows:
+            selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["color"] == 1), selected)
+            general, show_help = False, False
         elif key == curses.KEY_MOUSE:
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
-                action = next((name for line, left, right, name in actions if y == line and left <= x < right), None)
+                action = next((name for line, left, right, name in actions if y == line and left <= x < right), None) if kind == "select" else None
                 if kind == "wheel":
-                    if detail_y <= y < height - 8:
-                        if viewing_controller:
-                            controller_offset = max(0, active_offset + delta)
-                        else:
-                            detail_offset += delta
-                    else:
+                    if show_tasks and 3 <= y <= 6 + visible:
                         selected = max(0, min(len(rows) - 1, selected + delta))
-                elif kind == "select" and action:
-                    if action == "task":
-                        general = False
-                    elif action == "controller":
-                        general, controller_offset = True, None
-                    elif action == "workspace":
-                        notice = open_target(args, current) if current else "Select a task workspace first."
+                    elif viewing_controller and not show_help:
+                        controller_offset = max(0, active_offset + delta)
                     else:
-                        notice = open_target(args)
-                elif kind == "select" and x == width - 2 and 5 <= y <= 5 + visible and rows:
+                        detail_offset = max(0, active_offset + delta)
+                elif kind == "select" and action:
+                    pass
+                elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
-                elif height - 8 <= y < height - 2:
+                elif kind == "select" and height - 8 <= y < height - 2:
                     notice = compose(screen, args, message_target, inline=True,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
-                else:
-                    index = clicked_row(x, y, width, offset, visible, len(rows), selected)
-                    is_preview = y == 6 + selected - offset
+                elif kind == "select":
+                    index = clicked_row(x, y, width, offset, visible, len(rows)) if show_tasks else None
                     if index is not None:
                         selected = index
-                        general = False
-                        if not is_preview and kind == "select":
-                            for left, right, url in table_links.get(y, []):
-                                if left <= x < right:
-                                    open_pr(url)
-                                    break
-                    elif kind == "select":
+                        for left, right, url in table_links.get(y, []):
+                            if left <= x < right:
+                                open_pr(url)
+                                break
+                    else:
                         for left, right, url in detail_links.get(y, []):
                             if left <= x < right:
                                 open_pr(url)
                                 break
+        if action == "task":
+            general, show_help, detail_offset = False, False, 0
+        elif action == "controller":
+            general, show_help, controller_offset = True, False, None
+        elif action == "help":
+            show_help, detail_offset = not show_help, 0
+        elif action == "info":
+            info, detail_offset = not info, 0
+        elif action == "latest":
+            controller_offset = None
+        elif action == "workspace":
+            notice = open_target(args, current) if current else "Select a task workspace first."
+        elif action == "open-controller":
+            notice = open_target(args)
         if isinstance(notice, tuple):
             notice, queued_mouse = notice
         try:

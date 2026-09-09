@@ -2,7 +2,7 @@
 
 A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-The board shows a compact workspace table with workflow stage, review cycle, agents, and PR number. Only the selected workspace expands an indented objective preview, highlighted together with its heading; details show the complete purpose. Decisions needing you appear first, followed by completed handoffs and ongoing work; filename order is preserved within each group. Select a row to see its human action, repository, PR links, and record age in a fixed detail area. Green means orchestration is complete, including a finalized PR awaiting human merge. Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted, and invalid records or unavailable live state produce visible warnings.
+Two views separate task work from the orchestrator conversation. **Tasks** shows workspaces, concise workflow status, the next actor, and PR links. Selecting a row shows its next action and purpose below; **Info** reveals technical details. **Orchestrator** provides recent output and a general message box for setup or new tasks. Red needs you, yellow is in progress, and green is handed off (including ready PRs awaiting human merge). Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted; invalid records and unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -26,11 +26,11 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Click a task row to select it. The lower panel contains its full details; scroll there with the mouse wheel or **[ / ]**. There is no separate detail screen. Arrow keys or j/k select a workspace; Page Up/Down page; a jumps to the next human action; r refreshes; q closes. Underlined PR links open GitHub, including Enterprise hosts. Multiple PRs appear as comma-separated, individually clickable numbers. The lower panel lists clickable repo#number labels, including any that do not fit in the table. Narrow panes hide table columns, but the lower panel retains all PR links. Mouse input requires terminal mouse forwarding. A plain-text snapshot is also available:
+Click a task row to select it. The lower panel contains its next action, purpose, and PRs; scroll there with the mouse wheel or **[ / ]**. Arrow keys or j/k select a workspace; Page Up/Down page. Narrow panes hide table columns, but the lower panel retains all PR links. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
-The task list has a position indicator and clickable scroll rail. Snapshot age and delayed-refresh warnings expose update health, not agent progress. Workspace IDs and checkout paths in the details distinguish same-named workspaces; the board never merges or removes them.
+The task list has a position indicator and clickable scroll rail. Delayed-refresh warnings expose update health, not agent progress. **Info** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
@@ -40,9 +40,9 @@ Add `--offline` to skip live Herdr queries and disable messaging/navigation. The
 
 ## Navigation and orchestrator view
 
-- **Open workspace** (**o**) focuses the selected task's existing Herdr workspace. Selecting a row alone never navigates away.
-- **Orchestrator / new task** (**c**) shows the controller's runtime state and a scrollable preview of recent terminal output. **[ / ]** or the wheel scrolls; reselect this view to follow the latest output. Selecting a task or **Task details** returns to task-specific messaging.
-- **Open orchestrator** (**O**, Shift-O) focuses its native agent pane for full conversations, permissions, or setup problems. It does not approve prompts or start agents.
+- **Tasks** (**t**): select a workspace; **Open workspace** (**o**) opens its existing Herdr session for direct agent work. Selecting a row alone never navigates away.
+- **Orchestrator** (**c**): read recent output and discuss setup or new work. Arrows, **[ / ]**, Page Up/Down, and the wheel scroll. **Follow latest** or End resumes following new output.
+- **Open orchestrator** (**o** in that view, or **Shift-O** anywhere) opens its native agent pane for full conversations, permissions, or setup problems. It does not approve prompts or start agents.
 
 With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. The preview reads at most 120 terminal lines per background refresh, not a guaranteed complete or final assistant response; it may contain tool output. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
 
@@ -54,7 +54,9 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Appearance
 
-Filled buttons distinguish actions from text: cyan marks the active view and Send, while other actions use a neutral background. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
+Filled buttons and underlined PRs are clickable; other labels are information. Cyan marks the active view and Send when a draft has text. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
+
+The layout adapts to terminal cells, not physical pixels. It supports compact panes from 60 columns × 24 rows through ultrawide layouts; narrower tables hide secondary columns, and prose/editor lines stop growing on wide screens. Tiny panes show a resize hint without discarding drafts. No per-widget font-size changes are required.
 
 Font, text/background defaults, and ANSI colors come from the hosting terminal. The board sets no fixed RGB palette or font. Herdr's separate UI palette is not exposed by its plugin API, so a custom Herdr UI theme may differ from the terminal colors. Status meaning stays human-oriented: red needs you, yellow is ongoing, green is a completed workflow handoff (not Herdr's transient unseen-response state).
 
