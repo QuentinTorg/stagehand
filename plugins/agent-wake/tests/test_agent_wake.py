@@ -128,7 +128,7 @@ class WakePluginTest(unittest.TestCase):
 
     def test_busy_target_defers_until_flush(self):
         self.arm()
-        target_status = ["working", "idle"]
+        target_status = ["working", "working", "idle"]
         prompts = []
 
         def herdr(*args):
@@ -150,6 +150,32 @@ class WakePluginTest(unittest.TestCase):
             self.emit("done")
             self.assertFalse(self.documents("inbox")[0]["notified"])
             wake._flush()
+
+        self.assertEqual(1, len(prompts))
+        self.assertTrue(self.documents("inbox")[0]["notified"])
+
+    def test_target_settling_during_delivery_recheck_is_not_missed(self):
+        self.arm()
+        target_status = ["working", "idle"]
+        prompts = []
+
+        def herdr(*args):
+            if args[:3] == ("agent", "get", "w2:p1"):
+                return {"result": {"agent": {"agent_status": "done"}}}, None
+            if args[:3] == ("agent", "get", "controller_agent"):
+                return {
+                    "result": {"agent": {"agent_status": target_status.pop(0)}}
+                }, None
+            if args[:3] == ("agent", "prompt", "controller_agent"):
+                prompts.append(args[3])
+                return {"result": {"type": "agent_prompted"}}, None
+            self.fail(f"unexpected Herdr call: {args}")
+
+        with mock.patch.object(wake, "_herdr", side_effect=herdr), mock.patch.object(
+            wake.time, "sleep"
+        ):
+            self.emit("working")
+            self.emit("done")
 
         self.assertEqual(1, len(prompts))
         self.assertTrue(self.documents("inbox")[0]["notified"])

@@ -21,6 +21,7 @@ PLUGIN_ID = "quentintorg.agent-wake"
 SETTLED = {"idle", "done", "blocked"}
 TARGET_READY = {"idle", "done"}
 MAX_NOTIFY_ATTEMPTS = 3
+BUSY_RECHECK_SECONDS = 0.5
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -289,9 +290,15 @@ def _notify_consumer(state_root: Path, configured_target: str) -> None:
             return
         target = configured_target
         payload, error = _herdr("agent", "get", target)
-        # Queue while busy instead of injecting text into the target's active turn.
-        if error or _status(_agent(payload)) not in TARGET_READY:
+        if error:
             return
+        if _status(_agent(payload)) not in TARGET_READY:
+            # Close the narrow race where the target settles just before this
+            # inbox write; longer work remains queued for its later status hook.
+            time.sleep(BUSY_RECHECK_SECONDS)
+            payload, error = _herdr("agent", "get", target)
+            if error or _status(_agent(payload)) not in TARGET_READY:
+                return
         notices = [
             {
                 "id": wake["id"],
