@@ -79,6 +79,34 @@ def age(timestamp, now):
     return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m" if seconds < 3600 else f"{seconds // 3600}h"
 
 
+def pr_links(task):
+    links = []
+
+    def collect(value):
+        if isinstance(value, dict):
+            if "url" in value:
+                collect(value["url"])
+            else:
+                for child in value.values():
+                    collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+        elif isinstance(value, str):
+            try:
+                parsed = urlsplit(value)
+                parts = parsed.path.rstrip("/").split("/")
+                if parsed.scheme == "https" and parsed.hostname and len(parts) >= 5 and parts[-2] == "pull" and parts[-1].isdigit() and value not in links:
+                    links.append(value)
+            except ValueError:
+                pass
+
+    # Read PR collections, not historical URLs embedded in decisions or event logs.
+    for field in ("pull_request", "pull_requests", "follow_up_pull_requests", "stacked_pull_request"):
+        collect(task.get(field))
+    return links
+
+
 def task_summary(task, modified, workspaces, agents, now):
     state = task["state"]
     stage = clean(state.get("name", "unknown"))
@@ -120,7 +148,8 @@ def task_summary(task, modified, workspaces, agents, now):
     if next_actor:
         roles += f" → {clean(next_actor)}"
     repository = clean(mapping(task.get("repository")).get("name"))
-    pr = clean(mapping(task.get("pull_request")).get("url"))
+    prs = pr_links(task)
+    pr = prs[0] if prs else ""
     action = None
     if state.get("attention_required"):
         action = clean(state.get("attention_reason")) or "Human decision needed; ask the orchestrator."
@@ -132,7 +161,7 @@ def task_summary(task, modified, workspaces, agents, now):
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
             "stage": details, "roles": roles, "repository": repository,
-            "pr": pr, "action": action, "saved": age(modified, now),
+            "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if stage in COMPLETE else "Awaiting workflow update")}
 
 
@@ -175,9 +204,22 @@ def table_line(row, width):
     name_width, stage_width, roles_width = columns(width)
     pr_width = 9
     pr = "#" + row["pr"].rstrip("/").split("/")[-1] if row["pr"] else "—"
+    if len(row.get("prs", [])) > 1:
+        pr = f"{len(row['prs'])} PRs"
     return (f"{clipped(row['label'], name_width):<{name_width}}  "
             f"{clipped(row['stage'], stage_width):<{stage_width}}  "
             f"{clipped(row['roles'], roles_width):<{roles_width}}  {clipped(pr, pr_width)}")
+
+
+def detail_lines(row, width):
+    action = row["action"] or f"Nothing needed from you. Next: {row['next']}."
+    entries = [("PURPOSE: " + row["objective"], 0, None),
+               ("YOUR ACTION: " + action, 1 if row["action"] else 0, None),
+               (row["stage"] + " · " + row["roles"], 0, None),
+               (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+    entries += [(url, 0, url) for url in row["prs"]] or [("No pull request", 0, None)]
+    return [(line, color, url) for text, color, url in entries
+            for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
 
 
 def mouse_event():
@@ -231,7 +273,7 @@ def send_message(args, row, message):
         return False, "Sending requires a live Herdr session. Draft kept."
     context = {"task": row["id"], "workspace": row["label"],
                "workspace_id": row["workspace_id"], "repository": row["repository"],
-               "pull_request": row["pr"], "task_directory": str(args.tasks)}
+               "pull_request": row["pr"], "pull_requests": row["prs"], "task_directory": str(args.tasks)}
     prompt = ("Human message from the Stagehand board. Interpret the human request using your normal workflow; "
               "routing context is not evidence of a workflow transition.\n"
               + "Routing context: " + json.dumps(context, ensure_ascii=False)
@@ -434,6 +476,7 @@ def display(screen, args):
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice = ""
+    detail_offset, detail_task = 0, None
     while True:
         if time.monotonic() >= refresh_at:
             rows, warnings = snapshot(args.tasks, args.offline)
@@ -443,6 +486,8 @@ def display(screen, args):
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
         selected_id = current["id"] if current else None
+        if selected_id != detail_task:
+            detail_offset, detail_task = 0, selected_id
         screen.erase()
 
         def put(y, text, color=0, bold=False, highlight=False, underline=False):
@@ -473,19 +518,23 @@ def display(screen, args):
             legend_x += len(label) + 3
         header = {"label": "WORKSPACE", "stage": "WORKFLOW", "roles": "AGENTS / NEXT", "pr": "PR"}
         put(4, "    " + table_line(header, max(1, width - 6)).replace("#PR", "PR"), bold=True)
-        purpose_lines = textwrap.wrap("PURPOSE: " + current["objective"], max(1, width - 4)) if current else []
-        purpose_limit = max(1, height // 3)
-        if len(purpose_lines) > purpose_limit:
-            purpose_lines = purpose_lines[:purpose_limit]
-            purpose_lines[-1] = "… Enter for full purpose."
-        purpose_extra = max(0, len(purpose_lines) - 1)
         # Keep selected-task instructions visible even when the task list is long.
-        visible = max(1, height - 24 - purpose_extra)
+        visible = max(1, (height - 17) // 2)
         offset = max(0, selected - visible + 1)
         for i, row in enumerate(rows[offset:offset + visible], offset):
             marker = "›" if i == selected else " "
             y = 5 + i - offset + (1 if i > selected else 0)
             put(y, f"{marker} ● {table_line(row, max(1, width - 6))}", row["color"], highlight=i == selected)
+            if width - 6 >= 100 and row["prs"]:
+                pr_x = 5 + sum(columns(width - 6)) + 6
+                label = f"{len(row['prs'])} PRs" if len(row["prs"]) > 1 else "#" + row["pr"].rstrip("/").split("/")[-1]
+                try:
+                    style = curses.A_UNDERLINE | (curses.color_pair(row["color"]) if curses.has_colors() else 0)
+                    if i == selected:
+                        style |= curses.A_REVERSE
+                    screen.addnstr(y, pr_x, label, max(0, min(9, width - pr_x - 1)), style)
+                except curses.error:
+                    pass
             if i == selected:
                 put(y + 1, ("      ↳ " + row["objective"]).ljust(max(1, width - 3)), color=4 + row["color"])
         if not rows:
@@ -493,19 +542,18 @@ def display(screen, args):
 
         detail_y = 5 + visible + 2
         put(detail_y, "─" * max(0, width - 3))
+        detail_height = max(1, height - 9 - (detail_y + 2))
+        details = detail_lines(current, width) if current else []
+        detail_offset = max(0, min(detail_offset, len(details) - detail_height))
+        detail_links = {}
         if current:
-            put(detail_y + 1, current["label"], current["color"], bold=True)
-            for i, line in enumerate(purpose_lines):
-                put(detail_y + 2 + i, line)
-            action = current["action"] or f"No action needed from you. Next: {current['next']}."
-            prefix = "YOUR ACTION: " if current["action"] else "STATUS: "
-            wrapped = textwrap.wrap(prefix + action, max(1, width - 4))
-            for i, line in enumerate(wrapped[:3]):
-                put(detail_y + 3 + purpose_extra + i, line, 1 if current["action"] else 0, bold=bool(current["action"]))
-            if len(wrapped) > 3:
-                put(detail_y + 5 + purpose_extra, "… Press Enter for the full task details.", bold=True)
-            put(detail_y + 6 + purpose_extra, f"{current['repository']}  ·  {current['roles']}  ·  record saved {current['saved']} ago")
-            put(detail_y + 7 + purpose_extra, current["pr"] or "No pull request", underline=bool(current["pr"]))
+            scroll_hint = f" · {detail_offset + 1}–{min(len(details), detail_offset + detail_height)}/{len(details)} · wheel or [ ] to scroll" if len(details) > detail_height else ""
+            put(detail_y + 1, current["label"] + scroll_hint, current["color"], bold=True)
+            for i, (line, color, url) in enumerate(details[detail_offset:detail_offset + detail_height]):
+                y = detail_y + 2 + i
+                put(y, line, color, bold=bool(color), underline=bool(url))
+                if url:
+                    detail_links[y] = (url, len(line))
             try:
                 path = draft_path(args, current)
                 draft = path.read_text() if path.exists() else ""
@@ -517,7 +565,7 @@ def display(screen, args):
         if warnings:
             put(height - 2, "! " + " | ".join(warnings), 1)
         try:
-            screen.addnstr(height - 1, 0, " m: message orchestrator · Click PR: browser · Wheel / ↑↓ select · Enter details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
+            screen.addnstr(height - 1, 0, " Click message box to type · Click PR: open links · ↑↓ select · [ ] scroll details · a next action · r refresh · q close", max(0, width - 1), curses.A_DIM)
         except curses.error:
             pass
         screen.refresh()
@@ -536,8 +584,8 @@ def display(screen, args):
             selected = max(0, selected - visible)
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["action"]), selected)
-        elif key in (10, 13, curses.KEY_ENTER) and current:
-            notice = show_details(screen, current, args) or ""
+        elif key in (ord("["), ord("]")):
+            detail_offset += -1 if key == ord("[") else 1
         elif key == ord("m") and current:
             notice = compose(screen, args, current, inline=True)
         elif key == curses.KEY_MOUSE:
@@ -545,7 +593,10 @@ def display(screen, args):
             if event:
                 kind, x, y, delta = event
                 if kind == "wheel":
-                    selected = max(0, min(len(rows) - 1, selected + delta))
+                    if detail_y <= y < height - 8:
+                        detail_offset += delta
+                    else:
+                        selected = max(0, min(len(rows) - 1, selected + delta))
                 elif current and height - 8 <= y < height - 2:
                     notice = compose(screen, args, current, inline=True,
                                      send_now=y == height - 4 and 3 <= x <= 10)
@@ -558,62 +609,13 @@ def display(screen, args):
                         pr_x = 5 + sum(columns(table_width)) + 6
                         if not is_preview and table_width >= 100 and pr_x <= x < pr_x + 9 and rows[index]["pr"]:
                             if kind == "select":
-                                open_pr(rows[index]["pr"])
-                        elif kind == "open":
-                            notice = show_details(screen, rows[index], args) or ""
-                    elif current and y == detail_y + 7 + purpose_extra and 1 <= x <= min(width - 2, len(current["pr"])) and current["pr"]:
-                        open_pr(current["pr"])
-                    elif current and 1 <= x < width - 1 and detail_y + 1 <= y <= detail_y + 6 + purpose_extra:
-                        notice = show_details(screen, current, args) or ""
-
-
-def show_details(screen, row, args):
-    """Keep long human-authored reasons accessible instead of silently truncating them."""
-    offset = 0
-    while True:
-        height, width = screen.getmaxyx()
-        texts = [row["label"], "PURPOSE", row["objective"], "", "YOUR ACTION" if row["action"] else "STATUS",
-                 row["action"] or f"No action needed from you. Next: {row['next']}.", "",
-                 row["stage"], row["roles"], row["repository"], row["pr"],
-                 f"Record saved {row['saved']} ago. Workflow state is saved; runtime is observed."]
-        lines = [(line, i == 10 and bool(row["pr"])) for i, text in enumerate(texts)
-                 for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
-        visible = max(1, height - 2)
-        offset = min(offset, max(0, len(lines) - visible))
-        screen.erase()
-        for y, (line, link) in enumerate(lines[offset:offset + visible]):
-            try:
-                screen.addnstr(y, 1, line, max(0, width - 2), curses.A_UNDERLINE if link else 0)
-            except curses.error:
-                pass
-        try:
-            screen.addnstr(height - 1, 0, " [ Back ]  [ Message orchestrator · m ]  Wheel / ↑↓ scroll", max(0, width - 1), curses.A_DIM)
-        except curses.error:
-            pass
-        screen.refresh()
-        key = screen.getch()
-        if key in (10, 13, 27, ord("q"), curses.KEY_ENTER):
-            return
-        if key == ord("m"):
-            return compose(screen, args, row)
-        if key in (curses.KEY_DOWN, ord("j")):
-            offset += 1
-        elif key in (curses.KEY_UP, ord("k")):
-            offset = max(0, offset - 1)
-        elif key == curses.KEY_MOUSE:
-            event = mouse_event()
-            if event:
-                kind, x, y, delta = event
-                if kind == "wheel":
-                    offset = max(0, offset + delta)
-                elif y == height - 1 and 1 <= x <= 8:
-                    return
-                elif y == height - 1 and 11 <= x <= 37:
-                    return compose(screen, args, row)
-                elif 0 <= y < visible and offset + y < len(lines):
-                    line, link = lines[offset + y]
-                    if link and 1 <= x <= len(line):
-                        open_pr(row["pr"])
+                                if len(rows[index]["prs"]) == 1:
+                                    open_pr(rows[index]["pr"])
+                                else:
+                                    detail_task = rows[index]["id"]
+                                    detail_offset = next(i for i, (_, _, url) in enumerate(detail_lines(rows[index], width)) if url)
+                    elif kind == "select" and y in detail_links and 1 <= x <= detail_links[y][1]:
+                        open_pr(detail_links[y][0])
 
 
 def main():
@@ -636,7 +638,7 @@ def main():
             print(f"  PURPOSE: {row['objective']}")
             if row["action"]:
                 print(f"  YOUR ACTION: {row['action']}")
-            print(f"  {row['repository']} | {row['pr'] or 'No PR'} | saved {row['saved']} ago")
+            print(f"  {row['repository']} | {', '.join(row['prs']) or 'No PR'} | saved {row['saved']} ago")
     elif not sys.stdout.isatty():
         parser.error("Interactive board needs a terminal; use --once for text output")
     else:

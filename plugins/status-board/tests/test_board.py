@@ -12,6 +12,28 @@ spec.loader.exec_module(board)
 
 
 class BoardTests(unittest.TestCase):
+    def test_multiple_prs_preserve_hosts_and_ignore_historical_links(self):
+        public = "https://github.com/team/project/pull/12"
+        enterprise = "https://github.carnegierobotics.com/team/project/pull/12"
+        stacked = "https://github.com/team/meta/pull/34"
+        task = self.task()
+        task.update(pull_request={"url": public, "legacy_url": "https://github.com/old/project/pull/1"},
+                    follow_up_pull_requests={"component": {"url": enterprise}, "duplicate": {"url": public},
+                                             "review_order": ["component", "duplicate"]},
+                    stacked_pull_request={"url": stacked})
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["prs"], [public, enterprise, stacked])
+        self.assertIn("3 PRs", board.table_line(row, 140))
+        lines = board.detail_lines(row, 40)
+        for url in row["prs"]:
+            self.assertEqual("".join(line for line, _, target in lines if target == url), url)
+        self.assertTrue(all(len(line) <= 36 for line, _, _ in lines))
+
+    def test_pr_collection_list_and_absent_prs(self):
+        url = "https://github.com/team/project/pull/1"
+        self.assertEqual(board.pr_links({"pull_requests": [{"url": url}, url, "not a PR"]}), [url])
+        self.assertEqual(board.pr_links({}), [])
+
     def test_composer_preserves_failed_message_then_restores_and_sends(self):
         with tempfile.TemporaryDirectory() as root:
             args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
