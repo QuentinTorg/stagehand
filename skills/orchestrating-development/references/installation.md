@@ -47,21 +47,21 @@ The two rule files have different consumers and installation scopes:
 - `.codex/rules/herdr.rules` is tracked in this workspace and grants the orchestrator bounded Herdr inspection and task-management operations.
 - `assets/codex-managed-agent-events.rules` is linked into `~/.codex/rules/` and grants managed authors and reviewers only event delivery, caller-pane discovery, and bounded Hunk operations.
 
-## Managed-agent wake plugin
+## Agent Wake Relay
 
 Link the bundled plugin, enable it, and register this exact control workspace:
 
 ```sh
-herdr plugin link /absolute/path/to/orchestration-workspace/plugins/stagehand-wake --enabled
-/absolute/path/to/orchestration-workspace/plugins/stagehand-wake/stagehand-wake \
-  configure --workspace /absolute/path/to/orchestration-workspace \
-  --orchestrator workflow_orchestrator
+herdr plugin link /absolute/path/to/orchestration-workspace/plugins/agent-wake --enabled
+/absolute/path/to/orchestration-workspace/plugins/agent-wake/agent-wake \
+  configure --state-root /absolute/path/to/orchestration-workspace/.orchestrator/wake \
+  --target workflow_orchestrator
 herdr plugin list
-/absolute/path/to/orchestration-workspace/plugins/stagehand-wake/stagehand-wake \
-  status --workspace /absolute/path/to/orchestration-workspace
+/absolute/path/to/orchestration-workspace/plugins/agent-wake/agent-wake \
+  status --state-root /absolute/path/to/orchestration-workspace/.orchestrator/wake
 ```
 
-The plugin is user-global but reacts only to one-shot watches stored in explicitly configured Stagehand workspaces. It wakes the orchestrator after a watched role turn settles; it does not decide that work succeeded or change task state. Existing role events remain the semantic handoff and fallback.
+The generic plugin is bundled with Stagehand but reacts only to one-shot watches in explicitly configured consumer state directories. Stagehand uses task IDs as opaque keys and roles as metadata. The relay does not decide that work succeeded or change task state; existing role events remain the semantic handoff and fallback.
 
 ## Managed-role skills
 

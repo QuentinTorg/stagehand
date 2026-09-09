@@ -18,7 +18,7 @@ the skill it distributes.
 | --- | --- | --- | --- | --- |
 | `orchestrating-development` | Orchestrator | Explicit request in the dedicated control workspace | Human-authorized task, local policy, task records, and managed-role events | Herdr topology, validated transitions, and human attention requests |
 | `herdr` | Orchestrator | When inspecting or controlling Herdr resources | Recorded workspace, pane, worktree, or agent identity | Observable runtime state or a bounded Herdr operation |
-| Stagehand wake plugin | Herdr runtime | During an explicitly watched managed-role handoff | Exact task, role, workspace, pane, and agent identity | Deduplicated durable prompt that tells the orchestrator to reconcile |
+| Agent Wake Relay | Herdr runtime | During an explicitly watched managed-role handoff | Opaque task metadata plus exact workspace, pane, and agent identity | Deduplicated durable prompt that tells the orchestrator to reconcile |
 | `writing-specifications` | Human and author | Optional architectural work before implementation | Goals, constraints, boundaries, and design questions | An agreed design artifact or implementation context |
 | `preparing-pull-requests` | Author | After implementation is ready and Stagehand requests draft creation | Confirmed intent, current branch, verification evidence, and issue context | Intent-bearing draft pull request and `draft-pr-ready` handoff |
 | `reviewing-code` | Reviewer | After the draft and exact changeset are validated | Pull-request context, repository guidance, base and head, and surrounding code | Material findings or a current-head review pass |

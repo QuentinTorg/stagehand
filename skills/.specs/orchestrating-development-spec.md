@@ -74,6 +74,6 @@ Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, h
 
 ## 6. Evaluation
 
-[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the workflow contract. The plugin also has automated unit tests under `plugins/stagehand-wake/tests`. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, wake and event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
+[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the workflow contract. The bundled generic relay also has automated unit tests under `plugins/agent-wake/tests`. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, wake and event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
 Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.

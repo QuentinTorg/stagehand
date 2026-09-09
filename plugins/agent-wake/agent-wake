@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable, one-shot wake bridge for Stagehand-managed Herdr agents."""
+"""Durable, one-shot wake relay between Herdr agents."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ import time
 import uuid
 
 
-PLUGIN_ID = "stagehand.managed-agent-wake"
+PLUGIN_ID = "quentintorg.agent-wake"
 SETTLED = {"idle", "done", "blocked"}
-ORCHESTRATOR_READY = {"idle", "done"}
+TARGET_READY = {"idle", "done"}
 MAX_NOTIFY_ATTEMPTS = 3
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 
@@ -58,19 +58,14 @@ def _config_dir() -> Path:
 
 
 def _config() -> dict:
-    return _json_file(_config_dir() / "config.json", {"version": 1, "workspaces": []})
-
-
-def _wake_root(workspace: Path) -> Path:
-    return workspace / ".orchestrator" / "wake"
+    return _json_file(_config_dir() / "config.json", {"version": 1, "consumers": []})
 
 
 @contextlib.contextmanager
-def _locked(workspace: Path):
-    if not workspace.is_dir():
-        raise FileNotFoundError(f"configured Stagehand workspace does not exist: {workspace}")
-    root = _wake_root(workspace)
-    root.mkdir(parents=True, exist_ok=True)
+def _locked(state_root: Path):
+    if not state_root.is_dir():
+        raise FileNotFoundError(f"configured wake state directory does not exist: {state_root}")
+    root = state_root
     with (root / "lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield root
@@ -117,56 +112,65 @@ def _status(agent: dict) -> str:
     return str(agent.get("agent_status") or agent.get("status") or "unknown")
 
 
-def _configured_workspaces() -> list[dict]:
-    entries = _config().get("workspaces", [])
+def _configured_consumers() -> list[dict]:
+    entries = _config().get("consumers", [])
     return [entry for entry in entries if isinstance(entry, dict) and entry.get("root")]
 
 
 def _configure(args) -> int:
-    workspace = Path(args.workspace).resolve()
-    if not workspace.is_dir():
-        raise SystemExit(f"Stagehand workspace does not exist: {workspace}")
-    root = str(workspace)
+    state_root = Path(args.state_root).resolve()
+    state_root.mkdir(parents=True, exist_ok=True)
+    root = str(state_root)
     config_path = _config_dir() / "config.json"
-    config = _json_file(config_path, {"version": 1, "workspaces": []})
+    config = _json_file(config_path, {"version": 1, "consumers": []})
     entries = [
         item
-        for item in config.get("workspaces", [])
+        for item in config.get("consumers", [])
         if isinstance(item, dict) and item.get("root") != root
     ]
-    entries.append({"root": root, "orchestrator": args.orchestrator})
+    entries.append({"root": root, "target": args.target})
     config["version"] = 1
-    config["workspaces"] = entries
+    config["consumers"] = entries
     _atomic_json(config_path, config)
     print(json.dumps(entries[-1], sort_keys=True))
     return 0
 
 
 def _arm(args) -> int:
-    workspace = Path(args.workspace).resolve()
-    configured = {Path(item["root"]).resolve() for item in _configured_workspaces()}
-    if workspace not in configured:
-        raise SystemExit(f"workspace is not configured for {PLUGIN_ID}: {workspace}")
-    with _locked(workspace) as root:
+    state_root = Path(args.state_root).resolve()
+    consumers = {
+        Path(item["root"]).resolve(): item for item in _configured_consumers()
+    }
+    if state_root not in consumers:
+        raise SystemExit(f"wake state directory is not configured for {PLUGIN_ID}: {state_root}")
+    target = consumers[state_root].get("target")
+    if not target:
+        raise SystemExit("no target agent was supplied or configured")
+    try:
+        metadata = json.loads(args.metadata)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid metadata JSON: {error}")
+    if not isinstance(metadata, dict):
+        raise SystemExit("metadata must be a JSON object")
+    with _locked(state_root) as root:
         for path, watch in _documents(root / "watches"):
             if not watch or watch.get("state") != "armed" or watch.get("pane_id") != args.pane:
                 continue
-            identity = (watch.get("task"), watch.get("role"), watch.get("workspace_id"))
-            if identity == (args.task, args.role, args.workspace_id):
+            identity = (watch.get("key"), watch.get("workspace_id"), watch.get("agent_name"))
+            if identity == (args.key, args.workspace_id, args.agent):
                 print(json.dumps(watch, sort_keys=True))
                 return 0
-            raise SystemExit(f"pane already has an active Stagehand watch: {path.stem}")
+            raise SystemExit(f"pane already has an active wake watch: {path.stem}")
         now = time.time()
         watch = {
             "version": 1,
             "id": uuid.uuid4().hex,
-            "task": args.task,
-            "role": args.role,
+            "key": args.key,
+            "metadata": metadata,
             "workspace_id": args.workspace_id,
             "workspace_label": args.workspace_label,
             "pane_id": args.pane,
             "agent_name": args.agent,
-            "orchestrator": args.orchestrator,
             "observed_working": bool(args.observed_working),
             "state": "armed",
             "created_at": now,
@@ -178,12 +182,12 @@ def _arm(args) -> int:
 
 
 def _remove(args, acknowledge: bool) -> int:
-    workspace = Path(args.workspace).resolve()
+    state_root = Path(args.state_root).resolve()
     identifier = args.wake if acknowledge else args.watch
     if not IDENTIFIER.fullmatch(identifier):
         raise SystemExit("wake identifiers must be 32 lowercase hexadecimal characters")
     removed = False
-    with _locked(workspace) as root:
+    with _locked(state_root) as root:
         paths = [
             root / "watches" / f"{identifier}.json",
             root / "inbox" / f"{identifier}.json",
@@ -231,12 +235,12 @@ def _confirm_settled(watch: dict) -> bool:
     )
 
 
-def _record_event_for(workspace: Path, event: dict) -> None:
+def _record_event_for(state_root: Path, event: dict) -> None:
     pane_id = _event_value(event, "pane_id")
     status = str(_event_value(event, "agent_status") or _event_value(event, "status") or "")
     if not pane_id or status not in ({"working"} | SETTLED):
         return
-    with _locked(workspace) as root:
+    with _locked(state_root) as root:
         matches = [
             (path, watch)
             for path, watch in _documents(root / "watches")
@@ -258,13 +262,12 @@ def _record_event_for(workspace: Path, event: dict) -> None:
             wake = {
                 "version": 1,
                 "id": watch["id"],
-                "task": watch["task"],
-                "role": watch["role"],
+                "key": watch["key"],
+                "metadata": watch["metadata"],
                 "workspace_id": watch["workspace_id"],
                 "workspace_label": watch["workspace_label"],
                 "pane_id": watch["pane_id"],
                 "agent_name": watch["agent_name"],
-                "orchestrator": watch["orchestrator"],
                 "status": status,
                 "settled_at": now,
                 "notified": False,
@@ -275,8 +278,8 @@ def _record_event_for(workspace: Path, event: dict) -> None:
             _atomic_json(root / "inbox" / f"{wake['id']}.json", wake)
 
 
-def _notify_workspace(workspace: Path, configured_orchestrator: str) -> None:
-    with _locked(workspace) as root:
+def _notify_consumer(state_root: Path, configured_target: str) -> None:
+    with _locked(state_root) as root:
         pending = [
             (path, wake)
             for path, wake in _documents(root / "inbox")
@@ -284,24 +287,24 @@ def _notify_workspace(workspace: Path, configured_orchestrator: str) -> None:
         ]
         if not pending:
             return
-        orchestrator = pending[0][1].get("orchestrator") or configured_orchestrator
-        payload, error = _herdr("agent", "get", orchestrator)
-        # Queue while busy instead of injecting text into the human's active turn.
-        if error or _status(_agent(payload)) not in ORCHESTRATOR_READY:
+        target = configured_target
+        payload, error = _herdr("agent", "get", target)
+        # Queue while busy instead of injecting text into the target's active turn.
+        if error or _status(_agent(payload)) not in TARGET_READY:
             return
         notices = [
             {
                 "id": wake["id"],
-                "task": wake["task"],
-                "role": wake["role"],
+                "key": wake["key"],
+                "metadata": wake["metadata"],
                 "workspace": wake.get("workspace_label") or wake["workspace_id"],
                 "pane": wake["pane_id"],
                 "status": wake["status"],
             }
             for _, wake in pending
         ]
-        message = "STAGEHAND_WAKE " + json.dumps(notices, separators=(",", ":"), sort_keys=True)
-        response, prompt_error = _herdr("agent", "prompt", orchestrator, message)
+        message = "HERDR_AGENT_WAKE " + json.dumps(notices, separators=(",", ":"), sort_keys=True)
+        response, prompt_error = _herdr("agent", "prompt", target, message)
         accepted = (
             not prompt_error
             and isinstance(response, dict)
@@ -319,26 +322,26 @@ def _notify_workspace(workspace: Path, configured_orchestrator: str) -> None:
 
 
 def _flush() -> int:
-    for entry in _configured_workspaces():
-        workspace = Path(entry["root"]).resolve()
-        if workspace.is_dir():
-            _notify_workspace(workspace, entry.get("orchestrator", "workflow_orchestrator"))
+    for entry in _configured_consumers():
+        state_root = Path(entry["root"]).resolve()
+        if state_root.is_dir():
+            _notify_consumer(state_root, entry.get("target", ""))
     return 0
 
 
 def _hook() -> int:
     event = _event()
-    for entry in _configured_workspaces():
-        workspace = Path(entry["root"]).resolve()
-        if workspace.is_dir():
-            _record_event_for(workspace, event)
-            _notify_workspace(workspace, entry.get("orchestrator", "workflow_orchestrator"))
+    for entry in _configured_consumers():
+        state_root = Path(entry["root"]).resolve()
+        if state_root.is_dir():
+            _record_event_for(state_root, event)
+            _notify_consumer(state_root, entry.get("target", ""))
     return 0
 
 
 def _status_command(args) -> int:
-    workspace = Path(args.workspace).resolve()
-    with _locked(workspace) as root:
+    state_root = Path(args.state_root).resolve()
+    with _locked(state_root) as root:
         watches = [value for _, value in _documents(root / "watches") if value]
         inbox = [value for _, value in _documents(root / "inbox") if value]
     print(json.dumps({"watches": watches, "inbox": inbox}, sort_keys=True))
@@ -349,30 +352,29 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     configure = commands.add_parser("configure")
-    configure.add_argument("--workspace", required=True)
-    configure.add_argument("--orchestrator", default="workflow_orchestrator")
+    configure.add_argument("--state-root", required=True)
+    configure.add_argument("--target", required=True)
     configure.set_defaults(run=_configure)
     arm = commands.add_parser("arm")
-    arm.add_argument("--workspace", required=True)
-    arm.add_argument("--task", required=True)
-    arm.add_argument("--role", required=True)
+    arm.add_argument("--state-root", required=True)
+    arm.add_argument("--key", required=True)
     arm.add_argument("--workspace-id", required=True)
     arm.add_argument("--workspace-label", required=True)
     arm.add_argument("--pane", required=True)
     arm.add_argument("--agent", required=True)
-    arm.add_argument("--orchestrator", default="workflow_orchestrator")
+    arm.add_argument("--metadata", default="{}")
     arm.add_argument("--observed-working", action="store_true")
     arm.set_defaults(run=_arm)
     cancel = commands.add_parser("cancel")
-    cancel.add_argument("--workspace", required=True)
+    cancel.add_argument("--state-root", required=True)
     cancel.add_argument("--watch", required=True)
     cancel.set_defaults(run=lambda args: _remove(args, False))
     acknowledge = commands.add_parser("ack")
-    acknowledge.add_argument("--workspace", required=True)
+    acknowledge.add_argument("--state-root", required=True)
     acknowledge.add_argument("--wake", required=True)
     acknowledge.set_defaults(run=lambda args: _remove(args, True))
     status = commands.add_parser("status")
-    status.add_argument("--workspace", required=True)
+    status.add_argument("--state-root", required=True)
     status.set_defaults(run=_status_command)
     commands.add_parser("hook").set_defaults(run=lambda _args: _hook())
     commands.add_parser("flush").set_defaults(run=lambda _args: _flush())
@@ -384,7 +386,7 @@ def main() -> int:
         args = _parser().parse_args()
         return args.run(args)
     except (OSError, subprocess.CalledProcessError) as error:
-        print(f"stagehand-wake: {error}", file=sys.stderr)
+        print(f"agent-wake: {error}", file=sys.stderr)
         return 1
 
 

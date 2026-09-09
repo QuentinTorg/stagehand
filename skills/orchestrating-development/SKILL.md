@@ -19,7 +19,7 @@ Before acting, verify all of the following:
 4. This agent is inside Herdr (`HERDR_ENV=1`) and has loaded Herdr guidance from a discovered skill or `herdr --skill`.
 5. Target-repository agents have the skills required by their mode: reviewing-code for reviewers, plus resolving-findings, preparing-pull-requests, and Hunk for development tasks. Delegated and workspace-only tasks require none unless their bounded work independently needs one.
 6. The orchestrator is named `workflow_orchestrator`, and the portable managed-agent Herdr rule from [Installation](references/installation.md) is installed for newly launched Codex sessions.
-7. The bundled managed-agent wake plugin is installed, enabled, and configured for this control workspace.
+7. The bundled Agent Wake Relay is installed, enabled, and configured for this control workspace.
 
 If any gate fails, explain the missing prerequisite and stop before creating worktrees, workspaces, agents, or GitHub state. Do not search arbitrary filesystem locations to compensate for missing configuration.
 
@@ -86,11 +86,11 @@ The orchestrator does not need the detailed plan. Retain only the task brief, ap
 
 Managed agents prompt `workflow_orchestrator` with semantic events. Validate every event against the task record, expected role, repository, branch, PR, scope version, and current head before transitioning.
 
-Every orchestrator-to-role instruction must begin with a newly rendered control block populated from the same task-record transition expectation used for event validation. Persist the expected role and allowed success or blocker events; never rely on conversational memory or permit a role to invent event names. Before an orchestrator-owned role handoff, arm the bundled wake plugin for that exact task, role, workspace, pane, and agent; cancel the watch if dispatch fails. Do not arm ordinary human-agent conversation.
+Every orchestrator-to-role instruction must begin with a newly rendered control block populated from the same task-record transition expectation used for event validation. Persist the expected role and allowed success or blocker events; never rely on conversational memory or permit a role to invent event names. Before an orchestrator-owned role handoff, arm Agent Wake Relay with the task ID as its key, the role in metadata, and the exact workspace, pane, and agent; cancel the watch if dispatch fails. Do not arm ordinary human-agent conversation.
 
 Apply the shared-input collision and bounded furthest-proven-state reconciliation procedures in [Workflow State and Events](references/workflow-state.md) on every monitoring or reporting turn. Use Herdr lifecycle only to target investigation, validate every skipped authority and artifact boundary, and return ambiguity to the human rather than waiting indefinitely or replaying obsolete handoffs.
 
-Between active orchestrator turns, rely on explicit agent events and the managed-agent wake plugin; do not create an unbounded polling or cron loop inside the agent. A `STAGEHAND_WAKE` is only notice that a watched turn settled: inspect the named role and apply normal event recovery and validation before transitioning, then acknowledge the wake. Cancel a matching watch when its direct semantic event is accepted. Use bounded waits only when the user explicitly asks the orchestrator to remain attached and monitor.
+Between active orchestrator turns, rely on explicit agent events and Agent Wake Relay; do not create an unbounded polling or cron loop inside the agent. A `HERDR_AGENT_WAKE` is only notice that a watched turn settled: resolve its task key and role metadata, inspect the named role, and apply normal event recovery and validation before transitioning, then acknowledge the wake. Cancel a matching watch when its direct semantic event is accepted. Use bounded waits only when the user explicitly asks the orchestrator to remain attached and monitor.
 
 When an agent is blocked on permission, follow the permission-escalation procedure. Never send approval input on the human's behalf.
 

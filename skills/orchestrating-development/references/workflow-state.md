@@ -105,13 +105,13 @@ Do not discard the human prefix, treat the JSON as part of the human command, or
 
 The bundled Herdr plugin provides transport recovery without interpreting workflow. Before an orchestrator-owned handoff that expects a role event, create a one-shot watch for the exact task, role, workspace, pane, and agent; store its ID in `wake`. Arm before prompting and cancel it if dispatch fails. Direct human-agent conversation remains unwatched.
 
-Use `./plugins/stagehand-wake/stagehand-wake arm` with `--workspace`, `--task`, `--role`, `--workspace-id`, `--workspace-label`, `--pane`, and `--agent`; persist the returned `id`. Use `cancel --workspace <root> --watch <id>` for a failed dispatch or accepted direct event, and `ack --workspace <root> --wake <id>` after processing a wake. Use `status --workspace <root>` during restart reconciliation.
+Use `./plugins/agent-wake/agent-wake arm` with `.orchestrator/wake` as `--state-root`, the task ID as `--key`, the role in `--metadata`, and the recorded workspace ID, label, pane, and agent; persist the returned `id`. Use `cancel --state-root <root>/.orchestrator/wake --watch <id>` for a failed dispatch or accepted direct event, `ack --state-root <root>/.orchestrator/wake --wake <id>` after processing, and `status` during restart reconciliation.
 
-The plugin accepts only a working-to-settled transition for that identity, deduplicates it, stores a durable inbox item under `.orchestrator/wake/`, and prompts an idle orchestrator with `STAGEHAND_WAKE`. If the orchestrator is busy, the item remains pending until a later status event or Herdr startup. Notification retries are bounded.
+The plugin accepts only a working-to-settled transition for that identity, deduplicates it, stores a durable inbox item under `.orchestrator/wake/`, and prompts an idle orchestrator with `HERDR_AGENT_WAKE`. If the orchestrator is busy, the item remains pending until a later status event or Herdr startup. Notification retries are bounded.
 
 A wake proves only that a watched turn settled. On receipt, inspect the role transcript and relevant artifacts, recover and validate any semantic event through the normal procedure, then acknowledge the wake and clear `wake` in the task record. If no valid conclusion exists, use missing-event reconciliation. Cancel and clear a matching watch when a direct semantic event is accepted so its later settled status cannot create a stale wake.
 
-Treat a trailing `STAGEHAND_WAKE` payload colliding with human input like the shared-input collision above: preserve the human prefix, parse the complete wake independently, and do not infer a workflow transition from it.
+Treat a trailing `HERDR_AGENT_WAKE` payload colliding with human input like the shared-input collision above: preserve the human prefix, parse the complete wake independently, and do not infer a workflow transition from it.
 
 ## Missing-event reconciliation
 

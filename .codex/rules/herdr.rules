@@ -108,16 +108,16 @@ prefix_rule(
     ],
 )
 
-# Stagehand's wake bridge manages one-shot watches in ignored controller state.
+# The bundled relay manages one-shot watches in ignored controller state.
 prefix_rule(
-    pattern = ["./plugins/stagehand-wake/stagehand-wake", ["arm", "cancel", "ack", "status"]],
+    pattern = ["./plugins/agent-wake/agent-wake", ["arm", "cancel", "ack", "status"]],
     decision = "allow",
     justification = "Manage bounded wake watches for authorized Stagehand role turns.",
     match = [
-        "./plugins/stagehand-wake/stagehand-wake arm --workspace /tmp/stagehand --task example --role author --workspace-id w2 --workspace-label example --pane w2:p1 --agent example_author",
-        "./plugins/stagehand-wake/stagehand-wake cancel --workspace /tmp/stagehand --watch 0123456789abcdef0123456789abcdef",
-        "./plugins/stagehand-wake/stagehand-wake ack --workspace /tmp/stagehand --wake 0123456789abcdef0123456789abcdef",
-        "./plugins/stagehand-wake/stagehand-wake status --workspace /tmp/stagehand",
+        "./plugins/agent-wake/agent-wake arm --state-root /tmp/stagehand/.orchestrator/wake --key example --workspace-id w2 --workspace-label example --pane w2:p1 --agent example_author --metadata {\"role\":\"author\"}",
+        "./plugins/agent-wake/agent-wake cancel --state-root /tmp/stagehand/.orchestrator/wake --watch 0123456789abcdef0123456789abcdef",
+        "./plugins/agent-wake/agent-wake ack --state-root /tmp/stagehand/.orchestrator/wake --wake 0123456789abcdef0123456789abcdef",
+        "./plugins/agent-wake/agent-wake status --state-root /tmp/stagehand/.orchestrator/wake",
     ],
 )
 

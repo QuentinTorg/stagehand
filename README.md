@@ -53,7 +53,7 @@ Then:
 2. Copy [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, then add allowed repository locations, GitHub hosts, initialization requirements, workload preferences, and local policy. Alternatively, make that ignored path a symbolic link to a private configuration repository.
 3. Leave the tracked [`AGENTS.md`](./AGENTS.md) generic; it activates orchestration and requires the local overlay without exposing it.
 4. Keep the tracked repository-local `orchestrating-development` skill link and Herdr rule in place, and link the separately installed Herdr skill into this workspace's `.codex/skills/` directory.
-5. Link, enable, and configure the bundled [managed-agent wake plugin](./skills/orchestrating-development/references/installation.md#managed-agent-wake-plugin) for this exact control workspace.
+5. Link, enable, and configure the bundled [Agent Wake Relay](./skills/orchestrating-development/references/installation.md#agent-wake-relay) for this exact control workspace.
 6. Install the packaged managed-agent workflow rule into `~/.codex/rules/` as an individual symbolic link; unlike the workspace rule, it permits authors and reviewers in product worktrees to deliver bounded events and use Hunk session controls.
 7. Install the individual [managed-role skills](./skills/orchestrating-development/references/installation.md#managed-role-skills) from SkillDex and Hunk for agents launched in product worktrees.
 8. Restart Codex after adding or changing rules.

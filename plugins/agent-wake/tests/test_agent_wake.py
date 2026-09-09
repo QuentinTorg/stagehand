@@ -8,8 +8,8 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = Path(__file__).parents[1] / "stagehand-wake"
-loader = importlib.machinery.SourceFileLoader("stagehand_wake", str(SCRIPT))
+SCRIPT = Path(__file__).parents[1] / "agent-wake"
+loader = importlib.machinery.SourceFileLoader("agent_wake", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 wake = importlib.util.module_from_spec(spec)
 loader.exec_module(wake)
@@ -21,15 +21,15 @@ class WakePluginTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.config_dir = self.root / "plugin-config"
-        self.workspace = self.root / "stagehand"
+        self.state_root = self.root / "wake-state"
         self.config_dir.mkdir()
-        self.workspace.mkdir()
+        self.state_root.mkdir()
         (self.config_dir / "config.json").write_text(
             json.dumps(
                 {
                     "version": 1,
-                    "workspaces": [
-                        {"root": str(self.workspace), "orchestrator": "workflow_orchestrator"}
+                    "consumers": [
+                        {"root": str(self.state_root), "target": "controller_agent"}
                     ],
                 }
             )
@@ -46,12 +46,10 @@ class WakePluginTest(unittest.TestCase):
         args = wake._parser().parse_args(
             [
                 "arm",
-                "--workspace",
-                str(self.workspace),
-                "--task",
+                "--state-root",
+                str(self.state_root),
+                "--key",
                 "example",
-                "--role",
-                "author",
                 "--workspace-id",
                 "w2",
                 "--workspace-label",
@@ -60,6 +58,8 @@ class WakePluginTest(unittest.TestCase):
                 "w2:p1",
                 "--agent",
                 "example_author",
+                "--metadata",
+                '{"role":"author"}',
             ]
         )
         with mock.patch("builtins.print"):
@@ -80,7 +80,7 @@ class WakePluginTest(unittest.TestCase):
             wake._hook()
 
     def documents(self, name):
-        directory = self.workspace / ".orchestrator" / "wake" / name
+        directory = self.state_root / name
         return [json.loads(path.read_text()) for path in directory.glob("*.json")]
 
     def test_working_then_done_wakes_once(self):
@@ -99,9 +99,9 @@ class WakePluginTest(unittest.TestCase):
                         }
                     }
                 }, None
-            if args[:3] == ("agent", "get", "workflow_orchestrator"):
+            if args[:3] == ("agent", "get", "controller_agent"):
                 return {"result": {"agent": {"agent_status": "idle"}}}, None
-            if args[:3] == ("agent", "prompt", "workflow_orchestrator"):
+            if args[:3] == ("agent", "prompt", "controller_agent"):
                 prompts.append(args[3])
                 return {"result": {"type": "agent_prompted"}}, None
             self.fail(f"unexpected Herdr call: {args}")
@@ -114,7 +114,7 @@ class WakePluginTest(unittest.TestCase):
             self.emit("done")
 
         self.assertEqual(1, len(prompts))
-        self.assertTrue(prompts[0].startswith("STAGEHAND_WAKE ["))
+        self.assertTrue(prompts[0].startswith("HERDR_AGENT_WAKE ["))
         self.assertTrue(self.documents("inbox")[0]["notified"])
         self.assertEqual("fired", self.documents("watches")[0]["state"])
 
@@ -126,19 +126,19 @@ class WakePluginTest(unittest.TestCase):
         self.assertEqual([], self.documents("inbox"))
         self.assertEqual("armed", self.documents("watches")[0]["state"])
 
-    def test_busy_orchestrator_defers_until_flush(self):
+    def test_busy_target_defers_until_flush(self):
         self.arm()
-        orchestrator_status = ["working", "idle"]
+        target_status = ["working", "idle"]
         prompts = []
 
         def herdr(*args):
             if args[:3] == ("agent", "get", "w2:p1"):
                 return {"result": {"agent": {"agent_status": "done"}}}, None
-            if args[:3] == ("agent", "get", "workflow_orchestrator"):
+            if args[:3] == ("agent", "get", "controller_agent"):
                 return {
-                    "result": {"agent": {"agent_status": orchestrator_status.pop(0)}}
+                    "result": {"agent": {"agent_status": target_status.pop(0)}}
                 }, None
-            if args[:3] == ("agent", "prompt", "workflow_orchestrator"):
+            if args[:3] == ("agent", "prompt", "controller_agent"):
                 prompts.append(args[3])
                 return {"result": {"type": "agent_prompted"}}, None
             self.fail(f"unexpected Herdr call: {args}")
