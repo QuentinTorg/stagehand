@@ -52,6 +52,8 @@ Workspace previews use the same agent-neutral terminal formatting, reading only 
 
 Conversation loading runs separately from task inventory, with at most one read in flight per channel. Opening a conversation requests it immediately; hidden conversations are not polled. Herdr's `recent-unwrapped` removes terminal soft wraps, but cannot undo hard line breaks already rendered by an agent. The board preserves those breaks rather than guessing and damaging code or lists; it does not currently use a provider-specific raw-transcript service.
 
+Conversation headings show the age of the last successful read, not the last agent message. Failed refreshes or reads older than two refresh intervals (at least ten seconds) are marked stale; errors remain visible rather than implying the agent is still loading.
+
 ## Message the orchestrator
 
 Select a task and click the message box in the bottom detail panel to type there; **m** also focuses it. The selected task and conversation keep refreshing while you write. Enter or Send submits, Ctrl-J inserts a newline (Ctrl-G also sends), and Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board adds only the workspace name and Herdr workspace ID (task ID only if no workspace exists), then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.

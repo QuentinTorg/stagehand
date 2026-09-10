@@ -259,6 +259,21 @@ def board_snapshot(directory, offline=False):
     return rows, warnings
 
 
+def stamp_preview(result, previous, now):
+    # This measures successful reads, not when the agent last spoke. A failed
+    # refresh must not make the last successful read look fresh again.
+    read_at = previous.get("read_at") if result.get("status") in {"unavailable", "offline"} else now
+    return dict(result, read_at=read_at)
+
+
+def preview_freshness(preview, now, interval):
+    read_at = preview.get("read_at")
+    if read_at is None:
+        return " · no successful read" if preview.get("status") == "unavailable" else ""
+    stale = preview.get("status") == "unavailable" or now - read_at > max(10, 2 * interval)
+    return f" · {'stale · ' if stale else ''}read {age(read_at, now)} ago"
+
+
 def open_target(args, row=None):
     if args.offline or os.environ.get("HERDR_ENV") != "1":
         return "Navigation requires a live Herdr session."
@@ -890,9 +905,11 @@ def display_loop(screen, args, executor, previews):
         # one preview read in flight and discard its display when selection changes.
         if preview_pending is not None and preview_pending.done():
             try:
-                preview_result = preview_pending.result()
+                result = preview_pending.result()
             except Exception as error:
-                preview_result = {"status": "unavailable", "output": f"Preview failed: {clean(error)}"}
+                result = {"status": "unavailable", "output": f"Preview failed: {clean(error)}"}
+            previous = preview_result if preview_key == preview_request else {}
+            preview_result = stamp_preview(result, previous, time.monotonic())
             preview_key = preview_request
             preview_refresh_at = time.monotonic() + args.interval
             preview_pending = None
@@ -992,7 +1009,9 @@ def display_loop(screen, args, executor, previews):
             details = controller_lines(controller, width)
             status = {"idle": "Ready for you", "done": "Ready for you", "blocked": "Needs you — open native session",
                       "working": "Working", "unavailable": "Unavailable — check native session"}.get(controller["status"], controller["status"].capitalize())
-            title, color = f"Orchestrator · {status}", 1 if controller["status"] in {"blocked", "unavailable"} else 10
+            freshness = preview_freshness(controller, time.monotonic(), args.interval)
+            title = clipped(f"Orchestrator · {status}", width - 3 - len(freshness)) + freshness
+            color = 1 if controller["status"] in {"blocked", "unavailable"} else 10
         elif info:
             details = detail_lines(current, width, info=True)
             title, color = current["label"], 10
@@ -1002,6 +1021,8 @@ def display_loop(screen, args, executor, previews):
             role_label = (preview_role or conversation.get("role") or "Agent").replace("_", " ").title()
             details = terminal_lines(conversation.get("output", "Loading recent conversation…"), width)
             title = f"{current['label']} · {role_label} · {conversation.get('status', 'loading')}"
+            freshness = preview_freshness(conversation, time.monotonic(), args.interval)
+            title = clipped(title, width - 3 - len(freshness)) + freshness
             color = 10
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
         if viewing_controller and not show_help:

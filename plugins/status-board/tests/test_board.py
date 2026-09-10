@@ -27,6 +27,60 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_preview_freshness_tracks_reads_and_does_not_refresh_on_failure(self):
+        result = {"status": "idle", "output": "Unchanged answer"}
+        first = board.stamp_preview(result, {}, 100)
+        self.assertEqual(board.preview_freshness(first, 104, 5), " · read 4s ago")
+        self.assertIn("stale", board.preview_freshness(first, 111, 5))
+        failed = board.stamp_preview({"status": "unavailable", "output": "Read failed"}, first, 105)
+        self.assertEqual(failed["read_at"], 100)
+        self.assertEqual(board.preview_freshness(failed, 105, 5), " · stale · read 5s ago")
+        recovered = board.stamp_preview(result, failed, 106)
+        self.assertEqual(board.preview_freshness(recovered, 106, 5), " · read 0s ago")
+        missing = board.stamp_preview({"status": "unavailable"}, {}, 110)
+        self.assertEqual(board.preview_freshness(missing, 110, 5), " · no successful read")
+
+    def test_busy_or_uncertain_send_preserves_exact_draft_until_explicit_retry(self):
+        for status in ("working", "blocked", "uncertain"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(offline=False, tasks=Path(root) / "tasks")
+                row = board.task_summary(self.task(), 0, None, None, 5)
+                message = "Keep this exact draft.\nDo not duplicate it."
+                board.save_draft(board.draft_path(args, row), message)
+                reply = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+                    "workspace_id": "control", "agent_status": "idle" if status == "uncertain" else status}}}))
+                replies = [reply, board.subprocess.TimeoutExpired("herdr", 10)] if status == "uncertain" else [reply]
+                screen = Mock()
+                screen.getmaxyx.return_value = (38, 100)
+                screen.get_wch.side_effect = ["\r", "\x1b"]
+                with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+                    board.subprocess, "run", side_effect=replies
+                ) as run, patch.object(board.curses, "curs_set"):
+                    finish_editor(screen, args, row, inline=True)
+                self.assertEqual(board.draft_path(args, row).read_text(), message)
+                self.assertEqual(run.call_count, 2 if status == "uncertain" else 1)
+
+    def test_switching_workspace_drafts_then_reopening_sends_only_selected_draft(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(offline=False, tasks=Path(root) / "tasks")
+            rows = [board.task_summary(dict(self.task(), task_id=name), 0, None, None, 5)
+                    for name in ("first", "second")]
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, 100)
+            with patch.object(board.curses, "curs_set"), patch.object(
+                board, "mouse_event", return_value=("select", 5, 6, 0)
+            ), patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
+                for row, draft in zip(rows, ("First draft", "Second draft")):
+                    screen.get_wch.side_effect = [*draft, board.curses.KEY_MOUSE]
+                    finish_editor(screen, args, row, inline=True)
+                send.assert_not_called()
+                # A fresh editor restores the first workspace's saved draft.
+                screen.get_wch.side_effect = ["\r"]
+                self.assertEqual(finish_editor(screen, args, rows[0], inline=True), "Delivered")
+                send.assert_called_once_with(args, rows[0], "First draft")
+                self.assertFalse(board.draft_path(args, rows[0]).exists())
+                self.assertEqual(board.draft_path(args, rows[1]).read_text(), "Second draft")
+
     @unittest.skipUnless(os.name == "posix", "Requires a POSIX terminal")
     def test_mouse_release_does_not_stall_a_pending_conversation(self):
         import fcntl
