@@ -121,8 +121,9 @@ def task_summary(task, modified, workspaces, agents, now):
         label += " [workspace missing]"
     elif not workspace_id:
         label += " [workspace not created]"
-    # Human attention wins over a stale completion label; counters never drive UI.
-    needs_human = bool(state.get("attention_required")) or stage == "ready-candidate"
+    # Older completion states also used attention for the final GitHub handoff.
+    # Preserve their green status; new records reserve attention for blockers here.
+    needs_human = (bool(state.get("attention_required")) and (stage not in COMPLETE or stage == "complete")) or stage == "ready-candidate"
     color = 1 if needs_human else 3 if stage in COMPLETE else 2
     summary = clean(state.get("summary"))
     details = summary or stage.replace("-", " ")

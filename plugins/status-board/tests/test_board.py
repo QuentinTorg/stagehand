@@ -111,6 +111,13 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(board.task_next(row), "You")
         self.assertEqual(row["action"], "Confirm the changed scope")
 
+    def test_legacy_completed_handoff_stays_green_without_record_migration(self):
+        for stage in ("ready-for-team-review", "delegated-complete", "review-complete"):
+            task = self.task(stage)
+            task["state"].update(attention_required=True, attention_reason="Human handoff")
+            row = board.task_summary(task, 0, None, None, 5)
+            self.assertEqual(row["color"], 3)
+
     def test_common_template_parses_and_renders_without_optional_sections(self):
         path = Path(__file__).parents[3] / "skills/orchestrating-development/assets/task-record.yaml"
         task = board.yaml.safe_load(path.read_text())
