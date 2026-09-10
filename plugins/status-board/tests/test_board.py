@@ -1,7 +1,12 @@
 import importlib.util
+import os
 from concurrent.futures import Future
 from pathlib import Path
+import select
+import subprocess
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -22,6 +27,65 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "Requires a POSIX terminal")
+    def test_mouse_release_does_not_stall_a_pending_conversation(self):
+        import fcntl
+        import pty
+        import struct
+        import termios
+
+        # Real curses matters here: a filtered release can block getch despite
+        # its timeout. Mock screens and combined press/release input miss it.
+        source = '''
+import curses, importlib.util, sys, time
+from pathlib import Path
+from types import SimpleNamespace
+spec = importlib.util.spec_from_file_location("board", sys.argv[1])
+board = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(board)
+row = board.task_summary({"task_id": "preview-test", "state": {"name": "active"}}, 0, None, None, 5)
+row["agent_names"] = {"author": "author"}
+board.board_snapshot = lambda *args: ([row], [])
+board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
+def worker(*args):
+    time.sleep(0.5)
+    return {"role": "author", "status": "idle", "output": "PREVIEW_COMPLETED"}
+board.worker_snapshot = worker
+curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=True, interval=5))
+'''
+        with tempfile.TemporaryDirectory() as root:
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 88, 0, 0))
+            process = subprocess.Popen(
+                [sys.executable, "-c", source, board.__file__, root],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color"), start_new_session=True,
+            )
+            os.close(slave)
+
+            def wait_for(marker, timeout=3):
+                output, deadline = b"", time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], 0.05)[0]:
+                        try:
+                            output += os.read(master, 65536)
+                        except OSError:
+                            break
+                        if marker in output:
+                            return
+                self.fail(f"Terminal did not render {marker!r}: {output[-1000:]!r}")
+
+            try:
+                wait_for(b"Open workspace")
+                os.write(master, b"\x1b[<0;17;9M")
+                wait_for(b"Loading recent conversation")
+                os.write(master, b"\x1b[<0;17;9m")
+                wait_for(b"PREVIEW_COMPLETED")
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+                os.close(master)
+
     def test_responsive_views_stay_inside_terminal_bounds(self):
         for height, width in ((24, 60), (28, 80), (38, 110), (44, 160), (60, 240), (72, 320)):
             for view in ("t", "c", "?"):

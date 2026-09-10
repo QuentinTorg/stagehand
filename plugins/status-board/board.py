@@ -769,7 +769,10 @@ def display_loop(screen, args, executor, previews):
         curses.curs_set(0)
     except curses.error:
         pass
-    curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0))
+    # Accept releases too: filtering them inside curses can block getch beyond
+    # its timeout. mouse_event ignores them after control returns to our loop.
+    curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED |
+                     curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0))
     curses.mouseinterval(0)
     if curses.has_colors():
         curses.start_color()
