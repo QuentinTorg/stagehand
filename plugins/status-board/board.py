@@ -547,9 +547,10 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         except OSError:
             return "Cannot clear saved draft; nothing sent."
     cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
-    # Restore content obscured by a growing editor when it shrinks again.
-    background = screen.dupwin() if inline else None
     while True:
+        # Yield to the board between keystrokes so preview completions and live
+        # inventory still render while the human writes a reply.
+        yield
         height, width = screen.getmaxyx()
         lines, positions, box_top, visible, line_width = message_layout(message, height, width)
         cy, cx = positions[cursor]
@@ -558,11 +559,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         visible = visible if inline else max(1, height - 7)
         offset = max(0, cy - visible + 1)
         if inline:
-            # Editing stays in the bottom panel; leave the selected task visible above.
-            try:
-                background.overwrite(screen)
-            except curses.error:
-                pass  # A terminal resize can invalidate the saved background area.
+            # The board redraws the background before each editor frame.
             draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()))
             content = []
         else:
@@ -734,7 +731,7 @@ def draw_actions(screen, top, width, actions, active=None, tabs=False):
             hits.append((y, x, x + len(text), action))
         x += len(text) + 2
     if tabs:
-        # Join view selectors on their existing row; leave navigation detached.
+        # A baseline joins the tabs without consuming another terminal row.
         navigation = {"workspace", "open-controller"}
         for line in sorted({line for line, _, _, action in hits if action not in navigation}):
             end = min((left - 2 for row, left, _, action in hits if row == line and action in navigation), default=width - 1)
@@ -749,7 +746,7 @@ def draw_actions(screen, top, width, actions, active=None, tabs=False):
                 if right > left:
                     try:
                         style = curses.color_pair(4) if curses.has_colors() else 0
-                        screen.addnstr(line, left, "─" * (right - left), right - left, style)
+                        screen.addnstr(line, left, "_" * (right - left), right - left, style)
                     except curses.error:
                         pass
     return hits, y + 1
@@ -789,6 +786,7 @@ def display_loop(screen, args, executor, previews):
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice, pending, queued_mouse = "", None, None
+    editor, editor_task = None, None
     refresh_started = None
     detail_offset, detail_task = 0, None
     general, info, show_help = False, True, False
@@ -844,6 +842,11 @@ def display_loop(screen, args, executor, previews):
         viewing_controller = general or current is None
         message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
+        if editor is not None and editor_task != selected_id:
+            # If a task disappears during editing, keep its saved draft instead
+            # of showing an editor bound to a different workspace.
+            editor.close()
+            editor = None
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
@@ -998,6 +1001,18 @@ def display_loop(screen, args, executor, previews):
             screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · ? Help · q Close", width - 1, curses.A_DIM)
         except curses.error:
             pass
+        if editor is not None:
+            try:
+                next(editor)
+            except StopIteration as result:
+                notice, editor = result.value, None
+                if isinstance(notice, tuple):
+                    notice, queued_mouse = notice
+                try:
+                    curses.curs_set(0)
+                except curses.error:
+                    pass
+            continue
         screen.refresh()
         key = curses.KEY_MOUSE if queued_mouse else screen.getch()
         action = None
@@ -1014,7 +1029,8 @@ def display_loop(screen, args, executor, previews):
         elif key == ord("i") and not viewing_controller:
             action = "info"
         elif key == ord("m"):
-            notice = compose(screen, args, message_target, inline=True)
+            editor = compose(screen, args, message_target, inline=True)
+            editor_task = selected_id
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
@@ -1054,9 +1070,10 @@ def display_loop(screen, args, executor, previews):
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif kind == "select" and message_top <= y < height - 2:
-                    notice = compose(screen, args, message_target, inline=True,
+                    editor = compose(screen, args, message_target, inline=True,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
+                    editor_task = selected_id
                 elif kind == "select":
                     index = clicked_row(x, y, width, offset, visible, len(rows)) if show_tasks else None
                     if index is not None:

@@ -12,6 +12,15 @@ board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 
 
+def finish_editor(*args, **kwargs):
+    editor = board.compose(*args, **kwargs)
+    while True:
+        try:
+            next(editor)
+        except StopIteration as result:
+            return result.value
+
+
 class BoardTests(unittest.TestCase):
     def test_responsive_views_stay_inside_terminal_bounds(self):
         for height, width in ((24, 60), (28, 80), (38, 110), (44, 160), (60, 240), (72, 320)):
@@ -49,7 +58,7 @@ class BoardTests(unittest.TestCase):
         row = board.task_summary(self.task(), 0, None, None, 5)
         pending.set_result(([row], []))
         executor.submit.return_value = pending
-        with patch.object(board, "compose", return_value="Draft saved.") as compose, patch.object(board, "open_target") as navigate:
+        with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose, patch.object(board, "open_target") as navigate:
             self.run_display(executor, [-1, ord("c"), ord("m"), ord("t"), ord("m"), ord("q")])
         self.assertIsNone(compose.call_args_list[0].args[2])
         self.assertEqual(compose.call_args_list[1].args[2]["id"], row["id"])
@@ -155,13 +164,14 @@ class BoardTests(unittest.TestCase):
                 with patch.object(board.curses, "curs_set"), patch.object(
                     board, "send_message", return_value=(True, "Delivered")
                 ) as send:
-                    self.assertEqual(board.compose(screen, args, row, inline=True), "Delivered")
+                    self.assertEqual(finish_editor(screen, args, row, inline=True), "Delivered")
                 send.assert_called_once_with(args, row, "First\nSecond")
 
-    def run_display(self, executor, keys, size=(38, 140), previews=None):
+    def run_display(self, executor, keys, size=(38, 140), previews=None, editor_keys=None):
         screen = Mock()
         screen.getmaxyx.return_value = size
         screen.getch.side_effect = keys
+        screen.get_wch.side_effect = editor_keys
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
         if previews is None:
             previews = Mock()
@@ -233,12 +243,77 @@ class BoardTests(unittest.TestCase):
         self.assertIn("Reviewer · unavailable", output)
         self.assertIn("Preview failed: preview backend unavailable", output)
 
+    def test_conversation_finishes_loading_while_message_editor_is_open(self):
+        executor, previews = Mock(), Mock()
+        inventory, controller, author = Future(), Future(), Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["agent_names"] = {"author": "author"}
+        inventory.set_result(([row], []))
+        controller.set_result({"status": "idle", "output": "Controller"})
+        executor.submit.return_value = inventory
+        previews.submit.side_effect = [controller, author]
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            board, "draft_path", return_value=Path(root) / "draft"
+        ), patch.object(board, "mouse_event", return_value=("select", 16, 8, 0)), patch.object(
+            board, "terminal_lines", wraps=board.terminal_lines
+        ) as render, patch.object(board, "send_message") as send:
+            reads = 0
+
+            def edit():
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    author.set_result({"role": "author", "status": "idle", "output": "Loaded while editing"})
+                    return "x"
+                # The completion must be visible before leaving the editor.
+                self.assertIn("Loaded while editing", [call.args[0] for call in render.call_args_list])
+                return "\x1b"
+
+            self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("m"), ord("q")],
+                             previews=previews, editor_keys=edit)
+            self.assertEqual((Path(root) / "draft").read_text(), "x")
+            send.assert_not_called()
+
+    def test_switching_roles_during_load_never_displays_the_old_role_result(self):
+        executor, previews = Mock(), Mock()
+        inventory, controller, author, reviewer = Future(), Future(), Future(), Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
+        inventory.set_result(([row], []))
+        controller.set_result({"status": "idle", "output": "Controller"})
+        executor.submit.return_value = inventory
+        previews.submit.side_effect = [controller, author, reviewer, author, reviewer]
+        with patch.object(board, "mouse_event", side_effect=[
+            ("select", 16, 8, 0), ("select", 28, 8, 0),
+            ("select", 16, 8, 0), ("select", 28, 8, 0)
+        ]), patch.object(board, "terminal_lines", wraps=board.terminal_lines) as render:
+            def keys():
+                yield -1
+                yield board.curses.KEY_MOUSE  # Author, still loading.
+                yield board.curses.KEY_MOUSE  # Reviewer, before Author completes.
+                author.set_result({"role": "author", "status": "idle", "output": "Author reply"})
+                yield -1
+                self.assertNotIn("Author reply", [call.args[0] for call in render.call_args_list])
+                reviewer.set_result({"role": "reviewer", "status": "done", "output": "Reviewer reply"})
+                yield -1
+                self.assertIn("Reviewer reply", [call.args[0] for call in render.call_args_list])
+                yield board.curses.KEY_MOUSE
+                yield -1
+                self.assertIn("Author reply", [call.args[0] for call in render.call_args_list])
+                yield board.curses.KEY_MOUSE
+                yield -1
+                yield ord("q")
+
+            self.run_display(executor, keys(), previews=previews)
+        self.assertEqual([call.args[2] for call in previews.submit.call_args_list[1:]],
+                         ["author", "reviewer", "author", "reviewer"])
+
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
         pending = Future()
         pending.set_result(([], []))
         executor.submit.return_value = pending
-        with patch.object(board, "compose", return_value="Draft saved.") as compose:
+        with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose:
             screen = self.run_display(executor, [-1, ord("m"), ord("q")])
         self.assertIsNone(compose.call_args.args[2])
         output = " ".join(str(call) for call in screen.addnstr.call_args_list)
@@ -349,7 +424,7 @@ class BoardTests(unittest.TestCase):
         response = Future()
         response.set_result(row["conversation"])
         previews.submit.return_value = response
-        with patch.object(board, "compose", return_value="Draft saved") as compose, patch.object(
+        with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose, patch.object(
             board, "mouse_event", return_value=("select", 16, 8, 0)
         ), patch.object(board, "open_target") as navigate:
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, ord("m"), ord("i"), ord("q")], previews=previews)
@@ -394,9 +469,9 @@ class BoardTests(unittest.TestCase):
             with patch.object(board.curses, "curs_set"), patch.object(
                 board, "mouse_event", return_value=("select", 4, top + 1, 0)
             ), patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
-                self.assertEqual(board.compose(screen, args, None, inline=True), "Delivered")
+                self.assertEqual(finish_editor(screen, args, None, inline=True), "Delivered")
             send.assert_called_once_with(args, None, message)
-            screen.dupwin.return_value.overwrite.assert_called()
+            screen.dupwin.assert_not_called()
 
     def test_navigation_buttons_have_distinct_color_and_remain_last(self):
         screen = Mock()
@@ -448,7 +523,7 @@ class BoardTests(unittest.TestCase):
                 board.curses, "color_pair", side_effect=lambda number: number
             ):
                 hits, bottom = board.draw_actions(screen, 8, width, actions, "info", tabs=True)
-            rules = [call.args for call in screen.addnstr.call_args_list if set(call.args[2]) == {"─"}]
+            rules = [call.args for call in screen.addnstr.call_args_list if set(call.args[2]) == {"_"}]
             self.assertTrue(rules)
             self.assertEqual(bottom, max(hit[0] for hit in hits) + 1)
             for y, x, text, count, style in rules:
@@ -550,14 +625,14 @@ class BoardTests(unittest.TestCase):
             with patch.object(board.curses, "curs_set"), patch.object(
                 board, "send_message", return_value=(False, "Busy; draft kept")
             ) as send:
-                board.compose(screen, args, row)
+                finish_editor(screen, args, row)
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertEqual(board.draft_path(args, row).read_text(), "Please investigate\nfirst")
             screen.get_wch.side_effect = ["\x07"]
             with patch.object(board.curses, "curs_set"), patch.object(
                 board, "send_message", return_value=(True, "Delivered")
             ) as send:
-                self.assertEqual(board.compose(screen, args, row), "Delivered")
+                self.assertEqual(finish_editor(screen, args, row), "Delivered")
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertFalse(board.draft_path(args, row).exists())
 
@@ -571,7 +646,7 @@ class BoardTests(unittest.TestCase):
             with patch.object(board.curses, "curs_set"), patch.object(board.curses, "ungetmouse") as mouse, patch.object(
                 board, "mouse_event", return_value=("select", 10, 6, 0)
             ):
-                self.assertEqual(board.compose(screen, args, row, inline=True),
+                self.assertEqual(finish_editor(screen, args, row, inline=True),
                                  ("Draft saved; nothing sent.", ("select", 10, 6, 0)))
             screen.erase.assert_not_called()
             mouse.assert_not_called()
@@ -585,7 +660,7 @@ class BoardTests(unittest.TestCase):
             board.save_draft(board.draft_path(args, row), "discard this")
             board.save_draft(board.draft_path(args, other), "keep this")
             with patch.object(board, "send_message") as send:
-                self.assertIn("cleared", board.compose(Mock(), args, row, inline=True, clear_now=True))
+                self.assertIn("cleared", finish_editor(Mock(), args, row, inline=True, clear_now=True))
             send.assert_not_called()
             self.assertEqual(board.draft_path(args, row).read_text(), "")
             self.assertEqual(board.draft_path(args, other).read_text(), "keep this")
