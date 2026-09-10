@@ -40,7 +40,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 10. Treat direct human scope changes in the author pane as sufficient authority, synchronize them through a versioned scope update without duplicate approval, and require a new phase-zero review.
 11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans always merge.
 12. Arm one-shot wake watches only for orchestrator-owned role handoffs. Treat their working-to-settled notifications as runtime hints, then reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
-13. Report all open tasks with the fixed dashboard and a single human-action section.
+13. Save reconciled task progress for the persistent status board; use the text dashboard when unavailable or requested. Keep human decisions clear in chat.
 14. Interpret ordinary task/workspace cleanup language as guarded removal of the uniquely identified task's recorded linked workspace and worktree, then archive its cleaned record outside the active set; preserve ambiguous targets.
 15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
 16. Extend a cohesive existing task and reuse its workspace and roles when safe, including related multi-repository or multi-PR follow-ups; isolate independent or conflicting work.
@@ -59,7 +59,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 
 ## 5. Progressive disclosure
 
-`SKILL.md` owns activation, routing, the end-to-end procedure, and dashboard format. Load specialized details only when applicable:
+`SKILL.md` owns activation, routing, the end-to-end procedure, and text dashboard fallback. The [status board](../../plugins/status-board/README.md) renders saved progress beside the conversation without adding worker duties. Load specialized details only when applicable:
 
 - [workflow-state.md](../orchestrating-development/references/workflow-state.md): states, events, reconciliation, counters, restart recovery, and cleanup eligibility;
 - [agent-contracts.md](../orchestrating-development/references/agent-contracts.md): persistent author, reviewer, and worker behavior;

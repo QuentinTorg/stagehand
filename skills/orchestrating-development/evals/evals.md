@@ -83,7 +83,9 @@ Expand an existing rollout into related submodules or repositories, then request
 
 Repeat with a pull request owned by a submodule of the task worktree. Assert that `herdr tab create` receives `--cwd` for the exact recorded submodule development target, not the containing repository. Before launch, require the returned pane cwd and both comparison commits to validate. Give the launcher a containing-repository pane where those commits are absent and assert that it fails before sending Hunk. The orchestrator must not request or use raw `herdr pane run ... cd`, `send-text`, or `send-keys` to repair the pane; it recreates correct topology or surfaces only the separately gated cleanup decision.
 
-### End-of-turn workflow dashboard
+### Persistent board and text fallback
+
+With the status board running beside the controller, ask an unrelated orchestration question. Assert that the orchestrator saves reconciled progress but does not append a redundant dashboard or give workers extra reporting instructions. Restart the display and verify that it reads the same records without recreating tasks. Invalid records and unavailable Herdr inventory remain visible; live `done` never becomes workflow completion. For the following text-dashboard scenarios, explicitly request a text inventory or make the board unavailable.
 
 Create provisioned GitHub-issue and direct-request tasks in planning, reviewing, ready-candidate, ready-for-team-review, and blocked states, then ask an unrelated orchestration question. Assert that the response ends with one compact row for every non-cleaned task and exactly four columns: workspace/work item, stage, agents, and pull request. Each row leads with the exact current Herdr sidebar label followed by recognizable secondary context. GitHub work items link the shortest unambiguous repository name, issue number, and display name; direct requests do not invent issue numbers. Internal task IDs and pane IDs never replace the workspace label. Scope and review counters appear only when relevant.
 
