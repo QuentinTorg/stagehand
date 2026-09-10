@@ -35,15 +35,11 @@ workspace:
     agents_tab: null
     author_pane: null
     reviewer_pane: null
-    hunk_tab: null
-    hunk_pane: null
 agents:
   orchestrator: "workflow_orchestrator"
   author: null
   reviewer: null
-hunk:
-  session_id: null
-  base: "<base-ref>"
+role_sessions: {} # Native session IDs and explicit model/effort per role, when available.
 pull_request:
   url: null
   draft_creation_authorized: true
@@ -83,17 +79,9 @@ state:
   waiting_on: "<specific-actor-event-decision-check-or-dependency>"
   attention_required: false
   attention_reason: null
-event_recovery:
-  expected_role: null
-  expected_events: []
-  attempts: 0
-  last_attempt_reason: null
 wake:
-  watch_id: null
-  role: null
-  pane: null
+  watches: {} # Role -> persistent watch ID; owned only by the coordinator.
 cleanup:
   eligible: false
   requested_by: null
   completed: false
-last_event: null

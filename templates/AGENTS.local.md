@@ -43,7 +43,13 @@ Leave product build selection and product-repository instructions to the author 
 
 ## Managed-agent defaults
 
-Record the preferred model and reasoning effort for newly launched agents. State whether inheritance is acceptable and how explicit task-specific human choices override the default.
+Set explicit model/effort choices; do not inherit the terminal's last-used model. For example:
+
+- Economical bounded work: `gpt-5.6-luna`, `xhigh` reasoning.
+- Difficult reasoning or promotion: `gpt-5.6-sol`, `medium` reasoning.
+- Anything beyond these choices requires human approval.
+
+These are starting choices, not a benchmark claim. Adjust for installed models and observed results; explicit task-specific human choices take precedence. Use the skill's agent-selection guidance for routing rather than duplicating it here.
 
 ## Local command policy
 

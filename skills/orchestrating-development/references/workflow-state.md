@@ -1,186 +1,70 @@
-# Workflow State and Events
+# State and Wakeups
 
-## Sections
+Read when dispatching work or recovering coordination. Workers do not read or write orchestration state.
 
-- [State ownership](#state-ownership)
-- [Task states](#task-states)
-- [Semantic events](#semantic-events)
-- [Managed-agent wake bridge](#managed-agent-wake-bridge)
-- [Missing-event reconciliation](#missing-event-reconciliation)
-- [Event validation](#event-validation)
-- [Review counters and scope versions](#review-counters-and-scope-versions)
-- [Recovery](#recovery)
-- [Cleanup](#cleanup)
+## Durable record
 
-## State ownership
+Use [task-record.yaml](../assets/task-record.yaml) for development/reviewer-only work, [delegated-task-record.yaml](../assets/delegated-task-record.yaml) for bounded non-development work, or [workspace-task-record.yaml](../assets/workspace-task-record.yaml) for open-ended work. Keep active records in the configured directory, normally `.orchestrator/tasks`.
 
-Herdr reports terminal and agent lifecycle. The task record reports workflow state. Keep them separate: an `idle` author may be awaiting plan approval, while a `done` reviewer may have findings rather than approval.
+Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, current reviewed head, review usage, next action, and human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
-The orchestrator owns one task record per authorized task. A task owns exactly one worktree and one managed Herdr workspace for its lifetime. Development uses the topology in [Hunk Coordination](hunk-coordination.md); reviewer-only and delegated work use one reviewer or worker pane.
+Update `state.name`, `waiting_on`, and human `attention_required/attention_reason` together. Keep a short evidence reference in `state.decision_reason`. Runtime `idle/working/blocked/done` is separate from workflow progress. Attention means a concrete human action; dependencies or active agents do not make a task red.
 
-Every state transition updates `state.waiting_on`, `state.attention_required`, and `state.attention_reason` together with the state name. `waiting_on` identifies the next actor, event, decision, check, dependency, or cleanup condition in plain language for controller recovery; it is not a dashboard field. Attention is true only when a concrete human action is currently required; ordinary agent work, CI, or an expected semantic event is a wait condition but not human attention.
+The status board consumes these state names:
 
-When a managed role owns the next transition, also record `event_recovery.expected_role`, the allowed `expected_events`, and zero recovery attempts. Clear that expectation when a valid event or human decision transfers ownership elsewhere. For legacy records, derive and persist these fields from the validated state before attempting recovery.
+| States | Meaning |
+| --- | --- |
+| `queued`, `human-working`, `planning` | Authorized waiting, open-ended work, or author/human planning |
+| `implementing`, `drafting`, `resolving` | Author implementation, draft preparation, or selected fixes |
+| `reviewing`, `ready-candidate`, `finalizing` | Independent review, current-head pass awaiting permission, or authorized finalization |
+| `review-awaiting-publication`, `publishing-review` | External review proposal awaiting permission, or authorized publication |
+| `delegated-working` | Bounded non-development work |
+| `decision-required` | Human decision needed; retain prior state and reason |
+| `ready-for-team-review`, `review-complete`, `delegated-complete` | Completed orchestration handoff, not necessarily merged |
+| `merged`, `closed`, `cleaned` | Confirmed merge, ended task, or removed resources |
 
-## Task states
+Record role milestones with review rounds when useful, e.g. `fixing r2` or `passed r3`; do not infer them from runtime idle state. Meaningful outcomes need records; every intermediate label need not be visited.
 
-| State | Meaning | Normal exit |
-| --- | --- | --- |
-| `queued` | Authorized but intentionally waiting for a human decision, dependency, requested sequencing, or conflict resolution | Start the task when its waiting condition is cleared |
-| `human-working` | A workspace-only task is available for open-ended human-directed work | Human-requested promotion, retention, or cleanup |
-| `planning` | Author is exploring and discussing implementation with the human | Validated `implementation-started` or `needs-human` event |
-| `implementing` | Author is implementing or verifying the approved scope | Validated `implementation-ready` or `needs-human` event |
-| `drafting` | Orchestrator directed the author to create the initial draft PR | Validated `draft-pr-ready` or `needs-human` event |
-| `reviewing` | Reviewer is performing a complete review of the current changeset | Validated reviewer outcome |
-| `review-awaiting-publication` | Reviewer-only proposal is validated for the current head | Human disposition of the exact proposal |
-| `publishing-review` | Human authorized reviewer-only publication for the exact proposal and head | Validated `review-published` or `review-needs-human` event |
-| `review-complete` | Authorized reviewer-only review was published | Human-directed retention or cleanup |
-| `delegated-working` | Worker is performing bounded non-development work | Validated `work-complete` or `needs-human` event |
-| `delegated-complete` | Delegated result was validated and presented | Human-directed retention or cleanup |
-| `resolving` | Original author is resolving the selected current-change findings | Validated `fixes-ready` or `needs-human` event |
-| `decision-required` | Progress requires human scope, risk, permission, conflict, or budget judgment | Explicit human disposition |
-| `ready-candidate` | Reviewer passed the exact current head | Human finalization decision or selected post-review feedback |
-| `finalizing` | Human authorized the reviewer to finalize the exact reviewed head | Validated `pull-request-finalized`, `review-needs-human`, or selected post-review feedback that invalidates it |
-| `ready-for-team-review` | Reviewer finalized the passing current head and orchestration validation succeeded | External human review, selected post-review feedback, or merge decision |
-| `merged` | GitHub confirms the pull request merged | Guarded cleanup |
-| `closed` | Human closed, superseded, or otherwise ended the task | Explicit cleanup or archival decision |
-| `cleaned` | Task-owned Herdr workspace and worktree were safely removed | None |
+## Wake registration
 
-Waiting for the human does not imply failure. Record the prior state and reason before entering `decision-required` so an authorized decision can resume the correct transition.
+The coordinator owns subscriptions. After starting a role and before its initial prompt, register its exact live identity:
 
-## Semantic events
-
-Managed agents send compact JSON as a prompt to the stable `workflow_orchestrator` agent without `--wait`. The common envelope is:
-
-```json
-{
-  "kind": "workflow-event",
-  "task": "reconnect-race",
-  "role": "author",
-  "event": "draft-pr-ready",
-  "scopeVersion": 1,
-  "head": "0123456789abcdef"
-}
+```sh
+./plugins/agent-wake/agent-wake arm --persistent \
+  --state-root <control-root>/.orchestrator/wake --key <task-id> \
+  --workspace-id <workspace-id> --workspace-label <label> \
+  --pane <pane-id> --agent <agent-name> --metadata '{"role":"author"}'
 ```
 
-Required events are:
+Store the returned watch ID under `wake.watches.<role>`. Register the reviewer separately when created. Keep watches through planning, human conversations, review, and post-review feedback; do not rearm after every prompt. Use `cancel --state-root <root> --watch <id>` when retiring/replacing a role or cleaning its task. If initial dispatch fails, inspect whether it actually started before retrying; a subscription itself launches nothing.
 
-| Role | Event | Additional fields | Meaning |
-| --- | --- | --- | --- |
-| Author | `implementation-started` | none | Human explicitly approved implementation in the author session |
-| Author | `implementation-ready` | `head`, `verificationRef` | Approved implementation is ready for the orchestrator to request draft creation |
-| Author | `draft-pr-ready` | `base`, `head`, `pullRequest` | Initial draft contains intent and the verified current head |
-| Author | `fixes-ready` | `base`, `head`, `pullRequest` | Selected findings were processed and the new head is ready |
-| Author | `scope-revised` | `briefRef`, optional `summary` | Human explicitly revised material scope |
-| Author | `post-review-changes-started` | `head`, `feedbackRef`, `changeClass`, optional `briefRef` | Human selected changes after successful review; class is `small-fix` or `material` |
-| Author | `needs-human` | `reason` | Author cannot proceed inside existing authority |
-| Reviewer | `review-findings` | `base`, `head`, `round`, `findingCount`, `hunkSession` | Material current-change findings were recorded |
-| Reviewer | `review-passed` | `base`, `head`, `round`, `pullRequest` | Complete review found no known material in-scope defect |
-| Reviewer | `pull-request-finalized` | `base`, `head`, `round`, `pullRequest` | Human-authorized reviewer finalization completed for that exact head |
-| Reviewer | `pull-request-returned-to-draft` | `base`, `head`, `pullRequest` | Authorized post-readiness draft transition completed without other PR mutation |
-| Reviewer | `review-needs-human` | `base`, `head`, `round`, `reason` | Review requires a human decision |
-| Reviewer | `review-proposed` | `base`, `head`, `round`, `conclusion`, `proposalRef` | Reviewer-only output is ready for human inspection and is not published |
-| Reviewer | `review-published` | `base`, `head`, `round`, `pullRequest`, optional `reviewUrl` | Human-authorized reviewer-only output was published for the exact head |
-| Worker | `work-complete` | `summary`, optional `resultRef` | Bounded delegated work finished without entering development |
-| Worker | `needs-human` | `reason` | Worker cannot proceed inside its current objective or mutation boundary |
+The plugin observes working-to-settled transitions and queues `HERDR_AGENT_WAKE` notices. It coalesces undelivered turns, keeps an in-flight notice distinct from later turns, and defers while the coordinator is busy. Acknowledging a wake does not remove a persistent watch. Delivery failures have a bounded retry count; the durable inbox remains inspectable.
 
-Free-form summaries are supporting context, not transition authority. A managed role verifies delivery from a successful command result reporting `type: agent_prompted`. If direct delivery fails twice, the agent prints `WORKFLOW_EVENT_FALLBACK` and the complete event in its final response. The orchestrator may recover it with `herdr agent read`, validate it, and record that fallback source.
+On a wake, inspect the identified role's latest answer and relevant artifacts, save the reconciled outcome/next action, then `ack --state-root <root> --wake <wake-id>`. A blocked notice prompts inspection of the actual permission or question, never automatic approval. No worker JSON, callbacks, control blocks, or acknowledgment gate is required.
 
-Authors and workers use `needs-human`; reviewers use `review-needs-human`. These blocker events are valid from every active state owned by that role. Failures do not create new event names.
+A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or stale notices must not repeat a review count, publication, or finalization. Human text may arrive with a wake appended by terminal input; preserve the human request separately and give it authority over conflicting stale observations.
 
-### Shared-input collision recovery
+## Reconciliation and recovery
 
-Herdr event delivery and human typing use the same interactive orchestrator input. An event prompt can arrive while the human has an unsent draft, append its JSON to that draft, and submit both as one user message. This transport race does not make either part invalid.
+At startup, use `status --state-root <root>` and `flush` to inspect pending wakes and recover observed transitions. Confirm the configured target is still the unique controller. Reconcile watches against current role identities; cancel stale ones and register replacements. Do not attach unrelated human-created agents.
 
-When a message contains human text followed by one or more complete JSON objects whose `kind` is `workflow-event`:
+The plugin cannot reconstruct a whole working-and-settled turn missed while it was disabled, nor every agent's permission UI. On startup, requested status, or other task handling, use a bounded inventory and inspect changed or unexpectedly settled roles. Missing hooks must not leave tasks waiting indefinitely. Report an unavailable relay and offer repair instead of deploying worker callbacks.
 
-1. separate the human prefix from each complete trailing event;
-2. preserve and respond to the human instruction as human input rather than treating it as event metadata;
-3. validate every event independently through the normal event-validation procedure; and
-4. give the human instruction authority when it conflicts with a concurrently delivered event, rejecting or reconciling the event as stale where appropriate.
+Distinguish the sources of evidence:
 
-Do not discard the human prefix, treat the JSON as part of the human command, or accept the combined blob as one semantic instruction. If the boundary is ambiguous, an event is incomplete or interleaved, or the human intent cannot be recovered confidently, preserve the raw input, make no transition from the uncertain event, inspect the named managed agent and durable state, and ask the human only for the portion that remains unclear.
+- Human requests and unambiguous human transcript messages establish authorization and intent.
+- Worker answers establish their conclusions; verify consequential claims against the relevant evidence.
+- Git, GitHub, review artifacts, and verification establish changeset identity and results.
+- Herdr and plugin notices establish runtime observations only.
 
-## Managed-agent wake bridge
+Advance directly to the furthest supported state; do not replay ceremonial handoffs. An author's draft can already exist when you wake: confirm the approved scope, PR context, and current head, then start review. Do not interrupt authorized work merely because bookkeeping lags.
 
-The bundled Herdr plugin provides transport recovery without interpreting workflow. Before an orchestrator-owned handoff that expects a role event, create a one-shot watch for the exact task, role, workspace, pane, and agent; store its ID in `wake`. Arm before prompting and cancel it if dispatch fails. Direct human-agent conversation remains unwatched.
+If a transcript is truncated, use available durable context or ask the same role once for its current result, head, and any missing evidence. A temporary Markdown result is appropriate when terminal output cannot be recovered. Do not demand a historical event sequence or JSON. If human authority remains uncertain, ask the human rather than accepting the worker's paraphrase as approval.
 
-Use `./plugins/agent-wake/agent-wake arm` with `.orchestrator/wake` as `--state-root`, the task ID as `--key`, the role in `--metadata`, and the recorded workspace ID, label, pane, and agent; persist the returned `id`. Use `cancel --state-root <root>/.orchestrator/wake --watch <id>` for a failed dispatch or accepted direct event, `ack --state-root <root>/.orchestrator/wake --wake <id>` after processing, and `status` during restart reconciliation.
+Unexpected head changes invalidate a pass; establish who changed what before resuming. Count a complete review outcome once, bound to scope and head, not once per wake. Human-authorized material scope changes increment `scope.version` and `revision_count`, reset `rounds_this_scope`, and preserve `rounds_total`. Selected repairs do not reset counters. Update durable intent without making the author wait for record synchronization.
 
-The plugin accepts only a working-to-settled transition for that identity, deduplicates it, stores a durable inbox item under `.orchestrator/wake/`, and prompts an idle orchestrator with `HERDR_AGENT_WAKE`. If the orchestrator is busy, the item remains pending until a later status event or Herdr startup. Notification retries are bounded.
-
-A wake proves only that a watched turn settled. On receipt, inspect the role transcript and relevant artifacts, recover and validate any semantic event through the normal procedure, then acknowledge the wake and clear `wake` in the task record. If no valid conclusion exists, use missing-event reconciliation. Cancel and clear a matching watch when a direct semantic event is accepted so its later settled status cannot create a stale wake.
-
-Treat a trailing `HERDR_AGENT_WAKE` payload colliding with human input like the shared-input collision above: preserve the human prefix, parse the complete wake independently, and do not infer a workflow transition from it.
-
-## Missing-event reconciliation
-
-Reconcile on a plugin wake, monitoring, reporting, or task handling. The plugin reduces silent settlement but does not replace semantic evidence or bounded reconciliation.
-
-Find the **furthest proven state** while keeping evidence classes distinct:
-
-- only current human instructions or unambiguous human transcript messages prove human authority;
-- valid events, verified delivery, fallbacks, or one requested catch-up event prove role conclusions;
-- Git, GitHub, verification, and Hunk prove artifacts and changeset identity, not authority or review conclusions;
-- Herdr lifecycle proves runtime activity or settlement only.
-
-For a task with drift:
-
-1. Inspect one bounded Herdr inventory and its record. Stop if they agree and no drift signal exists.
-2. For unexpected settlement, a missing event, or newer durable artifacts, inspect the role transcript once and only necessary artifacts. Recover a complete event or fallback first; route live permission requests through the permission procedure.
-3. Prove every intervening human gate, role conclusion, and changeset transition from its proper evidence class. An agent's paraphrase does not prove human authority.
-4. If all boundaries are proven, atomically advance to the furthest state without replaying historical events. Record sources and skipped boundaries in `state.decision_reason`; normalize `last_event`, expected role and events, wait and attention fields, and recovery attempts.
-5. If authority and artifacts are proven but the current role conclusion is missing, record one attempt and prompt that same role once with a fresh control block and the exact current-boundary event schema. Request current state, not repeated work or historical events.
-6. If authorized work continues and only bookkeeping lags, record the proven active state and await the normal boundary. Interrupt only when mutation lacks authority or continued work compounds risk.
-7. On unresolved identity, authority, conclusion, scope, or changeset ambiguity—or a failed catch-up attempt—preserve work, enter `decision-required`, and ask one focused question. Do not infer, reprompt, replace the role, or increment review counters.
-
-Reset recovery attempts only after successful reconciliation or a valid event establishes a new handoff. Invalid events do not reset them. When the record and transcript disagree on authority, preserve state and ask the human.
-
-## Event validation
-
-Before advancing state:
-
-1. Confirm the task exists and the emitting role matches the task's named live agent.
-2. Confirm the event is valid from the current task state. During an active catch-up, it may instead match the candidate current boundary only when every skipped transition was independently proven by the reconciliation procedure.
-3. Confirm `scopeVersion` matches the task record.
-4. Resolve the worktree, branch, base, pull request, and current head independently.
-5. Reject stale or contradictory events and move to `decision-required` when reconciliation could change behavior.
-
-An event is a claim, not proof. Validate the draft PR and head before development review, `review-passed.head` before finalization authority, and `pull-request-finalized.head` before declaring development complete. For reviewer-only work, validate proposal, conclusion, current head, and publication. For delegated work, validate any `resultRef` and confirm no unauthorized tracked change before entering `delegated-complete`.
-
-Accept `post-review-changes-started` only after a successful review or finalization and only for feedback explicitly selected by the human. Preserve the former reviewed and finalized heads as history, clear both as current authority, and bind the feedback reference before resolution. Reject a concurrently arriving finalization event as stale. A material event increments the scope version using its brief reference. If draft return is required, validate `pull-request-returned-to-draft` before author implementation proceeds. A small fix does not reset review counters; material scope revision resets only the per-scope count.
-
-## Review counters and scope versions
-
-Increment `review.rounds_this_scope` and `review.rounds_total` when a reviewer outcome for a valid complete review is accepted. Check both budgets before beginning another review.
-
-A human-authorized material scope revision:
-
-1. increments `scope.version`;
-2. records the new brief reference and concise intent change;
-3. resets `review.rounds_this_scope` to zero;
-4. preserves `review.rounds_total` and `scope.revision_count`; and
-5. instructs the same reviewer to begin again with a full phase-zero review.
-
-Fixes that merely resolve selected findings do not create a new scope version.
-
-## Recovery
-
-On orchestration restart, treat every cached lifecycle observation as stale. Reconcile, in order:
-
-1. task record and configured repository identity;
-2. worktree path, branch, base, status, and current head;
-3. draft pull request, description, state, and remote head;
-4. live Herdr workspace, panes, and named agents; and
-5. plugin watches and pending wakes; and
-6. Hunk session source for development review, proposal artifact for reviewer-only work, or result reference for delegated work.
-
-Resume only after these sources agree. Never repeat workspace creation, PR creation, comment publication, or finalization merely because the previous command result was lost.
+When adopting an older task record, preserve its evidence and ownership, replace one-shot watches with persistent ones, and stop requiring `event_recovery` or `last_event`. Tell existing roles once that the old signaling instructions no longer apply. Do not edit active sessions during package installation without a coordinated cutover.
 
 ## Cleanup
 
-A task becomes cleanup-eligible when GitHub confirms its pull request merged or the human explicitly requests cleanup. Before removal, verify that the worktree and workspace still belong to the task, no managed role is working, and apply the two-layer recoverability audit in [Safety, Capacity, and Escalation](safety-and-escalation.md). An expected containing-repository gitlink difference is allowed only for a clean, recoverable submodule target whose recorded pointer update is `not-planned`; it does not excuse changes inside that submodule.
-
-If any safety check fails, enter `decision-required` and preserve the workspace. Otherwise remove only the task-owned Herdr workspace and worktree through the normal path or the audited submodule-specific force exception, mark the record `cleaned`, and move it from the active task-record directory to its sibling archive directory (default `.orchestrator/archive`). Normal reconciliation and status reporting inspect only active records; consult the archive only for explicit historical recovery or investigation. Pull-request closure and branch deletion are separate actions and are not implied by workspace cleanup.
-
-During reconciliation, archive legacy records already marked `cleaned` that remain in the active directory.
+After the [recoverability audit](safety-and-escalation.md#cleanup), cancel only that task's watches and remove its owned linked worktree/workspace. Archive the `cleaned` record in the sibling archive directory, normally `.orchestrator/archive`. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.

@@ -22,8 +22,7 @@ model established the durable contracts before Herdr automation was introduced:
 2. The persistent author implements and verifies the approved plan, then creates
    an intent-bearing draft pull request.
 3. A separate persistent reviewer audits the complete changeset.
-4. Review findings return to the original author through a private local surface,
-   normally Hunk.
+4. Review findings return privately to the original author.
 5. The same reviewer performs complete rereviews until the change passes or the
    workflow returns to the human.
 6. The human authorizes readiness and ultimately merges through GitHub.
@@ -60,7 +59,7 @@ underlying contracts or turn the orchestrator into an author, reviewer, or fixer
   and verification evidence must permit recovery when an agent session is lost.
 - **Team-compatible output:** Local agent iteration culminates in a concise
   GitHub pull request for final human, teammate, CI, and policy review.
-- **Replaceable tools:** Herdr and Hunk implement workflow seams; product intent
+- **Replaceable tools:** Runtime and review tools implement workflow boundaries; product intent
   and role contracts should not depend on one terminal, model, or company.
 
 ## Responsibility Boundaries
@@ -87,11 +86,15 @@ current changeset identity remain authoritative when a role must be replaced.
   skills rather than one monolithic coding agent.
 - Detailed implementation planning stays between the human and author so the
   orchestrator can retain a smaller, task-level context.
-- GitHub draft pull requests carry intent and recovery context; Hunk carries
-  private iterative review feedback without polluting the shared review timeline.
-- Semantic workflow events complement Herdr lifecycle state. Terminal activity
-  alone cannot prove plan approval, implementation completion, review outcome, or
-  permission to mutate shared state.
+- GitHub drafts carry intent and recovery context; ordinary worker responses carry
+  private iterative feedback without polluting the shared review timeline.
+- Persistent plugin watches wake the coordinator without worker callbacks. The
+  coordinator interprets responses and evidence; terminal activity alone proves
+  neither success nor authority.
+- Worker prompts describe objectives and boundaries, not infrastructure. Direct
+  human instructions need no second approval for coordinator bookkeeping.
+- Explicit economical/stronger model choices match task difficulty. Escalate
+  repeated reasoning failures without making every assignment use a large model.
 - One Herdr workspace and worktree owns one task. Parallel task count remains a
   human decision, with the orchestrator warning about likely overlap.
 - The original author fixes findings and the original reviewer rereviews them.

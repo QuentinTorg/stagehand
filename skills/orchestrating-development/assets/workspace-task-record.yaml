@@ -34,4 +34,6 @@ state:
 cleanup:
   requested_by: null
   completed: false
-last_event: null
+wake:
+  watches: {}
+role_sessions: {}

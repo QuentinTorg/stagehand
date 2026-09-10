@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable, one-shot wake relay between Herdr agents."""
+"""Durable wake relay between explicitly registered Herdr agents."""
 
 from __future__ import annotations
 
@@ -153,32 +153,57 @@ def _arm(args) -> int:
         raise SystemExit(f"invalid metadata JSON: {error}")
     if not isinstance(metadata, dict):
         raise SystemExit("metadata must be a JSON object")
+    persistent = args.persistent
+    source = {}
+    bootstrap_process = None
+    if persistent:
+        payload, error = _herdr("agent", "get", args.pane)
+        source = _agent(payload)
+        if error or not _matches_identity(source, args.pane, args.workspace_id, args.agent):
+            raise SystemExit("persistent watch requires the exact live source agent")
+        if target in {args.agent, args.pane}:
+            raise SystemExit("a persistent watch cannot target its own source agent")
+        if not source.get("agent_session"):
+            bootstrap_process = _bootstrap_process(source)
+            if not bootstrap_process:
+                raise SystemExit("source is still starting; register after its foreground agent is ready")
     with _locked(state_root) as root:
         for path, watch in _documents(root / "watches"):
             if not watch or watch.get("state") != "armed" or watch.get("pane_id") != args.pane:
                 continue
             identity = (watch.get("key"), watch.get("workspace_id"), watch.get("agent_name"))
             if identity == (args.key, args.workspace_id, args.agent):
-                print(json.dumps(watch, sort_keys=True))
-                return 0
+                if bool(watch.get("persistent")) != persistent or (persistent and not _same_source(watch, source)):
+                    raise SystemExit("watch mode or session changed; cancel the old watch first")
+                _atomic_json(path, watch)
+                break
             raise SystemExit(f"pane already has an active wake watch: {path.stem}")
-        now = time.time()
-        watch = {
-            "version": 1,
-            "id": uuid.uuid4().hex,
-            "key": args.key,
-            "metadata": metadata,
-            "workspace_id": args.workspace_id,
-            "workspace_label": args.workspace_label,
-            "pane_id": args.pane,
-            "agent_name": args.agent,
-            "observed_working": bool(args.observed_working),
-            "state": "armed",
-            "created_at": now,
-            "updated_at": now,
-        }
-        _atomic_json(root / "watches" / f"{watch['id']}.json", watch)
-    print(json.dumps(watch, sort_keys=True))
+        else:
+            now = time.time()
+            watch = {
+                "version": 1,
+                "id": uuid.uuid4().hex,
+                "key": args.key,
+                "metadata": metadata,
+                "workspace_id": args.workspace_id,
+                "workspace_label": args.workspace_label,
+                "pane_id": args.pane,
+                "agent_name": args.agent,
+                "persistent": persistent,
+                "session": source.get("agent_session"),
+                "bootstrap_process": bootstrap_process,
+                "observed_working": bool(args.observed_working) or _status(source) == "working",
+                "state": "armed",
+                "created_at": now,
+                "updated_at": now,
+            }
+            _atomic_json(root / "watches" / f"{watch['id']}.json", watch)
+    if persistent:
+        # A fast turn may finish between the initial snapshot and registration.
+        # Reconcile now instead of waiting for an event that already happened.
+        _record_event_for(state_root, source)
+        _notify_consumer(state_root, target)
+    print(json.dumps(_json_file(state_root / "watches" / f"{watch['id']}.json", watch), sort_keys=True))
     return 0
 
 
@@ -189,15 +214,25 @@ def _remove(args, acknowledge: bool) -> int:
         raise SystemExit("wake identifiers must be 32 lowercase hexadecimal characters")
     removed = False
     with _locked(state_root) as root:
-        paths = [
-            root / "watches" / f"{identifier}.json",
-            root / "inbox" / f"{identifier}.json",
-        ]
+        # Persistent subscriptions outlive individual wakes. Cancellation removes
+        # their pending notices too, so cleanup cannot later wake a retired task.
+        paths = [root / "inbox" / f"{identifier}.json"]
+        if not acknowledge:
+            paths += [path for path, wake in _documents(root / "inbox")
+                      if wake and wake.get("watch_id", wake.get("id")) == identifier]
+        watch_path = root / "watches" / f"{identifier}.json"
+        watch = _json_file(watch_path, {})
+        if not acknowledge or not watch.get("persistent"):
+            paths.append(watch_path)
         for path in paths:
             if path.exists():
                 path.unlink()
                 removed = True
     print(json.dumps({"id": identifier, "removed": removed}))
+    if acknowledge:
+        for consumer in _configured_consumers():
+            if Path(consumer["root"]).resolve() == state_root:
+                _notify_consumer(state_root, consumer.get("target", ""))
     return 0
 
 
@@ -218,22 +253,61 @@ def _event_value(event: dict, name: str):
     return event.get(name) or (nested.get(name) if isinstance(nested, dict) else None)
 
 
-def _confirm_settled(watch: dict) -> bool:
+def _matches_identity(agent: dict, pane: str, workspace: str, name: str) -> bool:
+    return (agent.get("pane_id") == pane and agent.get("workspace_id") == workspace
+            and agent.get("name") == name)
+
+
+def _bootstrap_process(agent: dict) -> dict | None:
+    """Anchor a fresh frontend before Herdr discovers its native session ID."""
+    if not agent.get("terminal_id"):
+        return None
+    payload, error = _herdr("pane", "process-info", "--pane", agent["pane_id"])
+    if error or not isinstance(payload, dict):
+        return None
+    info = (payload.get("result") or {}).get("process_info") or {}
+    group = info.get("foreground_process_group_id")
+    if info.get("pane_id") != agent["pane_id"] or not group or group == info.get("shell_pid"):
+        return None
+    return {"terminal_id": agent["terminal_id"], "process_group": group}
+
+
+def _same_source(watch: dict, agent: dict) -> bool:
+    if not _matches_identity(agent, watch["pane_id"], watch["workspace_id"], watch["agent_name"]):
+        return False
+    if watch.get("session"):
+        return agent.get("agent_session") == watch["session"]
+    anchor = watch.get("bootstrap_process")
+    if not anchor:
+        # Older registrations without a process anchor cannot safely adopt an ID.
+        return not agent.get("agent_session")
+    if _bootstrap_process(agent) != anchor:
+        return False
+    # Metadata appearing for this same frontend is enrichment, not replacement.
+    if agent.get("agent_session"):
+        watch["session"] = agent["agent_session"]
+    return True
+
+
+def _confirm_settled(watch: dict) -> str | None:
     time.sleep(0.2)
     payload, error = _herdr("agent", "get", watch["pane_id"])
     if error:
-        return False
+        return None
     agent = _agent(payload)
     if _status(agent) not in SETTLED:
-        return False
+        return None
+    if watch.get("persistent"):
+        return _status(agent) if _same_source(watch, agent) else None
     pane = agent.get("pane_id") or agent.get("id")
     workspace = agent.get("workspace_id")
     name = agent.get("name") or agent.get("agent_name")
-    return (
+    matches = (
         (not pane or pane == watch["pane_id"])
         and (not workspace or workspace == watch["workspace_id"])
         and (not name or name == watch["agent_name"])
     )
+    return _status(agent) if matches else None
 
 
 def _record_event_for(state_root: Path, event: dict) -> None:
@@ -252,39 +326,59 @@ def _record_event_for(state_root: Path, event: dict) -> None:
                 watch["observed_working"] = True
                 watch["updated_at"] = time.time()
                 _atomic_json(path, watch)
-                continue
+                if not watch.get("persistent"):
+                    continue
+                # Hooks run in separate processes: a fast turn's stop hook can
+                # beat its working hook. Inspect once here to recover that stop.
             # A fresh working transition distinguishes the dispatched turn from
             # a pane that was already idle when its watch was armed.
-            if not watch.get("observed_working") or not _confirm_settled(watch):
+            if not watch.get("observed_working"):
+                continue
+            settled_status = _confirm_settled(watch)
+            if not settled_status:
                 continue
             now = time.time()
-            watch["state"] = "fired"
+            persistent = watch.get("persistent", False)
+            watch["state"] = "armed" if persistent else "fired"
+            watch["observed_working"] = False
             watch["updated_at"] = now
+            # Coalesce only undelivered wakes. An in-flight notice keeps its own
+            # ID, so acknowledging it cannot erase a newer human-started turn.
+            pending = next((item for _, item in _documents(root / "inbox")
+                            if item and item.get("watch_id") == watch["id"]
+                            and not item.get("notified")), None) if persistent else None
             wake = {
                 "version": 1,
-                "id": watch["id"],
+                "id": (pending["id"] if pending else uuid.uuid4().hex) if persistent else watch["id"],
+                "watch_id": watch["id"],
                 "key": watch["key"],
                 "metadata": watch["metadata"],
                 "workspace_id": watch["workspace_id"],
                 "workspace_label": watch["workspace_label"],
                 "pane_id": watch["pane_id"],
                 "agent_name": watch["agent_name"],
-                "status": status,
+                "status": settled_status,
                 "settled_at": now,
                 "notified": False,
-                "attempts": 0,
-                "last_error": None,
+                "attempts": pending.get("attempts", 0) if pending else 0,
+                "last_error": pending.get("last_error") if pending else None,
             }
-            _atomic_json(path, watch)
+            # Persist the notice before consuming the observed transition. A
+            # crash may repeat a hint, but must not silently lose the result.
             _atomic_json(root / "inbox" / f"{wake['id']}.json", wake)
+            _atomic_json(path, watch)
 
 
 def _notify_consumer(state_root: Path, configured_target: str) -> None:
     with _locked(state_root) as root:
+        inbox = _documents(root / "inbox")
+        delivered = {wake.get("watch_id", wake["id"]) for _, wake in inbox
+                     if wake and wake.get("notified")}
         pending = [
             (path, wake)
-            for path, wake in _documents(root / "inbox")
+            for path, wake in inbox
             if wake and not wake.get("notified") and wake.get("attempts", 0) < MAX_NOTIFY_ATTEMPTS
+            and wake.get("watch_id", wake["id"]) not in delivered
         ]
         if not pending:
             return
@@ -332,6 +426,15 @@ def _flush() -> int:
     for entry in _configured_consumers():
         state_root = Path(entry["root"]).resolve()
         if state_root.is_dir():
+            # Recover a stop missed during a hook/server interruption. This is
+            # one bounded snapshot, not a timer or an agent polling loop.
+            with _locked(state_root) as root:
+                watches = [watch for _, watch in _documents(root / "watches")
+                           if watch and watch.get("persistent") and watch.get("state") == "armed"]
+            for watch in watches:
+                payload, error = _herdr("agent", "get", watch["pane_id"])
+                if not error:
+                    _record_event_for(state_root, _agent(payload))
             _notify_consumer(state_root, entry.get("target", ""))
     return 0
 
@@ -371,6 +474,8 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--agent", required=True)
     arm.add_argument("--metadata", default="{}")
     arm.add_argument("--observed-working", action="store_true")
+    arm.add_argument("--persistent", action="store_true",
+                     help="Watch successive turns, including human-started turns, until cancelled")
     arm.set_defaults(run=_arm)
     cancel = commands.add_parser("cancel")
     cancel.add_argument("--state-root", required=True)
