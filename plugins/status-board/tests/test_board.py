@@ -27,6 +27,93 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_later_persists_without_changing_workflow_or_drafts(self):
+        with tempfile.TemporaryDirectory() as root:
+            tasks = Path(root) / "tasks"
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            before = dict(row)
+            viewer = board.ViewerState(tasks)
+            viewer.toggle(row)
+            restored = board.ViewerState(tasks)
+            self.assertEqual(restored.entries([row], False), [None])
+            self.assertEqual(restored.entries([row], True), [None, row])
+            self.assertEqual(row, before)
+            self.assertFalse(tasks.exists())
+            self.assertEqual(viewer.path.stat().st_mode & 0o777, 0o600)
+            restored.toggle(row)
+            self.assertEqual(restored.entries([row], False), [row])
+
+    def test_later_returns_for_meaningful_changes_not_timestamps_or_viewing(self):
+        with tempfile.TemporaryDirectory() as root:
+            viewer = board.ViewerState(Path(root) / "tasks")
+            task = self.task()
+            agent = {"name": task["agents"]["reviewer"], "workspace_id": task["workspace"]["id"],
+                     "agent_status": "done", "agent_session": {"value": "session1"}}
+            row = board.task_summary(task, 0, None, [agent], 5)
+            viewer.toggle(row)
+            viewed = board.task_summary(task, 10, None, [dict(agent, agent_status="idle")], 10)
+            viewed["label"] = "Renamed workspace"
+            self.assertEqual(viewer.reconcile([viewed]), [])
+            self.assertIn(row["id"], viewer.later)
+            self.assertEqual(viewer.reconcile([dict(viewed, activity={})]), [])
+            for key, value in (("summary", "A new result"), ("action", "Approve revised plan"),
+                               ("activity", {"reviewer": [agent["name"], "session1", "working"]})):
+                if row["id"] not in viewer.later:
+                    viewer.toggle(row)
+                returned = viewer.reconcile([dict(viewed, **{key: value})])
+                self.assertEqual(len(returned), 1)
+                self.assertNotIn(row["id"], board.ViewerState(viewer.path.parent / "tasks").later)
+
+    def test_corrupt_viewer_state_is_preserved_and_tasks_remain_visible(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "board-state.json"
+            path.write_text("not json")
+            viewer = board.ViewerState(Path(root) / "tasks")
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            self.assertEqual(viewer.entries([row], False), [row])
+            with self.assertRaises(ValueError):
+                viewer.toggle(row)
+            self.assertEqual(path.read_text(), "not json")
+
+    def test_later_only_list_can_expand_select_and_return_to_active(self):
+        with tempfile.TemporaryDirectory() as root:
+            viewer = board.ViewerState(Path(root) / "tasks")
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            viewer.toggle(row)
+            ready = Future()
+            ready.set_result(([row], []))
+            executor = Mock()
+            executor.submit.return_value = ready
+            with patch.object(board, "ViewerState", return_value=viewer), patch.object(
+                board, "mouse_event", return_value=("select", 104, 9, 0)
+            ), patch.object(board, "open_target") as navigate, patch.object(board, "send_message") as send:
+                screen = self.run_display(executor, [-1, ord("l"), board.curses.KEY_DOWN,
+                                                     board.curses.KEY_MOUSE, ord("q")])
+            output = " ".join(str(call) for call in screen.addnstr.call_args_list)
+            self.assertIn("Later (1)", output)
+            self.assertIn("Return to active", output)
+            self.assertEqual(viewer.later, {})
+            navigate.assert_not_called()
+            send.assert_not_called()
+
+    def test_later_views_and_task_actions_fit_narrow_and_wide_panes(self):
+        for height, width in ((24, 60), (38, 88), (60, 200)):
+            with tempfile.TemporaryDirectory() as root:
+                viewer = board.ViewerState(Path(root) / "tasks")
+                row = board.task_summary(self.task(), 0, None, None, 5)
+                row["agent_names"]["author"] = "author"
+                viewer.toggle(row)
+                ready = Future()
+                ready.set_result(([row], []))
+                executor = Mock()
+                executor.submit.return_value = ready
+                with patch.object(board, "ViewerState", return_value=viewer):
+                    screen = self.run_display(executor, [-1, ord("l"), board.curses.KEY_DOWN, ord("q")], (height, width))
+                for call in screen.addnstr.call_args_list:
+                    y, x, text, count, *_ = call.args
+                    self.assertTrue(0 <= y < height and 0 <= x < width, call)
+                    self.assertLessEqual(x + min(len(text), count), width, call)
+
     def test_preview_freshness_tracks_reads_and_does_not_refresh_on_failure(self):
         result = {"status": "idle", "output": "Unchanged answer"}
         first = board.stamp_preview(result, {}, 100)
@@ -267,6 +354,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             agents = [{"name": name, "workspace_id": task["workspace"]["id"], "agent_status": "idle"}
                       for name in task["agents"].values()]
             self.assertEqual(board.task_summary(task, 0, None, agents, 5)["color"], color)
+            self.assertEqual(board.task_summary(task, 0, None, agents, 5)["status"], state)
 
     def test_legacy_completed_handoff_stays_green_without_record_migration(self):
         for stage in ("ready-for-team-review", "delegated-complete", "review-complete"):

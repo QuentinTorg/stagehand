@@ -54,6 +54,12 @@ Conversation loading runs separately from task inventory, with at most one read 
 
 Conversation headings show the age of the last successful read, not the last agent message. Failed refreshes or reads older than two refresh intervals (at least ten seconds) are marked stale; errors remain visible rather than implying the agent is still loading.
 
+## Set tasks aside
+
+**Set aside**, beside **Open workspace**, moves the selected task into a collapsed **Later** group. Click that group or press **l** to expand it; select a task and use **Return to active** to bring it back. These controls never stop or dispatch agents, change task YAML, or close workspaces. Main-list totals exclude set-aside tasks; their original colored dots remain visible in Later.
+
+Preferences persist in private `board-state.json` beside the task directory, separate from message drafts. A changed task summary, status, next action, scope, PR linkage, or observed agent activity returns a task to the main list with a notice. Viewing a task, renaming a workspace, and merely rewriting YAML do not. Activity detection uses board refreshes, not a new worker protocol; a whole turn missed between refreshes or while the board is closed requires a changed saved task result to resurface it.
+
 ## Message the orchestrator
 
 Select a task and click the message box in the bottom detail panel to type there; **m** also focuses it. The selected task and conversation keep refreshing while you write. Enter or Send submits, Ctrl-J inserts a newline (Ctrl-G also sends), and Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board adds only the workspace name and Herdr workspace ID (task ID only if no workspace exists), then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.

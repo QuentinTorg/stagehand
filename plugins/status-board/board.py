@@ -157,15 +157,19 @@ def task_summary(task, modified, workspaces, agents, now):
     next_actor = "you" if needs_human else expected if status == "working" else None
     if next_actor == "human":
         next_actor = "you"
-    role_text = []
+    role_text, activity = [], {}
     for role in ROLES:
         identity = mapping(task.get("agents")).get(role)
         if not identity:
             continue
         # Names can be reused elsewhere; require the recorded workspace as well.
         found = next((a for a in agents or [] if a.get("name") == identity and a.get("workspace_id") == workspace_id), None)
-        status = clean(found.get("agent_status", "unknown")) if found else "unavailable" if agents is None else "missing"
-        role_text.append(f"{role.replace('_', ' ').title()} {status}")
+        runtime = clean(found.get("agent_status", "unknown")) if found else "unavailable" if agents is None else "missing"
+        role_text.append(f"{role.replace('_', ' ').title()} {runtime}")
+        if found and runtime in {"idle", "done", "working", "blocked"}:
+            # Viewing an agent changes done to idle; that is not new work.
+            activity[role] = [identity, mapping(found.get("agent_session")).get("value"),
+                              "settled" if runtime in {"idle", "done"} else runtime]
     roles = "; ".join(role_text) or "No managed roles"
     if next_actor:
         roles += f" → {clean(next_actor)}"
@@ -187,7 +191,7 @@ def task_summary(task, modified, workspaces, agents, now):
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
-            "agent_names": mapping(task.get("agents")),
+            "agent_names": mapping(task.get("agents")), "activity": activity,
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
@@ -336,6 +340,8 @@ def help_lines(width, warnings):
             "", "m or click the box: write a message. All messages go to the orchestrator.",
             "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Task and general drafts stay separate.",
+            "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
+            "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
             "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
             "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
             "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
@@ -503,6 +509,72 @@ def save_draft(path, text):
     finally:
         if temporary and temporary.exists():
             temporary.unlink()
+
+
+class ViewerState:
+    """Personal organization, separate from workflow authority and task records."""
+
+    def __init__(self, tasks):
+        self.path = tasks.parent / "board-state.json"
+        self.later, self.error = {}, None
+        try:
+            if self.path.exists():
+                saved = json.loads(self.path.read_text())
+                later = saved["later"]
+                if not isinstance(later, dict) or any(not isinstance(value, dict) or
+                        "fingerprint" not in value or not isinstance(value.get("activity"), dict)
+                        for value in later.values()):
+                    raise ValueError("invalid Later entries")
+                self.later = later
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.error = f"Cannot read viewer state; preserving file: {clean(error)}"
+
+    @staticmethod
+    def fingerprint(row):
+        # No timestamps, labels, focus state, CI details, or bookkeeping counters.
+        facts = {key: row.get(key) for key in
+                 ("workspace_id", "status", "summary", "action", "next", "objective", "prs", "agent_names")}
+        return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+
+    def save(self, later):
+        if self.error:
+            raise ValueError(self.error)
+        save_draft(self.path, json.dumps({"later": later}, indent=2) + "\n")
+        self.later = later
+
+    def toggle(self, row):
+        later = dict(self.later)
+        if row["id"] in later:
+            del later[row["id"]]
+        else:
+            later[row["id"]] = {"fingerprint": self.fingerprint(row), "activity": row.get("activity", {})}
+        self.save(later)
+
+    def reconcile(self, rows):
+        later, returned = dict(self.later), []
+        for row in rows:
+            previous = later.get(row["id"])
+            if previous is None:
+                continue
+            activity = row.get("activity", {})
+            changed = any(role in previous["activity"] and previous["activity"][role] != value
+                          for role, value in activity.items())
+            if changed or previous["fingerprint"] != self.fingerprint(row):
+                del later[row["id"]]
+                returned.append(row["label"] + " returned from Later — " +
+                                ("new agent activity." if changed else "task updated."))
+            else:
+                # Missing live inventory must not erase the last known baseline.
+                later[row["id"]] = dict(previous, activity={**previous["activity"], **activity})
+        if later != self.later:
+            self.save(later)
+        return returned
+
+    def entries(self, rows, expanded):
+        active = [row for row in rows if row["id"] not in self.later]
+        later = [row for row in rows if row["id"] in self.later]
+        # A non-task row makes the disclosure reachable by keyboard and mouse.
+        return active + ([None] + (later if expanded else []) if later else [])
 
 
 def send_message(args, row, message):
@@ -764,6 +836,12 @@ def draw_actions(screen, top, width, actions, active=None, tabs=False):
     for action, label in actions:
         text = "  " + label + "  "
         navigation = action in {"workspace", "open-controller"}
+        if action == "aside":
+            # Keep the two task actions together, right-aligned and outside tabs.
+            group_width = len(text) + 2 + len("  Open workspace ↗  ")
+            if x > 1 and x + group_width > width - 1:
+                y += 1
+            x = max(1, width - 1 - group_width)
         if navigation:
             # Navigation is spatially separate from local view selectors.
             if x > 1 and x + len(text) > width - 1:
@@ -778,7 +856,7 @@ def draw_actions(screen, top, width, actions, active=None, tabs=False):
         x += len(text) + 2
     if tabs:
         # A baseline joins the tabs without consuming another terminal row.
-        navigation = {"workspace", "open-controller"}
+        navigation = {"aside", "workspace", "open-controller"}
         for line in sorted({line for line, _, _, action in hits if action not in navigation}):
             end = min((left - 2 for row, left, _, action in hits if row == line and action in navigation), default=width - 1)
             cursor = 1
@@ -834,6 +912,8 @@ def display_loop(screen, args, executor, previews):
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
+    all_rows, later_open = [], False
+    viewer = ViewerState(args.tasks)
     notice, pending, queued_mouse = "", None, None
     editor, editor_task = None, None
     refresh_started = None
@@ -848,12 +928,17 @@ def display_loop(screen, args, executor, previews):
         # Preserve click coordinates until a blur event is handled; a refresh may
         # otherwise reorder the task rows between leaving the editor and selection.
         if pending is not None and pending.done() and queued_mouse is None:
-            selected_id = rows[min(selected, len(rows) - 1)]["id"] if rows else None
+            previous_row = rows[min(selected, len(rows) - 1)] if rows else None
+            selected_id = previous_row["id"] if previous_row else None
             try:
-                rows, warnings = pending.result()
+                all_rows, warnings = pending.result()
+                returned = viewer.reconcile(all_rows)
+                if returned:
+                    notice = " ".join(returned)
             except Exception as error:
                 warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
-            selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
+            rows = viewer.entries(all_rows, later_open)
+            selected = next((i for i, row in enumerate(rows) if row and row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
             pending = None
         if pending is None and time.monotonic() >= refresh_at:
@@ -888,7 +973,7 @@ def display_loop(screen, args, executor, previews):
 
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
-        viewing_controller = general or current is None
+        viewing_controller = general or not all_rows
         message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
         if editor is not None and editor_task != selected_id:
@@ -913,8 +998,8 @@ def display_loop(screen, args, executor, previews):
             preview_key = preview_request
             preview_refresh_at = time.monotonic() + args.interval
             preview_pending = None
-        wanted_preview = not show_help and (viewing_controller or not info)
-        request = (("controller",) if viewing_controller else
+        wanted_preview = not show_help and (viewing_controller or (current is not None and not info))
+        request = (("controller",) if viewing_controller or current is None else
                    (current["id"], current["workspace_id"], preview_role, current.get("next"),
                     tuple(sorted(current.get("agent_names", {}).items()))))
         if wanted_preview and preview_pending is None and (request != preview_key or time.monotonic() >= preview_refresh_at):
@@ -933,7 +1018,7 @@ def display_loop(screen, args, executor, previews):
                                  "help" if show_help else "controller" if viewing_controller else "task", tabs=True)
         legend_x = 1
         for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
-            text = f"● {sum(row['color'] == color for row in rows)} {label}"
+            text = f"● {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
             try:
                 screen.addnstr(2, legend_x, text, max(0, width - legend_x - 1),
                                curses.color_pair(color) if curses.has_colors() else 0)
@@ -947,11 +1032,18 @@ def display_loop(screen, args, executor, previews):
         show_tasks = not (viewing_controller or show_help)
         if show_tasks:
             header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
-            pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in rows), default=9)))
+            pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in all_rows), default=9)))
             put(4, "    " + table_line(header, width - 8, pr_width), bold=True)
             for i, row in enumerate(rows[offset:offset + visible], offset):
                 marker, y = ("›" if i == selected else " "), 5 + i - offset
+                if row is None:
+                    count = sum(row["id"] in viewer.later for row in all_rows)
+                    put(y, f"{marker} {'▾' if later_open else '▸'} Later ({count})", highlight=i == selected, underline=True)
+                    actions.append((y, 1, width - 2, "later"))
+                    continue
                 summary = dict(row, stage=task_stage(row), roles=task_next(row))
+                if row["id"] in viewer.later:
+                    summary["label"] = "  " + row["label"]
                 # Color only the dot on unselected rows; a long red/yellow row
                 # competes with the selected task and its requested action.
                 put(y, f"{marker} ● {table_line(summary, width - 8, pr_width)}",
@@ -973,7 +1065,7 @@ def display_loop(screen, args, executor, previews):
                         except curses.error:
                             pass
             draw_task_frame(screen, width, visible, selected, len(rows),
-                            f"Workspaces {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
+                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
             detail_y = 7 + visible
         else:
             detail_y = 3
@@ -983,11 +1075,14 @@ def display_loop(screen, args, executor, previews):
         elif viewing_controller:
             context_actions = ([] if controller_offset is None else [("latest", "Jump to latest")])
             context_actions.append(("open-controller", "Open orchestrator ↗"))
+        elif current is None:
+            context_actions = [("later", "Collapse Later" if later_open else "Expand Later")]
         else:
             context_actions = [("info", "Details")]
             context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
                                 if current.get("agent_names", {}).get(role)]
-            context_actions.append(("workspace", "Open workspace ↗"))
+            context_actions += [("aside", "Return to active" if current["id"] in viewer.later else "Set aside"),
+                                ("workspace", "Open workspace ↗")]
         conversation = preview_result if not viewing_controller and preview_key == request else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
@@ -1012,6 +1107,10 @@ def display_loop(screen, args, executor, previews):
             freshness = preview_freshness(controller, time.monotonic(), args.interval)
             title = clipped(f"Orchestrator · {status}", width - 3 - len(freshness)) + freshness
             color = 1 if controller["status"] in {"blocked", "unavailable"} else 10
+        elif current is None:
+            details = [(line, 0, []) for line in textwrap.wrap(
+                "Set-aside tasks keep their workspace and status. Expand Later to select one.", width - 4)]
+            title, color = "Later", 10
         elif info:
             details = detail_lines(current, width, info=True)
             title, color = current["label"], 10
@@ -1048,7 +1147,9 @@ def display_loop(screen, args, executor, previews):
             draw_message_box(screen, message_target, draft)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
-        if warnings:
+        if viewer.error:
+            put(height - 2, viewer.error, 1)
+        elif warnings:
             put(height - 2, f"Updates need attention ({len(warnings)}) · ? for details", 1)
         elif notice:
             put(height - 2, notice, bold=True)
@@ -1077,6 +1178,8 @@ def display_loop(screen, args, executor, previews):
             refresh_at = 0
         elif key in (ord("t"), ord("c"), ord("?")):
             action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help"}[key]
+        elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
+            action = "later"
         elif key == 27:
             show_help = False
         elif key in (ord("o"), ord("O")):
@@ -1104,7 +1207,8 @@ def display_loop(screen, args, executor, previews):
             else:
                 preview_offset = None
         elif key == ord("a") and rows:
-            selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["color"] == 1), selected)
+            selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1)
+                             if rows[i % len(rows)] and rows[i % len(rows)]["id"] not in viewer.later and rows[i % len(rows)]["color"] == 1), selected)
             general, show_help = False, False
         elif key == curses.KEY_MOUSE:
             event, queued_mouse = queued_mouse or mouse_event(), None
@@ -1151,6 +1255,19 @@ def display_loop(screen, args, executor, previews):
             general, show_help, controller_offset = True, False, None
         elif action == "help":
             show_help, detail_offset = not show_help, 0
+        elif action in {"aside", "later"}:
+            try:
+                if action == "aside" and current:
+                    was_later = current["id"] in viewer.later
+                    viewer.toggle(current)
+                    notice = current["label"] + (" returned to active." if was_later else " set aside; no agent was stopped.")
+                else:
+                    later_open = not later_open
+                rows = viewer.entries(all_rows, later_open)
+                selected = next((i for i, row in enumerate(rows) if row and current and row["id"] == current["id"]),
+                                min(selected, max(0, len(rows) - 1)))
+            except (OSError, ValueError) as error:
+                notice = f"Viewer preference not saved: {clean(error)}"
         elif action == "info":
             info, detail_offset = True, 0
         elif action == "pr-list":
