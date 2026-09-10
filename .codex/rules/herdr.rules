@@ -82,7 +82,7 @@ prefix_rule(
     decision = "allow",
     justification = "Create and label tabs inside an authorized task workspace.",
     match = [
-        "herdr tab create --workspace w2 --label hunk --no-focus",
+        "herdr tab create --workspace w2 --label agents --no-focus",
         "herdr tab rename w2:t1 agents",
     ],
 )
@@ -108,11 +108,11 @@ prefix_rule(
     ],
 )
 
-# The bundled relay manages one-shot watches in ignored controller state.
+# The bundled relay manages explicit subscriptions in ignored controller state.
 prefix_rule(
-    pattern = ["./plugins/agent-wake/agent-wake", ["arm", "cancel", "ack", "status"]],
+    pattern = ["./plugins/agent-wake/agent-wake", ["arm", "cancel", "ack", "status", "flush"]],
     decision = "allow",
-    justification = "Manage bounded wake watches for authorized Stagehand role turns.",
+    justification = "Manage wake subscriptions for authorized Stagehand task agents.",
     match = [
         "./plugins/agent-wake/agent-wake arm --state-root /tmp/stagehand/.orchestrator/wake --key example --workspace-id w2 --workspace-label example --pane w2:p1 --agent example_author --metadata {\"role\":\"author\"}",
         "./plugins/agent-wake/agent-wake cancel --state-root /tmp/stagehand/.orchestrator/wake --watch 0123456789abcdef0123456789abcdef",
@@ -121,19 +121,7 @@ prefix_rule(
     ],
 )
 
-# Hunk launch and agent interruption use validated repository scripts rather
-# than granting arbitrary remote terminal execution or input.
-prefix_rule(
-    pattern = ["./scripts/herdr-hunk-diff"],
-    decision = "allow",
-    justification = "Launch a validated non-watching Hunk comparison in a managed task pane.",
-    match = [
-        "./scripts/herdr-hunk-diff w2:p3 origin/main HEAD",
-        "./scripts/herdr-hunk-diff w2:p3 origin/main",
-    ],
-    not_match = ["herdr pane run w2:p3 hunk diff origin/main...HEAD"],
-)
-
+# Agent interruption does not grant arbitrary terminal input.
 prefix_rule(
     pattern = ["./scripts/herdr-interrupt-agent"],
     decision = "allow",
@@ -152,7 +140,7 @@ prefix_rule(
     decision = "prompt",
     justification = "Review raw terminal input and pane termination before execution.",
     match = [
-        "herdr pane run w2:p3 hunk",
+        "herdr pane run w2:p3 command",
         "herdr pane send-text w2:p1 command",
         "herdr pane send-keys w2:p1 enter",
         "herdr pane close w2:p3",

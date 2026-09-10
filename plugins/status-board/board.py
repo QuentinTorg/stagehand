@@ -134,7 +134,11 @@ def task_summary(task, modified, workspaces, agents, now):
             details += f" · fixing r{rounds}"
     if scope != 1:
         details += f" · scope {scope}"
-    expected = mapping(task.get("event_recovery")).get("expected_role")
+    expected = state.get("next_role") or mapping(task.get("event_recovery")).get("expected_role")
+    if not expected:
+        expected = {"planning": "author", "implementing": "author", "drafting": "author",
+                    "resolving": "author", "reviewing": "reviewer", "finalizing": "reviewer",
+                    "publishing-review": "reviewer", "delegated-working": "worker"}.get(stage)
     next_actor = "you" if state.get("attention_required") or stage == "ready-candidate" else None if stage in COMPLETE else expected
     role_text = []
     for role in ROLES:

@@ -1,129 +1,38 @@
 # Skill Composition
 
-## Purpose
+Stagehand coordinates; [Skilldex](https://github.com/QuentinTorg/skilldex) supplies the author/reviewer methods. Herdr manages runtime resources. Workers do not load Stagehand or produce its bookkeeping.
 
-Stagehand coordinates a set of focused skills without absorbing their judgment
-or procedures into one monolithic orchestrator. This document explains how those
-skills work together and preserves the boundaries that keep authoring, review,
-repair, and GitHub mutation accountable.
+| Component | Consumer | Responsibility |
+| --- | --- | --- |
+| `orchestrating-development` | Coordinator | Task ownership, workspace setup, handoffs, limits, human decisions, and recoverable state |
+| Herdr skill | Coordinator | Installed CLI and runtime semantics |
+| Agent Wake Relay | Herdr runtime | Persistent identity-bound watches and durable, bounded wake delivery |
+| Status board | Human | Saved progress, live activity, task navigation, and messages to the coordinator |
+| `preparing-pull-requests` | Author, then authorized reviewer | Intent-bearing draft, then evidence-based finalization |
+| `reviewing-code` | Independent reviewer | Complete phased review grounded in intent and surrounding code |
+| `resolving-findings` | Original author | Selected in-scope repairs and proportionate verification |
+| `writing-specifications` | Human/author, optionally | Architectural intent when a conversational plan is insufficient |
 
-Stagehand owns the orchestration contract. SkillDex owns the author and reviewer
-workflow skills. Hunk and Herdr provide integration skills for their respective
-tools. Each source repository remains authoritative for the detailed behavior of
-the skill it distributes.
+## Workflow and ethos
 
-## Composition Map
+The human selects work and discusses implementation with the author. After approval, the author implements, verifies, and prepares the draft in one assignment. The draft preserves human intent separately from delivered behavior, tests, limitations, and non-goals; supplied issues are linked without claiming unfulfilled scope is resolved.
 
-| Skill | Role | Invocation point | Consumes | Produces |
-| --- | --- | --- | --- | --- |
-| `orchestrating-development` | Orchestrator | Explicit request in the dedicated control workspace | Human-authorized task, local policy, task records, and managed-role events | Herdr topology, validated transitions, and human attention requests |
-| `herdr` | Orchestrator | When inspecting or controlling Herdr resources | Recorded workspace, pane, worktree, or agent identity | Observable runtime state or a bounded Herdr operation |
-| Agent Wake Relay | Herdr runtime | During an explicitly watched managed-role handoff | Opaque task metadata plus exact workspace, pane, and agent identity | Deduplicated durable prompt that tells the orchestrator to reconcile |
-| `writing-specifications` | Human and author | Optional architectural work before implementation | Goals, constraints, boundaries, and design questions | An agreed design artifact or implementation context |
-| `preparing-pull-requests` | Author | After implementation is ready and Stagehand requests draft creation | Confirmed intent, current branch, verification evidence, and issue context | Intent-bearing draft pull request and `draft-pr-ready` handoff |
-| `reviewing-code` | Reviewer | After the draft and exact changeset are validated | Pull-request context, repository guidance, base and head, and surrounding code | Material findings or a current-head review pass |
-| `hunk-review` | Reviewer | During private review of a Stagehand-authored change | Verified Hunk session and current changeset | Inline private findings for the author |
-| `resolving-findings` | Original author | After the human selects findings for this pull request | Selected findings, current intent, and author context | Focused fixes, verification evidence, and `fixes-ready` handoff |
-| `preparing-pull-requests` | Reviewer | After a current-head pass and explicit human authorization | Reviewed head, final evidence, limitations, and existing PR description | Reconciled description, ready-for-review state, and `pull-request-finalized` handoff |
+A separate reviewer uses GitHub description, discussion, previous comments, linked requirements, and surrounding code. It investigates broadly but surfaces material, evidence-backed findings, not a quota of comments. The original author resolves only selected findings; tangential ideas remain follow-ups. The same reviewer assesses the complete updated changeset.
 
-## End-to-End Handoffs
+After a current-head pass, the human authorizes the reviewer to finalize. Finalization improves factual impact, risk, verification, and navigation context without rewriting intent. Human teammates review and merge through GitHub. Neither a favorable review nor green CI grants merge authority.
 
-1. **Select and provision.** The human authorizes a task. Stagehand records its
-   boundaries and uses the Herdr skill to create one isolated workspace and
-   worktree.
-2. **Plan with the author.** The author explores and proposes a plan. The human
-   approves implementation directly with that author. Architectural work may use
-   `writing-specifications`, but ordinary changes do not require a permanent spec.
-3. **Implement and draft.** The author implements and verifies the approved
-   change. Stagehand then asks that same author to use
-   `preparing-pull-requests` to create the draft and durable intent handoff.
-4. **Review independently.** Stagehand starts a separate reviewer against the
-   exact draft head. The reviewer combines `reviewing-code` judgment with
-   `hunk-review` as the private feedback surface.
-5. **Dispose and resolve.** The human selects which findings belong in the
-   current pull request. The original author uses `resolving-findings` only for
-   that selected set.
-6. **Rereview completely.** The same reviewer reviews the complete updated
-   changeset. Stagehand repeats the bounded review-and-fix loop without replacing
-   roles or automatically expanding scope.
-7. **Finalize deliberately.** After a passing review, the human may authorize the
-   reviewer to use `preparing-pull-requests` in finalization mode. GitHub team
-   review and merge remain outside the managed loop.
+Skilldex owns these review and preparation methods. Stagehand's short assignment reminders preserve the important handoff context without copying skill internals. Skills remain medium-agnostic; ordinary responses carry private findings, and Hunk is not required.
 
-For reviewer-only work on another developer's pull request, Stagehand invokes
-`reviewing-code` without an author, fixer, or Hunk requirement. The reviewer
-creates a proposal for the exact head and publishes it only after the human
-approves that proposal.
+## Observation, not worker protocol
 
-Delegated work uses one worker and no workflow skill beyond Stagehand's compact
-routing contract. It returns investigation, diagnosis, planning, or research
-without creating a pull request or entering the development loop.
+The coordinator registers watches, reads normal worker answers when woken, verifies consequential evidence, and saves meaningful outcomes. Workers need no endpoint, JSON, phase notification, or scope-update handshake. Direct human instructions remain effective without a second approval in another pane.
 
-Workspace-only work provides an isolated checkout without a managed delivery
-loop. When it produces a pull request, Stagehand promotes the same-lineage task
-and preserves its workspace and agent unless reuse would mix or endanger work.
+The relay knows runtime identity and settlement, not intent or success. The board renders progress but does not decide it. State records support recovery without becoming an event diary. See [State and Wakeups](../../skills/orchestrating-development/references/workflow-state.md).
 
-## Skill Ethos and Boundaries
+## Other work
 
-### `orchestrating-development`
+Reviewer-only assignments propose an external GitHub review without modifying source or PR state, then publish only after human approval of that proposal and head.
 
-The orchestrator coordinates state and authority; it does not implement, review,
-fix, or merge product code. It treats Herdr lifecycle as observation rather than
-proof, validates semantic handoffs against durable artifacts, warns about task
-overlap, and stops at human decisions or bounded workflow limits.
+Delegated investigation, diagnosis, planning, and research use one bounded worker and no implied PR loop. Workspace-only tasks provide an open-ended working area. A human request to implement or review a resulting fix can promote the same workspace and agent into development; it need not start a duplicate task.
 
-The wake plugin is transport, not an agent or controller. It watches only armed
-role turns, queues settlement while the orchestrator is busy, and never converts
-lifecycle state into workflow success.
-
-### `writing-specifications`
-
-Specification work clarifies architecture, intent, boundaries, and interfaces
-before implementation. It is proportional and optional: a small change may need
-only a conversational plan, while a consequential design may need a durable
-document. The skill does not authorize implementation or replace repository
-requirements.
-
-### `preparing-pull-requests`
-
-Pull-request preparation preserves confirmed intent while presenting the actual
-implementation and verification evidence accurately. Draft creation belongs to
-the author; finalization belongs to the reviewer after a passing current-head
-review and human authorization. The skill does not perform review, approve its
-own claims, merge, or silently redefine scope.
-
-### `reviewing-code`
-
-Review is independent, complete, and proportional to risk. The reviewer acquires
-intent from the pull request, linked requirements, discussion, and repository
-context, then inspects both the changes and surrounding code. It investigates
-broadly but surfaces only material, evidence-backed findings. It does not fix the
-code, inflate the pull request with tangential work, or treat a prior pass as
-valid after the head changes.
-
-### `hunk-review`
-
-Hunk is a private transport and note-taking surface, not the source of intent or
-review judgment. Stagehand uses one non-watching session for the task. Existing
-comments remain available until the author consumes them; reload occurs only
-before rereview because it may clear or invalidate comments.
-
-### `resolving-findings`
-
-Finding resolution returns implementation to the original author, preserving its
-design and repository context. It modifies only the human-selected, current-scope
-set, performs proportionate verification, and hands the complete changeset back
-to the same reviewer. Valid tangential observations remain follow-up candidates
-unless the human explicitly expands scope.
-
-## Shared Authority Boundaries
-
-- A skill invocation supplies procedure, not missing human authority.
-- The draft pull request is the durable statement of intent; Hunk carries private
-  findings; the task record carries orchestration state.
-- Every changed head requires complete independent review before finalization.
-- Neither a favorable review nor green CI authorizes readiness, publication, or
-  merge by itself.
-- Stagehand may route work between skills, but it never automatically begins a
-  new task or converts a reviewer observation into authorized scope.
-- The human performs the final GitHub review and merge.
+Operational authority, model selection, and cleanup details belong in the [orchestration skill](../../skills/orchestrating-development/SKILL.md), not in every worker prompt.

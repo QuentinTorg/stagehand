@@ -417,6 +417,16 @@ class BoardTests(unittest.TestCase):
         self.assertIsNone(row["action"])
         self.assertEqual(task["workspace"]["label"], "old-name")
 
+    def test_next_actor_without_legacy_worker_events(self):
+        task = self.task("resolving")
+        del task["event_recovery"]
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual("author", row["next"])
+        self.assertIn("fixing r2", row["stage"])
+        task["state"].update(attention_required=True, attention_reason="Choose findings")
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual("you", row["next"])
+
     def test_completed_pr_is_green_with_human_handoff(self):
         row = board.task_summary(self.task("ready-for-team-review"), 0, None, None, 5)
         self.assertEqual(row["color"], 3)

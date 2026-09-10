@@ -1,121 +1,71 @@
 # Installation
 
-The checkout already tracks a relative `.codex/skills/orchestrating-development` link to its bundled skill and a `.codex/rules/herdr.rules` policy for orchestrator-side Herdr operations. Keep both in place. Install the bundled Herdr wake plugin and the external Herdr skill only in the dedicated orchestration workspace. Separately install the managed-agent workflow rule in the user rules directory so authors and reviewers launched from product worktrees can identify their pane, notify the orchestrator, and use the bounded Hunk session API. Use individual symbolic links; do not link a parent `skills` or source-repository directory.
+Stagehand's orchestration skill and Herdr rules are workspace-local. Workers need only their usual agent setup and the relevant Skilldex skills—no orchestration skill, event rules, or Hunk installation.
 
 ## Guided setup
 
-When asked to check or prepare Stagehand, inspect the current installation before changing it. Report what is ready, what is missing or misconfigured, and any value the human must supply. Then preview the remaining work in order, naming each exact source and destination and whether it will be copied, linked, configured, validated, or require a Codex restart. Use the procedures below rather than inventing another installation method.
+Inspect before changing anything. Report what is ready, missing, or needs a user choice. Preview each remaining step with its exact source/destination, whether it copies, links, configures, or validates, and any required restart.
 
-Do not stop after listing missing components. If the user requested only an audit, offer to apply the proposed setup. If the user requested setup, carry out the previewed actions within that authorization and pause only for an unresolved choice, unsafe existing destination, credential interaction, or required external permission. Never replace an existing file or link without first showing what owns it and where it points.
+For an audit, offer to perform the missing setup. For a setup request, carry out authorized steps and report remaining human actions. Do not replace an existing file or link until its ownership and target are understood and the replacement is authorized.
 
-Afterward, validate every installed link and rule, distinguish completed setup from remaining human actions, and state whether existing Codex sessions must restart.
+The host needs Herdr, Git, GitHub CLI authentication for the relevant hosts, and Python 3. The optional board has a Python dependency documented in its own setup guide. Product agents retain their normal sandbox and approval settings.
 
-Keep the tracked root `AGENTS.md` generic. Create the ignored local configuration before starting an orchestrator:
+## Workspace and skills
 
-```sh
-mkdir -p /path/to/orchestration-workspace/.local
-cp /path/to/orchestration-workspace/templates/AGENTS.local.md \
-  /path/to/orchestration-workspace/.local/AGENTS.md
-```
+Keep the tracked `.codex/skills/orchestrating-development` relative link and `.codex/rules/herdr.rules`. Do not install orchestration globally.
 
-Customize that file with repository paths, hosts, initialization policy, and user preferences. It may instead be an individual symbolic link to a file in a private configuration repository. Do not commit the local file or put credentials in it. If `.local/AGENTS.md` is missing, orchestration activation must stop while package maintenance and setup remain available.
+Copy [the local template](../../../templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, or link that file to a private configuration repository. Configure repository paths, hosts, initialization caveats, and model choices. Confirm `git check-ignore .local/AGENTS.md` succeeds. Never commit private configuration or credentials.
 
-Before adding other files, confirm that Git ignores the local configuration:
-
-```sh
-git check-ignore .local/AGENTS.md
-```
-
-The command must identify a repository ignore rule. Stop and repair `.gitignore` if it does not.
-
-The orchestration host must provide Git, Python 3, and `jq`; the validated Hunk launcher uses `jq` to verify the target pane's Herdr-reported working directory before executing anything there.
-
-`herdr --skill` prints guidance matching the installed Herdr version. During guided setup, use it when the Herdr skill is not yet discoverable; a workspace-local link remains preferred for automatic skill routing.
-
-```sh
-mkdir -p /path/to/orchestration-workspace/.codex/skills ~/.codex/rules
-ln -s /absolute/path/to/herdr-skill \
-  /path/to/orchestration-workspace/.codex/skills/herdr
-ln -s /absolute/path/to/orchestration-workspace/skills/orchestrating-development/assets/codex-managed-agent-events.rules \
-  ~/.codex/rules/orchestrating-development-events.rules
-```
-
-Replace the example paths with the actual orchestration workspace and Herdr skill locations. Refuse to replace a destination when it already exists until its ownership and target have been inspected. Do not replace the tracked orchestration link or install `orchestrating-development` globally; its repository-local placement prevents product agents from assuming the orchestrator role.
-
-The two rule files have different consumers and installation scopes:
-
-- `.codex/rules/herdr.rules` is tracked in this workspace and grants the orchestrator bounded Herdr inspection and task-management operations.
-- `assets/codex-managed-agent-events.rules` is linked into `~/.codex/rules/` and grants managed authors and reviewers only event delivery, caller-pane discovery, and bounded Hunk operations.
-
-## Agent Wake Relay
-
-Link the bundled plugin, enable it, and register this exact control workspace:
-
-```sh
-herdr plugin link /absolute/path/to/orchestration-workspace/plugins/agent-wake --enabled
-/absolute/path/to/orchestration-workspace/plugins/agent-wake/agent-wake \
-  configure --state-root /absolute/path/to/orchestration-workspace/.orchestrator/wake \
-  --target workflow_orchestrator
-herdr plugin list
-/absolute/path/to/orchestration-workspace/plugins/agent-wake/agent-wake \
-  status --state-root /absolute/path/to/orchestration-workspace/.orchestrator/wake
-```
-
-The generic plugin is bundled with Stagehand but reacts only to one-shot watches in explicitly configured consumer state directories. Stagehand uses task IDs as opaque keys and roles as metadata. The relay does not decide that work succeeded or change task state; existing role events remain the semantic handoff and fallback.
-
-## Orchestrator status pane
-
-Follow the [status-board setup](../../../plugins/status-board/README.md#setup) to install its Python dependency, link the bundled plugin, and open one board beside the existing orchestrator pane. Pass the exact configured task-record directory and reuse the pane on subsequent turns. This changes only the control workspace layout; it adds no worker instructions or permissions. If unavailable, the orchestrator retains its text dashboard fallback.
+Load the Herdr skill before control operations. If it is not discoverable, run `herdr --skill` for version-matched bootstrap guidance, then link the installed skill directory individually into this workspace's `.codex/skills/herdr`. Do not guess an npm/reference-checkout path or link an entire skills parent.
 
 ## Managed-role skills
 
-Stagehand does not vendor its managed-role skills. Clone [SkillDex](https://github.com/QuentinTorg/skilldex) and [Hunk](https://github.com/modem-dev/hunk), then install the required skill directories individually where product-worktree agents can discover them:
+Clone [Skilldex](https://github.com/QuentinTorg/skilldex) if needed, then install its skill directories individually where product agents discover them. For Codex:
 
 ```sh
 mkdir -p ~/.codex/skills
 ln -s /absolute/path/to/skilldex/skills/preparing-pull-requests ~/.codex/skills/preparing-pull-requests
-ln -s /absolute/path/to/skilldex/skills/resolving-findings ~/.codex/skills/resolving-findings
 ln -s /absolute/path/to/skilldex/skills/reviewing-code ~/.codex/skills/reviewing-code
-ln -s /absolute/path/to/hunk/skills/hunk-review ~/.codex/skills/hunk-review
+ln -s /absolute/path/to/skilldex/skills/resolving-findings ~/.codex/skills/resolving-findings
 ```
 
-The SkillDex `writing-specifications` skill is optional for changes that benefit from architectural design before authoring:
+Inspect existing destinations first. `writing-specifications` is optional and can be linked the same way. Do not install superseded review/feedback skills. These skills support plain review output; Hunk is not a prerequisite.
+
+## Agent Wake Relay
+
+Link the bundled plugin and register this exact control workspace:
 
 ```sh
-ln -s /absolute/path/to/skilldex/skills/writing-specifications ~/.codex/skills/writing-specifications
+herdr plugin link /absolute/path/to/stagehand/plugins/agent-wake --enabled
+/absolute/path/to/stagehand/plugins/agent-wake/agent-wake configure \
+  --state-root /absolute/path/to/stagehand/.orchestrator/wake \
+  --target workflow_orchestrator
+herdr plugin list
+/absolute/path/to/stagehand/plugins/agent-wake/agent-wake status \
+  --state-root /absolute/path/to/stagehand/.orchestrator/wake
 ```
 
-Refuse to replace an existing destination before inspecting it. Do not install superseded feedback or review skills merely because they share the same source repository.
+The plugin can be installed globally; it watches only explicitly registered source agents. The coordinator registers persistent watches as it starts roles. See [relay usage and limits](../../../plugins/agent-wake/README.md). Do not install callbacks or global Herdr permissions in worker sessions.
 
-Reserve the Herdr name `workflow_orchestrator` for exactly one live orchestration agent. Before starting or naming it, run `herdr agent list` and inspect any existing owner. Reuse the intended live owner. If the name belongs to a stale, maintenance, or ambiguous session, inspect its pane, session identity, recent output, and active task records; obtain human direction before clearing or reassigning the name. Do not work around a collision by teaching managed agents a pane ID because pane IDs are session-local transport details rather than the stable endpoint.
+Reserve `workflow_orchestrator` for exactly one live controller. Inspect any existing owner before naming a new one; maintenance agents must not claim it or consume its wakes.
 
-Only the active orchestration controller owns the reserved name. Other agents may work in the orchestration repository for documentation, package maintenance, or skill development, but remain unnamed or use a different non-reserved name and must not consume workflow events. The installed rule allows managed agents to deliver `herdr agent prompt workflow_orchestrator ...` notifications and use Hunk inspection, navigation, reload, and finding-recording commands. It does not grant permission to launch Hunk directly, delete Hunk comments, start agents, control arbitrary panes, send keys, or modify workspaces.
+## Status pane and validation
 
-Restart Codex sessions after installing or changing the rule; rules are loaded at startup. Existing managed sessions may require one manual approval for a prompt already waiting in their terminal.
+Follow [status-board setup](../../../plugins/status-board/README.md#setup) to install its dependency and link the plugin. The orchestrator opens or reuses one board beside its conversation, using the configured task directory. Text status remains available if the board is unavailable.
 
-Validate the installed rule before starting a managed task:
+Validate installed links, enabled plugins, the consumer's exact target/root, Skilldex discovery, and local configuration. Check workspace rules, for example:
 
 ```sh
-codex execpolicy check --rules ~/.codex/rules/orchestrating-development-events.rules \
-  --pretty herdr agent prompt workflow_orchestrator workflow-event
+codex execpolicy check --rules .codex/rules/herdr.rules --pretty herdr agent list
+codex execpolicy check --rules .codex/rules/herdr.rules --pretty herdr workspace close w2
 ```
 
-The result must be `allow`. A prompt to another agent and `herdr agent send-keys` must remain unmatched.
+Inspection should be allowed; workspace closure forbidden. Restart Codex sessions after rule changes. Run the relay and board unit tests before a live trial.
 
-Also validate caller-context discovery:
+## Existing installations
 
-```sh
-codex execpolicy check --rules ~/.codex/rules/orchestrating-development-events.rules \
-  --pretty herdr pane current --current
-```
+Do not hot-swap active workers during package setup. Arrange a coordinated cutover: load the new skill, preserve active task evidence, replace old one-shot registrations with persistent watches, and tell existing workers once to stop sending workflow events. Fresh workers need no such instructions.
 
-Validate the Hunk session boundary as well:
+The former global `~/.codex/rules/orchestrating-development-events.rules` link is no longer needed. Inspect it and remove only that package-owned link when authorized; preserve customized rules or unrelated Hunk permissions. Existing Hunk installations and sessions need not be uninstalled or closed. New tasks use normal review responses.
 
-```sh
-codex execpolicy check --rules ~/.codex/rules/orchestrating-development-events.rules \
-  --pretty hunk session review session-123 --json
-codex execpolicy check --rules ~/.codex/rules/orchestrating-development-events.rules \
-  --pretty hunk session comment clear session-123 --all --yes
-```
-
-The review command must be `allow`; destructive comment clearing must remain unmatched.
+This migration changes notifications, not product work or human authority. Keep private repository setup and cleanup caveats. Reconcile the active records before restarting any workflow; do not recreate already-existing PRs or discard completed review evidence.

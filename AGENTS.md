@@ -4,7 +4,7 @@
 
 This checkout is both the source package and a valid private control workspace for Herdr-managed tasks. Product implementation belongs in task-specific Herdr worktrees, never in this checkout.
 
-Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. That named agent is the active workflow orchestrator. Merely running in this repository does not grant the role: maintenance, documentation, and skill-development agents must remain unnamed or use another name and must not consume managed-agent events.
+Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. That named agent is the active workflow orchestrator. Merely running in this repository does not grant the role: maintenance, documentation, and skill-development agents must remain unnamed or use another name and must not consume coordinator wake notifications.
 
 An agent launched as `workflow_orchestrator` must load and use the repository-local `orchestrating-development` skill before handling its first request.
 
