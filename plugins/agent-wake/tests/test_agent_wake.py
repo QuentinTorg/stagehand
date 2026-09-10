@@ -198,6 +198,7 @@ class PersistentWakeTest(WakePluginTest):
         self.target_status = "idle"
         self.prompts = []
         self.prompt_fails = False
+        self.process_group = 123
         patcher = mock.patch.object(wake, "_herdr", side_effect=self.herdr)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -206,6 +207,9 @@ class PersistentWakeTest(WakePluginTest):
         self.addCleanup(sleeper.stop)
 
     def herdr(self, *args):
+        if args == ("pane", "process-info", "--pane", "w2:p1"):
+            return {"result": {"process_info": {"pane_id": "w2:p1", "shell_pid": 1,
+                    "foreground_process_group_id": self.process_group}}}, None
         if args[:3] == ("agent", "get", "w2:p1"):
             return {"result": {"agent": self.source.copy()}}, None
         if args[:3] == ("agent", "get", "controller_agent"):
@@ -339,6 +343,88 @@ class PersistentWakeTest(WakePluginTest):
         self.assertEqual(wake.MAX_NOTIFY_ATTEMPTS, len(self.prompts))
         self.assertEqual(1, len(self.documents("inbox")))
         self.assertEqual("transport unavailable", self.documents("inbox")[0]["last_error"])
+
+    def fresh_frontend(self):
+        self.source.pop("agent_session")
+        self.source["terminal_id"] = "terminal-1"
+
+    def test_first_session_metadata_does_not_require_rearming(self):
+        self.fresh_frontend()
+        self.arm("--persistent")
+        original = self.documents("watches")[0]["id"]
+        self.source["agent_session"] = {"kind": "id", "value": "first-session"}
+        self.turn()
+        self.assertEqual(1, len(self.prompts))
+        watch = self.documents("watches")[0]
+        self.assertEqual(original, watch["id"])
+        self.assertEqual(self.source["agent_session"], watch["session"])
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.turn()
+        self.assertEqual(2, len(self.prompts))
+
+    def test_metadata_enrichment_is_idempotent_and_preserves_observed_work(self):
+        self.fresh_frontend()
+        self.source["agent_status"] = "working"
+        self.arm("--persistent")
+        original = self.documents("watches")[0]["id"]
+        self.source["agent_session"] = {"kind": "id", "value": "first-session"}
+        self.arm("--persistent")
+        self.assertEqual(original, self.documents("watches")[0]["id"])
+        self.source["agent_status"] = "done"
+        self.emit("done")
+        self.assertEqual(1, len(self.prompts))
+
+    def test_different_process_cannot_supply_initial_session(self):
+        self.fresh_frontend()
+        self.arm("--persistent")
+        self.process_group = 456
+        self.source["agent_session"] = {"kind": "id", "value": "replacement"}
+        self.turn()
+        self.assertEqual([], self.prompts)
+        self.assertIsNone(self.documents("watches")[0]["session"])
+        with self.assertRaises(SystemExit):
+            self.arm("--persistent")
+
+    def test_shell_is_not_a_bootstrap_agent_identity(self):
+        self.fresh_frontend()
+        self.process_group = 1
+        with self.assertRaises(SystemExit):
+            self.arm("--persistent")
+        self.assertEqual([], self.documents("watches"))
+
+    def test_registration_recovers_already_observed_stop_immediately(self):
+        self.source["agent_status"] = "done"
+        self.arm("--persistent", "--observed-working")
+        self.assertEqual(1, len(self.prompts))
+        self.assertFalse(self.documents("watches")[0]["observed_working"])
+
+    def test_stop_between_snapshot_and_watch_write_is_not_lost(self):
+        self.source["agent_status"] = "working"
+        atomic_json = wake._atomic_json
+
+        def finish_before_registration(path, value):
+            if path.parent.name == "watches":
+                self.source["agent_status"] = "done"
+            atomic_json(path, value)
+
+        with mock.patch.object(wake, "_atomic_json", side_effect=finish_before_registration):
+            self.arm("--persistent")
+        self.assertEqual(1, len(self.prompts))
+
+    def test_first_result_queued_until_controller_finishes(self):
+        self.fresh_frontend()
+        self.arm("--persistent")
+        self.target_status = "working"
+        self.source["agent_session"] = {"kind": "id", "value": "first-session"}
+        self.turn()
+        self.assertEqual([], self.prompts)
+        self.assertEqual(1, len(self.documents("inbox")))
+        self.target_status = "idle"
+        with mock.patch.dict(os.environ, {"HERDR_PLUGIN_EVENT_JSON": json.dumps({
+            "pane_id": "controller-pane", "agent_status": "idle"
+        })}):
+            wake._hook()
+        self.assertEqual(1, len(self.prompts))
 
 
 if __name__ == "__main__":

@@ -155,6 +155,7 @@ def _arm(args) -> int:
         raise SystemExit("metadata must be a JSON object")
     persistent = args.persistent
     source = {}
+    bootstrap_process = None
     if persistent:
         payload, error = _herdr("agent", "get", args.pane)
         source = _agent(payload)
@@ -162,38 +163,47 @@ def _arm(args) -> int:
             raise SystemExit("persistent watch requires the exact live source agent")
         if target in {args.agent, args.pane}:
             raise SystemExit("a persistent watch cannot target its own source agent")
+        if not source.get("agent_session"):
+            bootstrap_process = _bootstrap_process(source)
+            if not bootstrap_process:
+                raise SystemExit("source is still starting; register after its foreground agent is ready")
     with _locked(state_root) as root:
         for path, watch in _documents(root / "watches"):
             if not watch or watch.get("state") != "armed" or watch.get("pane_id") != args.pane:
                 continue
             identity = (watch.get("key"), watch.get("workspace_id"), watch.get("agent_name"))
             if identity == (args.key, args.workspace_id, args.agent):
-                if bool(watch.get("persistent")) != persistent or (
-                    persistent and watch.get("session") != source.get("agent_session")
-                ):
+                if bool(watch.get("persistent")) != persistent or (persistent and not _same_source(watch, source)):
                     raise SystemExit("watch mode or session changed; cancel the old watch first")
-                print(json.dumps(watch, sort_keys=True))
-                return 0
+                _atomic_json(path, watch)
+                break
             raise SystemExit(f"pane already has an active wake watch: {path.stem}")
-        now = time.time()
-        watch = {
-            "version": 1,
-            "id": uuid.uuid4().hex,
-            "key": args.key,
-            "metadata": metadata,
-            "workspace_id": args.workspace_id,
-            "workspace_label": args.workspace_label,
-            "pane_id": args.pane,
-            "agent_name": args.agent,
-            "persistent": persistent,
-            "session": source.get("agent_session"),
-            "observed_working": bool(args.observed_working) or _status(source) == "working",
-            "state": "armed",
-            "created_at": now,
-            "updated_at": now,
-        }
-        _atomic_json(root / "watches" / f"{watch['id']}.json", watch)
-    print(json.dumps(watch, sort_keys=True))
+        else:
+            now = time.time()
+            watch = {
+                "version": 1,
+                "id": uuid.uuid4().hex,
+                "key": args.key,
+                "metadata": metadata,
+                "workspace_id": args.workspace_id,
+                "workspace_label": args.workspace_label,
+                "pane_id": args.pane,
+                "agent_name": args.agent,
+                "persistent": persistent,
+                "session": source.get("agent_session"),
+                "bootstrap_process": bootstrap_process,
+                "observed_working": bool(args.observed_working) or _status(source) == "working",
+                "state": "armed",
+                "created_at": now,
+                "updated_at": now,
+            }
+            _atomic_json(root / "watches" / f"{watch['id']}.json", watch)
+    if persistent:
+        # A fast turn may finish between the initial snapshot and registration.
+        # Reconcile now instead of waiting for an event that already happened.
+        _record_event_for(state_root, source)
+        _notify_consumer(state_root, target)
+    print(json.dumps(_json_file(state_root / "watches" / f"{watch['id']}.json", watch), sort_keys=True))
     return 0
 
 
@@ -248,6 +258,37 @@ def _matches_identity(agent: dict, pane: str, workspace: str, name: str) -> bool
             and agent.get("name") == name)
 
 
+def _bootstrap_process(agent: dict) -> dict | None:
+    """Anchor a fresh frontend before Herdr discovers its native session ID."""
+    if not agent.get("terminal_id"):
+        return None
+    payload, error = _herdr("pane", "process-info", "--pane", agent["pane_id"])
+    if error or not isinstance(payload, dict):
+        return None
+    info = (payload.get("result") or {}).get("process_info") or {}
+    group = info.get("foreground_process_group_id")
+    if info.get("pane_id") != agent["pane_id"] or not group or group == info.get("shell_pid"):
+        return None
+    return {"terminal_id": agent["terminal_id"], "process_group": group}
+
+
+def _same_source(watch: dict, agent: dict) -> bool:
+    if not _matches_identity(agent, watch["pane_id"], watch["workspace_id"], watch["agent_name"]):
+        return False
+    if watch.get("session"):
+        return agent.get("agent_session") == watch["session"]
+    anchor = watch.get("bootstrap_process")
+    if not anchor:
+        # Older registrations without a process anchor cannot safely adopt an ID.
+        return not agent.get("agent_session")
+    if _bootstrap_process(agent) != anchor:
+        return False
+    # Metadata appearing for this same frontend is enrichment, not replacement.
+    if agent.get("agent_session"):
+        watch["session"] = agent["agent_session"]
+    return True
+
+
 def _confirm_settled(watch: dict) -> str | None:
     time.sleep(0.2)
     payload, error = _herdr("agent", "get", watch["pane_id"])
@@ -257,9 +298,7 @@ def _confirm_settled(watch: dict) -> str | None:
     if _status(agent) not in SETTLED:
         return None
     if watch.get("persistent"):
-        matches = (_matches_identity(agent, watch["pane_id"], watch["workspace_id"], watch["agent_name"])
-                   and agent.get("agent_session") == watch.get("session"))
-        return _status(agent) if matches else None
+        return _status(agent) if _same_source(watch, agent) else None
     pane = agent.get("pane_id") or agent.get("id")
     workspace = agent.get("workspace_id")
     name = agent.get("name") or agent.get("agent_name")

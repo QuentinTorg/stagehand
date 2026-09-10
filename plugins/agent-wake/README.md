@@ -39,6 +39,8 @@ The controller receives `HERDR_AGENT_WAKE` followed by a JSON array containing t
 
 Repeated registration of the same identity is idempotent. A changed mode or native session requires cancellation and registration after the controller reconciles ownership. Cancel before task cleanup or role retirement.
 
+On startup, a watch can anchor to the foreground agent process until Herdr exposes its native session ID; that first ID does not require re-registration. Registration also checks for work that finished during setup. Use `--observed-working` only when you actually observed that turn running; an already-idle agent alone is not evidence of completion.
+
 ## Delivery limits
 
 Each watch retains at most one notified-but-unacknowledged wake plus one coalesced pending wake. Acknowledging an older wake cannot erase a later turn. Undelivered notifications stop retrying after three failed prompt attempts; inspect the retained error, reconcile the source, and acknowledge after handling it. Busy-controller deferral does not spend retries.
