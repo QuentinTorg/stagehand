@@ -143,8 +143,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_common_record_shows_work_and_next_actor_without_review_metadata(self):
         for mode in ("development", "reviewer-only", "delegated-work", "workspace-only"):
             task = {"task_id": "simple", "mode": mode, "state": {
-                "name": "active", "summary": "Author fixing findings", "next_role": "author",
-                "next_action": "Apply the selected fix", "attention_required": False}}
+                "name": "working", "summary": "Author fixing findings", "next_role": "author",
+                "next_action": "Apply the selected fix"}}
             row = board.task_summary(task, 0, None, None, 5)
             self.assertEqual(board.task_stage(row), "Author fixing findings")
             self.assertEqual(board.task_next(row), "Author")
@@ -159,10 +159,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertEqual(before, board.task_summary(task, 0, None, None, 5))
 
     def test_text_snapshot_distinguishes_worker_steps_from_human_actions(self):
-        task = {"task_id": "simple", "state": {"name": "active", "next_role": "author",
+        task = {"task_id": "simple", "state": {"name": "working", "next_role": "author",
                 "next_action": "Apply the fix"}}
         for attention in (False, True):
-            task["state"]["attention_required"] = attention
+            task["state"]["name"] = "needs-human" if attention else "working"
             row = board.task_summary(task, 0, None, None, 5)
             with patch.object(board, "snapshot", return_value=([row], [])), patch.object(
                 board.sys, "argv", ["board", "--tasks", "/unused", "--once", "--offline"]
@@ -173,16 +173,46 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertIn(f"  {label}: Apply the fix", lines)
             self.assertEqual(any("YOUR ACTION:" in line for line in lines), attention)
 
-    def test_complete_is_green_but_explicit_human_attention_wins(self):
+    def test_state_alone_controls_color_despite_obsolete_flags(self):
         task = {"task_id": "simple", "state": {"name": "complete", "summary": "Ready on GitHub"}}
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual(row["color"], 3)
         self.assertEqual(board.task_next(row), "—")
-        task["state"].update(attention_required=True, attention_reason="Confirm the changed scope")
+        task["state"].update(attention_required=True, attention_reason="Obsolete request",
+                             next_action="Obsolete step", next_role="human")
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["color"], 3)
+        self.assertIsNone(row["action"])
+        self.assertEqual(board.task_next(row), "—")
+        task["state"]["name"] = "working"
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["color"], 2)
+        self.assertNotEqual(board.task_next(row), "You")
+        task["state"].update(name="needs-human", next_action="Confirm the changed scope", attention_required=False)
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual(row["color"], 1)
         self.assertEqual(board.task_next(row), "You")
         self.assertEqual(row["action"], "Confirm the changed scope")
+
+    def test_unknown_and_human_working_are_not_silently_reported_as_progress(self):
+        for name in ("human-working", "invented-state", None):
+            task = {"task_id": "old", "state": {"name": name, "attention_required": False}}
+            with patch.object(board, "read_tasks", return_value=([(task, 0)], [])), patch.object(
+                board, "inventory", return_value=([], [], [])
+            ):
+                rows, warnings = board.snapshot(Path("/unused"))
+            self.assertEqual(rows[0]["color"], 0)
+            self.assertEqual(board.task_stage(rows[0]), "Status unconfirmed")
+            self.assertEqual(board.task_next(rows[0]), "Reconcile")
+            self.assertTrue(any("reconciliation" in warning for warning in warnings))
+
+    def test_idle_worker_does_not_override_saved_workflow_outcome(self):
+        task = self.task()
+        for state, color in (("working", 2), ("needs-human", 1), ("complete", 3)):
+            task["state"] = {"name": state}
+            agents = [{"name": name, "workspace_id": task["workspace"]["id"], "agent_status": "idle"}
+                      for name in task["agents"].values()]
+            self.assertEqual(board.task_summary(task, 0, None, agents, 5)["color"], color)
 
     def test_legacy_completed_handoff_stays_green_without_record_migration(self):
         for stage in ("ready-for-team-review", "delegated-complete", "review-complete"):
@@ -869,7 +899,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_completed_pr_is_green_with_human_handoff(self):
         row = board.task_summary(self.task("ready-for-team-review"), 0, None, None, 5)
         self.assertEqual(row["color"], 3)
-        self.assertIn("Review the ready PR", row["action"])
+        self.assertIsNone(row["action"])
+        self.assertEqual(board.task_next(row), "—")
 
     def test_attention_and_missing_identity(self):
         task = self.task()

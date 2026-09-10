@@ -19,7 +19,11 @@ import webbrowser
 import yaml
 
 
-COMPLETE = {"complete", "ready-for-team-review", "review-complete", "delegated-complete", "merged", "closed"}
+STATES = {"needs-human": 1, "working": 2, "complete": 3}
+LEGACY_COMPLETE = {"ready-for-team-review", "review-complete", "delegated-complete", "merged", "closed"}
+LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing", "drafting",
+                  "implementation-ready", "resolving", "reviewing", "finalizing", "publishing-review",
+                  "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
 
 
@@ -108,6 +112,21 @@ def pr_links(task):
     return links
 
 
+def workflow_status(state):
+    """Translate old records at the display boundary, never from agent idleness."""
+    name = clean(state.get("name"))
+    if name in STATES:
+        return name
+    if name in LEGACY_COMPLETE:
+        return "complete"
+    if state.get("attention_required") or state.get("next_role") == "human" or name in {"ready-candidate", "decision-required"}:
+        return "needs-human"
+    if name in LEGACY_WORKING:
+        return "working"
+    # Unknown/human-working records need reconciliation, not a guess at progress.
+    return None
+
+
 def task_summary(task, modified, workspaces, agents, now):
     state = task["state"]
     stage = clean(state.get("name", "unknown"))
@@ -121,18 +140,21 @@ def task_summary(task, modified, workspaces, agents, now):
         label += " [workspace missing]"
     elif not workspace_id:
         label += " [workspace not created]"
-    # Older completion states also used attention for the final GitHub handoff.
-    # Preserve their green status; new records reserve attention for blockers here.
-    needs_human = (bool(state.get("attention_required")) and (stage not in COMPLETE or stage == "complete")) or stage == "ready-candidate"
-    color = 1 if needs_human else 3 if stage in COMPLETE else 2
+    status = workflow_status(state)
+    needs_human = status == "needs-human"
+    color = STATES.get(status, 0)
     summary = clean(state.get("summary"))
     details = summary or stage.replace("-", " ")
-    expected = state.get("next_role") or mapping(task.get("event_recovery")).get("expected_role")
-    if not expected:
+    expected = state.get("next_role")
+    if stage in STATES and expected not in (*ROLES, "orchestrator"):
+        expected = None
+    if stage not in STATES and not expected:
+        expected = mapping(task.get("event_recovery")).get("expected_role")
+    if stage not in STATES and not expected:
         expected = {"planning": "author", "implementing": "author", "drafting": "author",
                     "resolving": "author", "reviewing": "reviewer", "finalizing": "reviewer",
                     "publishing-review": "reviewer", "delegated-working": "worker"}.get(stage)
-    next_actor = "you" if needs_human else None if stage in COMPLETE else expected
+    next_actor = "you" if needs_human else expected if status == "working" else None
     if next_actor == "human":
         next_actor = "you"
     role_text = []
@@ -151,21 +173,24 @@ def task_summary(task, modified, workspaces, agents, now):
     prs = pr_links(task)
     pr = prs[0] if prs else ""
     action = clean(state.get("next_action")) or None
-    if state.get("attention_required"):
-        action = clean(state.get("attention_reason")) or action or "Human decision needed; ask the orchestrator."
-    elif stage == "ready-candidate":
-        action = "Authorize reviewer finalization."
-    elif stage == "ready-for-team-review":
-        action = "Review the ready PR on GitHub; merge when satisfied."
+    if needs_human:
+        if stage not in STATES:
+            action = action or clean(state.get("attention_reason")) or clean(state.get("waiting_on"))
+        action = action or ("Authorize reviewer finalization." if stage == "ready-candidate" else
+                            "Human action needed; ask the orchestrator for details.")
+    elif status == "complete":
+        action = None
+    elif status is None:
+        action = "Orchestrator: reconcile saved status with the latest result."
     return {"id": str(task["task_id"]), "label": label, "color": color,
-            "phase": stage, "summary": summary,
+            "phase": stage, "status": status, "summary": summary,
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
             "agent_names": mapping(task.get("agents")),
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
-            "next": clean(next_actor) or ("Complete" if stage in COMPLETE else "Awaiting workflow update")}
+            "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
 
 
 def snapshot(directory, offline=False):
@@ -174,6 +199,8 @@ def snapshot(directory, offline=False):
     warnings.extend(live_warnings)
     now = time.time()
     rows = [task_summary(task, modified, workspaces, agents, now) for task, modified in tasks]
+    warnings.extend(f"{row['label']}: saved status needs orchestrator reconciliation ({row['phase']})."
+                    for row in rows if row["status"] is None)
     # Surface decisions first without changing saved workflow state or task order on disk.
     rows.sort(key=lambda row: row["color"])
     return rows, warnings
@@ -343,6 +370,8 @@ def pr_cell(row, width):
 
 
 def task_stage(row):
+    if row.get("color") == 0:
+        return "Status unconfirmed"
     if row.get("summary"):
         return row["summary"]
     phase = row.get("phase", "")
@@ -354,8 +383,10 @@ def task_stage(row):
 
 
 def task_next(row):
+    if row["color"] == 0:
+        return "Reconcile"
     if row["color"] == 3:
-        return "GitHub review" if row.get("phase") == "ready-for-team-review" else "—"
+        return "—"
     if row["color"] == 1:
         return "You"
     actor = row["next"]
@@ -381,7 +412,7 @@ def table_line(row, width, pr_width=9):
 
 def detail_lines(row, width, info=False):
     width = min(width, 114)
-    action = row["action"] or ("Work is handed off; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
+    action = row["action"] or ("Requested work is finished; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
     entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
                ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
     if info:
@@ -884,7 +915,7 @@ def display_loop(screen, args, executor, previews):
                                  [("task", "Tasks"), ("controller", "Orchestrator"), ("help", "?")],
                                  "help" if show_help else "controller" if viewing_controller else "task", tabs=True)
         legend_x = 1
-        for color, label in ((1, "need you"), (2, "in progress"), (3, "handed off")):
+        for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
             text = f"● {sum(row['color'] == color for row in rows)} {label}"
             try:
                 screen.addnstr(2, legend_x, text, max(0, width - legend_x - 1),

@@ -28,12 +28,10 @@ wake:
   watches: {} # Role -> persistent watch ID.
 pull_requests: [] # PR URLs; preserve repository/host identities.
 state:
-  name: "active"
+  name: "working" # working | needs-human | complete
   summary: "<current-work-or-outcome>"
-  next_role: null # author, reviewer, worker, workspace_agent, orchestrator, or human
-  next_action: "<concrete-next-step>"
-  attention_required: false
-  attention_reason: null
+  next_role: null # Optional while working: author, reviewer, worker, workspace_agent, orchestrator.
+  next_action: "<concrete-next-step>" # Required for needs-human; omit when complete.
 # Optional: latest result/verification reference, per-PR reviewed head/outcome,
 # selected feedback, and relevant human decisions with their source and scope.
 # No counters or readiness/cleanup booleans; verify consequential state when acting.

@@ -58,6 +58,8 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - Show the board on startup if installed and absent; reuse it thereafter. Workers have no UI-reporting duties; coordinator chat omits repeated tables.
 - With no board, show workspace labels, current work, roles/next actor, and PR in four columns. Red means human action, yellow ongoing or dependency waits, green completed orchestration including ready-but-unmerged PRs.
 - Both roles idle after prior reviews: retain the latest result and next actor rather than presenting idle as completion. No round number is needed.
+- Recover a `human-working` record whose latest request is verified complete: save `complete`, omit next action/role, and retain the workspace. Do not leave it yellow or invent an approval request.
+- Plan approval or finalization needs human input: use `needs-human` with the specific next action. An agent/task dependency is `working`; a ready PR awaiting GitHub review/merge is `complete`. No separate attention flag or phase state is needed.
 - Start any mode with the common record: omit unused fields; open-ended work needs no review metadata. Missing phase history or counters never blocks authorized work. Keep existing records usable without a bulk rewrite.
 - Rename or duplicate a workspace label: use live labels and disambiguate with IDs. Keep links repository-qualified and passive CI detail out of the human action list.
 - Preserve old task records without requiring `event_recovery`; the board still derives the next actor. Archive cleaned records rather than showing them indefinitely.

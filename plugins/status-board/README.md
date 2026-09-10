@@ -38,7 +38,7 @@ python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/
 
 Add `--offline` to skip live Herdr queries and disable messaging/navigation. The board never modifies task records, reads private session files, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
 
-The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) supplies a short status, next actor/action, and human-attention flag. Older records still render, but scope/review counters are ignored. Tasks needing you appear first, ongoing work next, and completed work last. Agent next steps are not labeled as human requests.
+The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) uses `working` (yellow), `needs-human` (red), or `complete` (green), plus a short summary and next action where needed. That state determines the color; separate attention flags are unnecessary. Completed tasks have no next action even when their workspace is retained. Recognized older states still render; ambiguous or unknown ones get a neutral dot and reconciliation warning instead of guessed progress. Among recognized tasks, human blockers appear first, ongoing work next, and finished work last.
 
 ## Navigation and orchestrator view
 

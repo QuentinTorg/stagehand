@@ -8,9 +8,13 @@ Use the common [task-record.yaml](../assets/task-record.yaml) for all modes; omi
 
 Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, latest result/evidence, next action, and relevant human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
-Use `state.name: active` while work or human discussion continues and `complete` for a verified orchestration handoff, not necessarily a merge. `queued`, `closed`, and `cleaned` describe waiting, ended, and removed tasks. These are observations, not phases to visit. The board also accepts existing detailed state names.
+Use only three values for `state.name`:
 
-Keep `state.summary` short (e.g. “Author fixing findings”), `next_role` for who acts next, and `next_action` for the concrete next step. Mark `attention_required` only for a human action and explain it in `attention_reason`; dependencies or active agents remain yellow. Runtime idle/done is not workflow completion.
+- `working` (yellow): agents have work underway, including handoffs or waits on another agent/task.
+- `needs-human` (red): a specific human action is required to continue; describe it in `next_action`.
+- `complete` (green): the current request is finished and needs nothing further from the human within this workflow. A ready PR awaiting GitHub review/merge or a completed investigation with its workspace retained qualifies.
+
+Keep `summary` short (e.g. “Author fixing findings”). Use `next_action` for the next step and optional `next_role` for agent routing while working; omit both when complete. Human attention follows the state, not separate `attention_required`/`attention_reason` fields. Planning and reviewing are descriptions, not states; do not use `human-working` or infer human activity from an open workspace. Runtime idle/done alone is not completion.
 
 Add detail only when relevant: review outcome and evidence bound to each PR/head, selected feedback, or human authorization with its action, scope, and source. Preserve published/finalized references to avoid repeating external actions. Do not maintain review counters, scope versions, phase history, or eligibility flags. Verify current Git/GitHub and cleanup conditions when acting rather than trusting saved booleans.
 
@@ -54,8 +58,8 @@ If a transcript is truncated, use available durable context or ask the same role
 
 Changed code or human intent invalidates a prior pass; establish the current changeset before reusing review evidence. Update durable intent without making the author wait for record synchronization.
 
-Existing records remain usable; ignore obsolete counters and phase gates, preserving evidence, ownership, and human decisions. No bulk migration is required. Replace one-shot watches with persistent ones when adopting a task, and retire old worker signaling instructions. Do not edit active sessions during package installation without a coordinated cutover.
+Reconcile old or contradictory status against the latest request, result, and next action on startup and wakes; do not carry it forward merely because it was saved. A finished request stays complete until new work is requested. Convert adopted records to the three states and remove redundant status flags/history while preserving evidence, ownership, and human decisions; no bulk rewrite is required. Replace one-shot watches with persistent ones when adopting a task, and retire old worker signaling instructions. Do not edit active sessions during package installation without a coordinated cutover.
 
 ## Cleanup
 
-After the [recoverability audit](safety-and-escalation.md#cleanup), cancel only that task's watches and remove its owned linked worktree/workspace. Archive the `cleaned` record in the sibling archive directory, normally `.orchestrator/archive`. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.
+Cleanup is independent of task status. After the [recoverability audit](safety-and-escalation.md#cleanup), cancel only that task's watches and remove its owned linked worktree/workspace. Archive its record in the sibling archive directory, normally `.orchestrator/archive`, without adding a cleanup workflow state. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.
