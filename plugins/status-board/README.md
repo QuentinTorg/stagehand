@@ -2,7 +2,7 @@
 
 A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-Two views separate task work from the orchestrator conversation. **Tasks** shows workspaces, concise workflow status, the next actor, and PR links. Selecting a row previews recent agent output; role buttons switch between its Author/Reviewer or worker. **Details** preserves purpose, next action, PR links, and technical context. **Orchestrator** provides recent output and a general message box for setup or new tasks. Red needs you, yellow is in progress, and green is handed off (including ready PRs awaiting human merge). Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted; invalid records and unavailable live state produce visible warnings.
+Two views separate task work from the orchestrator conversation. **Tasks** shows workspaces, concise workflow status, the next actor, and PR links. Selecting a row opens **Details**: purpose, next action, PR links, and technical context. Author/Reviewer or worker tabs show recent agent output when requested. **Orchestrator** provides recent output and a general message box for setup or new tasks. Red needs you, yellow is in progress, and green is handed off (including ready PRs awaiting human merge). Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted; invalid records and unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -48,7 +48,7 @@ The [common task record](../../skills/orchestrating-development/assets/task-reco
 
 With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. The preview reads at most 120 terminal lines per background refresh, not a guaranteed complete or final assistant response; it may contain tool output. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
 
-Workspace previews use the same agent-neutral terminal formatting, reading only the selected agent (up to 120 lines/32 KB), not every task. They are recent context, not a generated summary or proof of completion. Purpose remains saved separately under Details. Reads do not focus agents or mark them seen. Messages from either workspace view still go through the orchestrator, never directly to the previewed worker.
+Workspace previews use the same agent-neutral terminal formatting, reading only the selected agent while its conversation tab is open (up to 120 lines/32 KB), not every task. They are recent context, not a generated summary or proof of completion. Purpose remains saved separately under Details. Reads do not focus agents or mark them seen. Messages from either workspace view still go through the orchestrator, never directly to the previewed worker.
 
 ## Message the orchestrator
 
@@ -58,7 +58,9 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Appearance
 
-Filled buttons and underlined PRs are clickable; other labels are information. Cyan marks the active view and Send when a draft has text. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
+The message box grows from three to at most twelve text rows, using less height in short panes. Longer messages scroll around the cursor; Enter still sends and Ctrl-J inserts a newline. Send/Clear stay at the bottom as the editor grows upward.
+
+Filled buttons and underlined PRs are clickable; other labels are information. Cyan marks the active view and Send when a draft has text. Magenta marks navigation away from the board; **Open workspace ↗** follows the view tabs. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
 
 The layout adapts to terminal cells, not physical pixels. It supports compact panes from 60 columns × 24 rows through ultrawide layouts; narrower tables hide secondary columns, and prose/editor lines stop growing on wide screens. Tiny panes show a resize hint without discarding drafts. No per-widget font-size changes are required.
 

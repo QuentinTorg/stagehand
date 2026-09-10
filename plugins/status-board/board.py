@@ -491,13 +491,30 @@ def send_message(args, row, message):
     return False, "Delivery unconfirmed. Check orchestrator before retrying; draft kept."
 
 
+def message_layout(message, height, width):
+    """Share wrapping and geometry so editing, previews, and clicks stay aligned."""
+    line_width = max(1, min(120, width - 6))
+    lines, positions = [""], []
+    for character in message:
+        positions.append((len(lines) - 1, len(lines[-1])))
+        if character == "\n":
+            lines.append("")
+        else:
+            lines[-1] += character
+            if len(lines[-1]) >= line_width:
+                lines.append("")
+    positions.append((len(lines) - 1, len(lines[-1])))
+    capacity = max(3, min(12, height // 3, height - 28))
+    visible = min(capacity, max(3, len(lines)))
+    return lines, positions, max(0, height - visible - 5), visible, line_width
+
+
 def draw_message_box(screen, row, message, active=False, can_send=None):
     height, width = screen.getmaxyx()
-    top, inner = max(0, height - 8), max(1, min(120, width - 6))
-    preview = textwrap.wrap(clean(message), inner)[:3] if message else []
+    preview, _, top, visible, _ = message_layout(message, height, width)
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
-             *["│ " + (preview[i] if i < len(preview) else "") for i in range(3)],
+             *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
              "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
@@ -505,7 +522,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None):
     box_width = max(4, width - 3)
     heading = clipped(title, max(1, box_width - 4))
     lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
-    for i in range(1, 5):
+    for i in range(1, visible + 2):
         lines[i] = "│ " + clipped(lines[i][2:], box_width - 4).ljust(box_width - 4) + " │"
     lines[-1] = "└" + "─" * (box_width - 2) + "┘"
     for i, text in enumerate(lines):
@@ -515,8 +532,8 @@ def draw_message_box(screen, row, message, active=False, can_send=None):
             screen.addnstr(top + i, 1, clipped(text, max(1, width - 3)), max(0, width - 2))
         except curses.error:
             pass
-    draw_button(screen, top + 4, 3, "  Send  ", active=bool(message.strip()) if can_send is None else can_send)
-    draw_button(screen, top + 4, 12, "  x Clear  ")
+    draw_button(screen, height - 4, 3, "  Send  ", active=bool(message.strip()) if can_send is None else can_send)
+    draw_button(screen, height - 4, 12, "  x Clear  ")
 
 
 def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
@@ -532,27 +549,23 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         except OSError:
             return "Cannot clear saved draft; nothing sent."
     cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
+    # Restore content obscured by a growing editor when it shrinks again.
+    background = screen.dupwin() if inline else None
     while True:
         height, width = screen.getmaxyx()
-        line_width = max(1, min(120, width - (6 if inline else 4)))
-        lines, positions = [""], []
-        for character in message:
-            positions.append((len(lines) - 1, len(lines[-1])))
-            if character == "\n":
-                lines.append("")
-            else:
-                lines[-1] += character
-                if len(lines[-1]) >= line_width:
-                    lines.append("")
-        positions.append((len(lines) - 1, len(lines[-1])))
+        lines, positions, box_top, visible, line_width = message_layout(message, height, width)
         cy, cx = positions[cursor]
-        input_y = max(1, height - 7) if inline else 4
+        input_y = box_top + 1 if inline else 4
         input_x = 3 if inline else 1
-        visible = 3 if inline else max(1, height - 7)
+        visible = visible if inline else max(1, height - 7)
         offset = max(0, cy - visible + 1)
         if inline:
             # Editing stays in the bottom panel; leave the selected task visible above.
-            draw_message_box(screen, row, "", active=True, can_send=bool(message.strip()))
+            try:
+                background.overwrite(screen)
+            except curses.error:
+                pass  # A terminal resize can invalidate the saved background area.
+            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()))
             content = []
         else:
             screen.erase()
@@ -601,7 +614,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                 elif input_y <= y < input_y + visible:
                     target_y, target_x = offset + y - input_y, max(0, x - input_x)
                     cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - target_x)))
-                elif not (1 <= x < width - 2 and height - 8 <= y < height - 2):
+                elif not (1 <= x < width - 2 and box_top <= y < height - 2):
                     try:
                         save_draft(path, message)
                     except OSError:
@@ -688,11 +701,11 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
 
-def draw_button(screen, y, x, text, active=False):
+def draw_button(screen, y, x, text, active=False, navigation=False):
     style = curses.A_REVERSE | curses.A_BOLD
     try:
         if curses.has_colors():
-            style = curses.color_pair(8 if active else 9) | curses.A_BOLD
+            style = curses.color_pair(11 if navigation else 8 if active else 9) | curses.A_BOLD
     except curses.error:
         pass  # Monochrome/test terminals still get a filled button.
     try:
@@ -713,7 +726,7 @@ def draw_actions(screen, top, width, actions, active=None):
             x, y = 1, y + 1
         if len(text) > width - 2:
             continue
-        if draw_button(screen, y, x, text, action == active):
+        if draw_button(screen, y, x, text, action == active, navigation=action in {"workspace", "open-controller"}):
             hits.append((y, x, x + len(text), action))
         x += len(text) + 2
     return hits, y + 1
@@ -747,12 +760,13 @@ def display_loop(screen, args, executor):
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(10, curses.COLOR_CYAN, -1)
+        curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     notice, pending, queued_mouse = "", None, None
     refresh_started = None
     detail_offset, detail_task = 0, None
-    general, info, show_help = False, False, False
+    general, info, show_help = False, True, False
     controller_offset = None
     preview_role, preview_offset, last_request = None, None, None
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
@@ -768,7 +782,7 @@ def display_loop(screen, args, executor):
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
             pending = None
-        requested_task = "" if general or show_help else rows[min(selected, len(rows) - 1)]["id"] if rows else None
+        requested_task = "" if general or show_help or info else rows[min(selected, len(rows) - 1)]["id"] if rows else None
         request = (requested_task, preview_role)
         if pending is None and (time.monotonic() >= refresh_at or request != last_request):
             pending = executor.submit(board_snapshot, args.tasks, args.offline, *request)
@@ -809,7 +823,7 @@ def display_loop(screen, args, executor):
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
-            info = False
+            info = True
 
         health = " · Offline" if args.offline else ""
         if pending and time.monotonic() - refresh_started > 2:
@@ -870,14 +884,21 @@ def display_loop(screen, args, executor):
         elif viewing_controller:
             context_actions = [("open-controller", "Open orchestrator"), ("latest", "Follow latest")]
         else:
-            context_actions = [("workspace", "Open workspace"), ("info", "Details")]
+            context_actions = [("info", "Details")]
             context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
                                 if current.get("agent_names", {}).get(role)]
+            context_actions.append(("workspace", "Open workspace ↗"))
         conversation = current.get("conversation", {}) if current else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control)
         actions += context_hits
-        detail_height = max(1, height - 9 - (title_y + 1))
+        try:
+            path = draft_path(args, message_target)
+            draft = path.read_text() if path.exists() else ""
+        except OSError:
+            draft = ""
+        _, _, message_top, _, _ = message_layout(draft, height, width)
+        detail_height = max(1, message_top - 1 - (title_y + 1))
         if show_help:
             details = help_lines(width, warnings)
             title, color = "Help · buttons and underlined PRs are clickable", 10
@@ -984,7 +1005,7 @@ def display_loop(screen, args, executor):
                     pass
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
-                elif kind == "select" and height - 8 <= y < height - 2:
+                elif kind == "select" and message_top <= y < height - 2:
                     notice = compose(screen, args, message_target, inline=True,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
@@ -1011,7 +1032,7 @@ def display_loop(screen, args, executor):
         elif action == "help":
             show_help, detail_offset = not show_help, 0
         elif action == "info":
-            info, detail_offset = not info, 0
+            info, detail_offset = True, 0
         elif action == "pr-list":
             info = True
             # Details place links last; scroll directly to them, including on selection change.

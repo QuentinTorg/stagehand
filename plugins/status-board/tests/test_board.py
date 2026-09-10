@@ -176,7 +176,7 @@ class BoardTests(unittest.TestCase):
         executor.submit.return_value = pending
         screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
         self.assertFalse(pending.done())
-        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True, None, None)
+        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True, "", None)
         self.assertEqual(screen.getch.call_count, 4)
 
     def test_failed_background_refresh_is_visible_without_crashing(self):
@@ -293,13 +293,66 @@ class BoardTests(unittest.TestCase):
         row["conversation"] = {"role": "reviewer", "status": "done", "output": "Please clarify the boundary case."}
         pending.set_result(([row], [], {"status": "idle", "output": "Orchestrator reply"}))
         executor.submit.return_value = pending
-        with patch.object(board, "compose", return_value="Draft saved") as compose:
-            screen = self.run_display(executor, [-1, ord("m"), ord("i"), ord("q")])
+        with patch.object(board, "compose", return_value="Draft saved") as compose, patch.object(
+            board, "mouse_event", return_value=("select", 16, 8, 0)
+        ), patch.object(board, "open_target") as navigate:
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("m"), ord("i"), ord("q")])
+        navigate.assert_not_called()
         rendered = " ".join(str(call) for call in screen.addnstr.call_args_list)
         self.assertIn("Please clarify the boundary case.", rendered)
         self.assertIn("Task purpose remains available.", rendered)
         self.assertIn("Details", rendered)
+        self.assertLess(rendered.index("Task purpose remains available."), rendered.index("Please clarify the boundary case."))
         self.assertEqual(compose.call_args.args[2]["id"], row["id"])
+
+    def test_message_box_grows_then_caps_without_losing_text(self):
+        for height, width in ((24, 60), (38, 88), (60, 200)):
+            short = board.message_layout("Hi", height, width)
+            multiline = board.message_layout("line\n" * 7, height, width)
+            long = board.message_layout("line\n" * 100, height, width)
+            self.assertEqual(short[3], 3)
+            self.assertGreaterEqual(multiline[3], short[3])
+            self.assertLessEqual(long[3], 12)
+            self.assertGreaterEqual(long[2], 0)
+            self.assertEqual(long[2] + long[3] + 5, height)
+            self.assertEqual(len(long[0]), 101)
+            screen = Mock()
+            screen.getmaxyx.return_value = (height, width)
+            board.draw_message_box(screen, None, "line\n" * 100)
+            for call in screen.addnstr.call_args_list:
+                y, x, text, count, *_ = call.args
+                self.assertTrue(0 <= y < height)
+                self.assertLessEqual(x + min(len(text), count), width)
+        self.assertGreater(board.message_layout("x\n" * 7, 60, 88)[3], 3)
+        self.assertGreater(board.message_layout("x" * 600, 60, 88)[3], 3)
+
+    def test_grown_editor_click_and_send_preserve_exact_multiline_message(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False)
+            screen = Mock()
+            screen.getmaxyx.return_value = (60, 88)
+            message = "first\n" * 20
+            board.save_draft(board.draft_path(args, None), message)
+            screen.get_wch.side_effect = [board.curses.KEY_MOUSE, "\r"]
+            top = board.message_layout(message, 60, 88)[2]
+            with patch.object(board.curses, "curs_set"), patch.object(
+                board, "mouse_event", return_value=("select", 4, top + 1, 0)
+            ), patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
+                self.assertEqual(board.compose(screen, args, None, inline=True), "Delivered")
+            send.assert_called_once_with(args, None, message)
+            screen.dupwin.return_value.overwrite.assert_called()
+
+    def test_navigation_buttons_have_distinct_color_and_remain_last(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (60, 88)
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "color_pair", side_effect=lambda number: number
+        ) as colors:
+            hits, _ = board.draw_actions(screen, 8, 88, [
+                ("info", "Details"), ("role-author", "Author"), ("role-reviewer", "Reviewer"),
+                ("workspace", "Open workspace ↗")], "info")
+        self.assertEqual(hits[-1][-1], "workspace")
+        self.assertEqual([call.args[0] for call in colors.call_args_list], [8, 9, 9, 11])
 
     def test_actions_wrap_and_hit_targets_do_not_overlap(self):
         for width in (40, 80, 140):
