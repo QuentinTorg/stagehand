@@ -356,14 +356,20 @@ def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
 
-def columns(width, pr_width=9):
-    if width < 100:
-        # Keep the next actor and PRs visible; full status remains in Details.
-        roles = min(12, max(1, width // 5))
-        return max(1, width - pr_width - roles - 4), 0, roles
-    budget = max(1, width - pr_width - 6)
-    name, stage = min(48, budget // 2), min(30, budget // 3)
-    return name, stage, min(20, max(1, budget - name - stage))
+def columns(width, pr_width=9, next_width=12):
+    # Size Next to its labels, not spare terminal space. Keep Status when both
+    # descriptive columns have useful room (24 for workspace, 16 for status).
+    roles = min(20, max(4, next_width))
+    budget = width - pr_width - roles - 5
+    if budget < 40:
+        return max(1, width - pr_width - roles - 3), 0, roles
+    name = min(48, budget * 3 // 5)
+    return name, min(30, budget - name), roles
+
+
+def pr_column(width, pr_width=9, next_width=12):
+    sizes = columns(width, pr_width, next_width)
+    return sum(sizes) + 2 * (sum(size > 0 for size in sizes) - 1) + 1
 
 
 def pr_labels(row):
@@ -425,10 +431,10 @@ def open_pr(url):
     return False
 
 
-def table_line(row, width, pr_width=9):
-    name_width, stage_width, roles_width = columns(width, pr_width)
+def table_line(row, width, pr_width=9, next_width=12):
+    name_width, stage_width, roles_width = columns(width, pr_width, next_width)
     fields = [(row['label'], name_width), (row['stage'], stage_width), (row['roles'], roles_width)]
-    return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + "  " + pr_cell(row, pr_width)[0]
+    return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + " " + pr_cell(row, pr_width)[0]
 
 
 def detail_lines(row, width, info=False):
@@ -1032,8 +1038,10 @@ def display_loop(screen, args, executor, previews):
         show_tasks = not (viewing_controller or show_help)
         if show_tasks:
             header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
-            pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in all_rows), default=9)))
-            put(4, "    " + table_line(header, width - 8, pr_width), bold=True)
+            table_rows = [row for row in rows if row is not None]
+            next_width = max((len(task_next(row)) for row in table_rows), default=4)
+            pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in table_rows), default=9)))
+            put(4, "    " + table_line(header, width - 8, pr_width, next_width), bold=True)
             for i, row in enumerate(rows[offset:offset + visible], offset):
                 marker, y = ("›" if i == selected else " "), 5 + i - offset
                 if row is None:
@@ -1046,7 +1054,7 @@ def display_loop(screen, args, executor, previews):
                     summary["label"] = "  " + row["label"]
                 # Color only the dot on unselected rows; a long red/yellow row
                 # competes with the selected task and its requested action.
-                put(y, f"{marker} ● {table_line(summary, width - 8, pr_width)}",
+                put(y, f"{marker} ● {table_line(summary, width - 8, pr_width, next_width)}",
                     highlight=i == selected)
                 try:
                     style = curses.color_pair(row["color"]) if curses.has_colors() else 0
@@ -1054,8 +1062,7 @@ def display_loop(screen, args, executor, previews):
                 except curses.error:
                     pass
                 if row["prs"]:
-                    sizes = columns(width - 8, pr_width)
-                    pr_x = 5 + sum(sizes) + 2 * sum(size > 0 for size in sizes)
+                    pr_x = 5 + pr_column(width - 8, pr_width, next_width)
                     text, spans = pr_cell(row, pr_width)
                     for left, right, url in spans:
                         try:

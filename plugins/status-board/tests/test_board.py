@@ -789,6 +789,23 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         details = "\n".join(line for line, _, _ in board.detail_lines(row, 80, info=True))
         self.assertIn("A very long workspace name", details)
 
+    def test_status_visibility_uses_remaining_space_not_fixed_width(self):
+        # An 86-column pane can retain Status with compact Next labels.
+        self.assertGreater(board.columns(86 - 8, 24, 4)[1], 0)
+        self.assertEqual(board.columns(86 - 8, 24, 12)[1], 0)
+        self.assertEqual(board.columns(60 - 8, 9, 4)[1], 0)
+
+    def test_compact_next_spacing_keeps_pr_links_aligned(self):
+        row = {"label": "Workspace", "stage": "Reviewing", "roles": "Next",
+               "prs": ["https://github.com/team/repo/pull/123456"]}
+        for width in (52, 70, 78, 100, 140):
+            for next_width in (4, 8, 12):
+                line = board.table_line(row, width, 9, next_width)
+                start = board.pr_column(width, 9, next_width)
+                self.assertEqual(line[start:], "#123456")
+                self.assertLessEqual(len(line), width)
+                self.assertEqual(start - (line.index("Next") + 4), next_width - 4 + 1)
+
     def test_pr_overflow_is_explicit_and_never_links_partial_ids(self):
         row = {"prs": [f"https://github.com/team/repo/pull/{number}" for number in (123456, 234567, 345678, 456789)]}
         for width in (9, 12, 20, 40):
@@ -813,8 +830,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor.submit.return_value = pending
         width = 88
         pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))
-        sizes = board.columns(width - 8, pr_width)
-        start = 5 + sum(sizes) + 2 * sum(size > 0 for size in sizes)
+        start = 5 + board.pr_column(width - 8, pr_width, len(board.task_next(row)))
         _, spans = board.pr_cell(row, pr_width)
         with patch.object(board, "mouse_event", return_value=("select", start + spans[-1][0], 5, 0)), patch.object(board, "open_pr") as open_pr:
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("q")], (60, width))
