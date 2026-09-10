@@ -292,6 +292,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                                        pass_fds=(writer,))
             os.close(slave)
             os.close(writer)
+            terminal_output = bytearray()
 
             def wait_for(marker):
                 output, deadline = b"", time.monotonic() + 3
@@ -302,10 +303,17 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                             output += chunk
                             if marker in output:
                                 return
+                        else:
+                            terminal_output.extend(chunk)
                 self.fail(f"Missing terminal output {marker!r}: {output!r}")
 
             try:
                 wait_for(b"rows=12")
+                # Inject motion only after confirming the application actually
+                # requested it; otherwise real terminals send only release.
+                self.assertIn(b"\x1b[?1002h", terminal_output)
+                self.assertGreater(terminal_output.rfind(b"\x1b[?1002h"),
+                                   terminal_output.rfind(b"\x1b[?1006;1000h"))
                 os.write(master, b"\x1b[<0;31;19M")
                 wait_for(b"('select', 30, 18, 0)")
                 os.write(master, b"\x1b[<32;31;31M")
@@ -314,6 +322,14 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 wait_for(b"('release', 30, 30, 0)")
                 os.write(master, b"\x1b[<0;92;31M")
                 wait_for(b"rows=12")
+                os.write(master, b"q")
+                process.wait(timeout=5)
+                while select.select([master], [], [], 0)[0]:
+                    try:
+                        terminal_output.extend(os.read(master, 65536))
+                    except OSError:
+                        break
+                self.assertIn(b"\x1b[?1002l", terminal_output)
             finally:
                 process.terminate()
                 process.wait(timeout=5)

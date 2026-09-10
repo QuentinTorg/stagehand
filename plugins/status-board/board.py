@@ -898,12 +898,21 @@ def draw_actions(screen, top, width, actions, active=None, tabs=False):
     return hits, y + 1
 
 
+def drag_tracking(enabled):
+    # REPORT_MOUSE_POSITION lets curses decode motion, but some terminfo entries
+    # enable only click reporting. Request held-button motion, not all hovering.
+    if sys.stdout.isatty():
+        sys.stdout.write("\x1b[?1002" + ("h" if enabled else "l"))
+        sys.stdout.flush()
+
+
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
     try:
         return display_loop(screen, args, executor, previews)
     finally:
+        drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
         previews.shutdown(wait=False, cancel_futures=True)
 
@@ -921,6 +930,9 @@ def display_loop(screen, args, executor, previews):
                      curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0) |
                      getattr(curses, "REPORT_MOUSE_POSITION", 0))
     curses.mouseinterval(0)
+    # Flush curses' initial terminal modes before selecting drag reporting.
+    screen.refresh()
+    drag_tracking(True)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
