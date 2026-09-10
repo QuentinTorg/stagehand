@@ -225,13 +225,9 @@ def worker_snapshot(row, role=None, offline=False):
         return dict(preview, output=f"Cannot read agent: {clean(error)}\nOpen the workspace for its full conversation.")
 
 
-def board_snapshot(directory, offline=False, task_id=None, role=None):
+def board_snapshot(directory, offline=False):
     rows, warnings = snapshot(directory, offline)
-    # Only the selected conversation is read; task count does not multiply reads.
-    selected = next((row for row in rows if row["id"] == task_id), None) if task_id is not None else next(iter(rows), None)
-    if selected:
-        selected["conversation"] = worker_snapshot(selected, role, offline)
-    return rows, warnings, controller_snapshot(offline)
+    return rows, warnings
 
 
 def open_target(args, row=None):
@@ -722,11 +718,17 @@ def draw_actions(screen, top, width, actions, active=None):
     hits, x, y = [], 1, top
     for action, label in actions:
         text = "  " + label + "  "
+        navigation = action in {"workspace", "open-controller"}
+        if navigation:
+            # Navigation is spatially separate from local view selectors.
+            if x > 1 and x + len(text) > width - 1:
+                y += 1
+            x = max(1, width - 1 - len(text))
         if x > 1 and x + len(text) > width - 1:
             x, y = 1, y + 1
         if len(text) > width - 2:
             continue
-        if draw_button(screen, y, x, text, action == active, navigation=action in {"workspace", "open-controller"}):
+        if draw_button(screen, y, x, text, action == active, navigation=navigation):
             hits.append((y, x, x + len(text), action))
         x += len(text) + 2
     return hits, y + 1
@@ -734,13 +736,15 @@ def draw_actions(screen, top, width, actions, active=None):
 
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
+    previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
     try:
-        return display_loop(screen, args, executor)
+        return display_loop(screen, args, executor, previews)
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
+        previews.shutdown(wait=False, cancel_futures=True)
 
 
-def display_loop(screen, args, executor):
+def display_loop(screen, args, executor, previews):
     # Preserve Enter (CR) separately from Ctrl-J (LF) for send versus newline.
     curses.nonl()
     try:
@@ -768,7 +772,9 @@ def display_loop(screen, args, executor):
     detail_offset, detail_task = 0, None
     general, info, show_help = False, True, False
     controller_offset = None
-    preview_role, preview_offset, last_request = None, None, None
+    preview_role, preview_offset = None, None
+    preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
+    preview_refresh_at = 0
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     while True:
         # Preserve click coordinates until a blur event is handled; a refresh may
@@ -776,17 +782,14 @@ def display_loop(screen, args, executor):
         if pending is not None and pending.done() and queued_mouse is None:
             selected_id = rows[min(selected, len(rows) - 1)]["id"] if rows else None
             try:
-                rows, warnings, controller = pending.result()
+                rows, warnings = pending.result()
             except Exception as error:
                 warnings = [f"Refresh failed; showing previous snapshot: {clean(error)}"]
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
             pending = None
-        requested_task = "" if general or show_help or info else rows[min(selected, len(rows) - 1)]["id"] if rows else None
-        request = (requested_task, preview_role)
-        if pending is None and (time.monotonic() >= refresh_at or request != last_request):
-            pending = executor.submit(board_snapshot, args.tasks, args.offline, *request)
-            last_request = request
+        if pending is None and time.monotonic() >= refresh_at:
+            pending = executor.submit(board_snapshot, args.tasks, args.offline)
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         screen.erase()
@@ -824,6 +827,27 @@ def display_loop(screen, args, executor):
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
             info = True
+
+        # A slow inventory must not delay a requested conversation. Keep at most
+        # one preview read in flight and discard its display when selection changes.
+        if preview_pending is not None and preview_pending.done():
+            try:
+                preview_result = preview_pending.result()
+            except Exception as error:
+                preview_result = {"status": "unavailable", "output": f"Preview failed: {clean(error)}"}
+            preview_key = preview_request
+            preview_refresh_at = time.monotonic() + args.interval
+            preview_pending = None
+        wanted_preview = not show_help and (viewing_controller or not info)
+        request = (("controller",) if viewing_controller else
+                   (current["id"], current["workspace_id"], preview_role, current.get("next"),
+                    tuple(sorted(current.get("agent_names", {}).items()))))
+        if wanted_preview and preview_pending is None and (request != preview_key or time.monotonic() >= preview_refresh_at):
+            preview_request = request
+            preview_pending = (previews.submit(controller_snapshot, args.offline) if viewing_controller else
+                               previews.submit(worker_snapshot, current, preview_role, args.offline))
+        if viewing_controller and preview_key == request:
+            controller = preview_result
 
         health = " · Offline" if args.offline else ""
         if pending and time.monotonic() - refresh_started > 2:
@@ -882,15 +906,18 @@ def display_loop(screen, args, executor):
         if show_help:
             context_actions = [("help", "Back")]
         elif viewing_controller:
-            context_actions = [("open-controller", "Open orchestrator"), ("latest", "Follow latest")]
+            context_actions = ([] if controller_offset is None else [("latest", "Jump to latest")])
+            context_actions.append(("open-controller", "Open orchestrator ↗"))
         else:
             context_actions = [("info", "Details")]
             context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
                                 if current.get("agent_names", {}).get(role)]
             context_actions.append(("workspace", "Open workspace ↗"))
-        conversation = current.get("conversation", {}) if current else {}
+        conversation = preview_result if not viewing_controller and preview_key == request else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control)
+        if viewing_controller and not show_help and controller_offset is None:
+            put(detail_y, "Following latest", 10)
         actions += context_hits
         try:
             path = draft_path(args, message_target)

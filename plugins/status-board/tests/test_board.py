@@ -21,7 +21,7 @@ class BoardTests(unittest.TestCase):
                 row = board.task_summary(self.task(), 0, None, None, 5)
                 row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
                 row["conversation"] = {"role": "reviewer", "status": "done", "output": "A long worker response. " * 200}
-                pending.set_result(([row], [], {"status": "idle", "output": "A response.\n" * 60}))
+                pending.set_result(([row], []))
                 executor.submit.return_value = pending
                 screen = self.run_display(executor, [-1, ord(view), ord("q")], (height, width))
                 for call in screen.addnstr.call_args_list:
@@ -47,7 +47,7 @@ class BoardTests(unittest.TestCase):
         executor = Mock()
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        pending.set_result(([row], [], {"status": "idle", "output": "Ready"}))
+        pending.set_result(([row], []))
         executor.submit.return_value = pending
         with patch.object(board, "compose", return_value="Draft saved.") as compose, patch.object(board, "open_target") as navigate:
             self.run_display(executor, [-1, ord("c"), ord("m"), ord("t"), ord("m"), ord("q")])
@@ -158,15 +158,20 @@ class BoardTests(unittest.TestCase):
                     self.assertEqual(board.compose(screen, args, row, inline=True), "Delivered")
                 send.assert_called_once_with(args, row, "First\nSecond")
 
-    def run_display(self, executor, keys, size=(38, 140)):
+    def run_display(self, executor, keys, size=(38, 140), previews=None):
         screen = Mock()
         screen.getmaxyx.return_value = size
         screen.getch.side_effect = keys
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
+        if previews is None:
+            previews = Mock()
+            response = Future()
+            response.set_result({"role": "reviewer", "status": "idle", "output": "What would you like to work on?"})
+            previews.submit.return_value = response
         with patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
             board.curses, "mouseinterval"
         ) as interval, patch.object(board.curses, "has_colors", return_value=False):
-            board.display_loop(screen, args, executor)
+            board.display_loop(screen, args, executor, previews)
         interval.assert_called_once_with(0)
         return screen
 
@@ -176,7 +181,7 @@ class BoardTests(unittest.TestCase):
         executor.submit.return_value = pending
         screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
         self.assertFalse(pending.done())
-        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True, "", None)
+        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True)
         self.assertEqual(screen.getch.call_count, 4)
 
     def test_failed_background_refresh_is_visible_without_crashing(self):
@@ -187,10 +192,37 @@ class BoardTests(unittest.TestCase):
         screen = self.run_display(executor, [-1, ord("q")])
         self.assertTrue(any("Updates need attention" in str(call) for call in screen.addnstr.call_args_list))
 
+    def test_worker_preview_loads_while_inventory_refresh_is_still_blocked(self):
+        executor, previews = Mock(), Mock()
+        first, blocked, response = Future(), Future(), Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        first.set_result(([row], []))
+        executor.submit.side_effect = [first, blocked]
+        response.set_result({"role": "reviewer", "status": "done", "output": "Loaded independently"})
+        previews.submit.return_value = response
+        with patch.object(board, "mouse_event", return_value=("select", 16, 8, 0)):
+            screen = self.run_display(executor, [-1, ord("r"), board.curses.KEY_MOUSE, -1, ord("q")], previews=previews)
+        self.assertFalse(blocked.done())
+        self.assertIn("Loaded independently", " ".join(str(c) for c in screen.addnstr.call_args_list))
+        worker_calls = [call for call in previews.submit.call_args_list if call.args[0] is board.worker_snapshot]
+        self.assertEqual(len(worker_calls), 1)
+        self.assertEqual(worker_calls[0].args[1]["id"], row["id"])
+
+    def test_jump_to_latest_appears_only_after_scrolling_back(self):
+        executor = Mock()
+        first = Future()
+        first.set_result(([], []))
+        executor.submit.return_value = first
+        screen = self.run_display(executor, [-1, board.curses.KEY_UP, board.curses.KEY_END, ord("q")])
+        output = " ".join(str(c) for c in screen.addnstr.call_args_list)
+        self.assertIn("Following latest", output)
+        self.assertIn("Jump to latest", output)
+        self.assertIn("Open orchestrator ↗", output)
+
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
         pending = Future()
-        pending.set_result(([], [], {"status": "idle", "output": "What would you like to work on?"}))
+        pending.set_result(([], []))
         executor.submit.return_value = pending
         with patch.object(board, "compose", return_value="Draft saved.") as compose:
             screen = self.run_display(executor, [-1, ord("m"), ord("q")])
@@ -273,17 +305,15 @@ class BoardTests(unittest.TestCase):
             self.assertEqual(board.worker_snapshot(row, offline=True)["status"], "offline")
         call.assert_not_called()
 
-    def test_refresh_reads_only_selected_workspace_and_role(self):
+    def test_inventory_does_not_read_conversations(self):
         rows = [board.task_summary(dict(self.task(), task_id=str(i)), 0, None, None, 5) for i in range(10)]
         with patch.object(board, "snapshot", return_value=(rows, [])), patch.object(
-            board, "controller_snapshot", return_value={}
-        ), patch.object(board, "worker_snapshot", return_value={"output": "Selected reply"}) as read:
-            result, _, _ = board.board_snapshot(Path("/unused"), False, "5", "reviewer")
-            read.assert_called_once_with(rows[5], "reviewer", False)
-            self.assertEqual([row["id"] for row in result if "conversation" in row], ["5"])
-            read.reset_mock()
-            board.board_snapshot(Path("/unused"), False, "")
+            board, "controller_snapshot"
+        ) as controller, patch.object(board, "worker_snapshot") as read:
+            result, _ = board.board_snapshot(Path("/unused"), False)
+            self.assertEqual(result, rows)
             read.assert_not_called()
+            controller.assert_not_called()
 
     def test_workspace_conversation_and_details_keep_message_routing(self):
         executor = Mock()
@@ -291,12 +321,16 @@ class BoardTests(unittest.TestCase):
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "Task purpose remains available."
         row["conversation"] = {"role": "reviewer", "status": "done", "output": "Please clarify the boundary case."}
-        pending.set_result(([row], [], {"status": "idle", "output": "Orchestrator reply"}))
+        pending.set_result(([row], []))
         executor.submit.return_value = pending
+        previews = Mock()
+        response = Future()
+        response.set_result(row["conversation"])
+        previews.submit.return_value = response
         with patch.object(board, "compose", return_value="Draft saved") as compose, patch.object(
             board, "mouse_event", return_value=("select", 16, 8, 0)
         ), patch.object(board, "open_target") as navigate:
-            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("m"), ord("i"), ord("q")])
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, ord("m"), ord("i"), ord("q")], previews=previews)
         navigate.assert_not_called()
         rendered = " ".join(str(call) for call in screen.addnstr.call_args_list)
         self.assertIn("Please clarify the boundary case.", rendered)
@@ -352,6 +386,7 @@ class BoardTests(unittest.TestCase):
                 ("info", "Details"), ("role-author", "Author"), ("role-reviewer", "Reviewer"),
                 ("workspace", "Open workspace ↗")], "info")
         self.assertEqual(hits[-1][-1], "workspace")
+        self.assertEqual(hits[-1][2], 87)
         self.assertEqual([call.args[0] for call in colors.call_args_list], [8, 9, 9, 11])
 
     def test_actions_wrap_and_hit_targets_do_not_overlap(self):
@@ -361,6 +396,7 @@ class BoardTests(unittest.TestCase):
             actions, bottom = board.draw_actions(screen, 8, width,
                 [("task", "Tasks"), ("controller", "Orchestrator"), ("workspace", "Open workspace"), ("open-controller", "Open orchestrator")], "controller")
             self.assertEqual(len(actions), 4)
+            self.assertEqual(actions[-1][2], width - 1)
             for y, left, right, _ in actions:
                 self.assertLess(y, bottom)
                 self.assertTrue(0 < left < right <= width - 1)
@@ -421,7 +457,7 @@ class BoardTests(unittest.TestCase):
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["prs"] = [f"https://github.com/team/repo/pull/{n}" for n in (123456, 234567, 345678, 456789)]
-        pending.set_result(([row], [], {"status": "idle", "output": "Ready"}))
+        pending.set_result(([row], []))
         executor.submit.return_value = pending
         width = 88
         pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))
