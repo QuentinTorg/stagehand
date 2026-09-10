@@ -38,7 +38,7 @@ Before ending a review turn, check the chosen shape and required fields. If any 
 
 On rereview, inspect the complete current base-to-head changeset rather than only previous findings. When the scope version changes, restart at phase zero. A passing outcome is valid only for the exact reviewed head.
 
-After a passing review, do not finalize, approve, or merge automatically. The orchestrator will return explicit human authorization if the reviewer should use the preparing-pull-requests skill to finalize the current-head draft.
+After a passing review, do not finalize, approve, or merge automatically. The orchestrator will return authorization from the responsible approval actor if the reviewer should use the preparing-pull-requests skill to finalize the current-head draft.
 
 When that authorization arrives, revalidate the head, finalize and mark the pull request ready, then send `pull-request-finalized` with `base`, `head`, `round`, and `pullRequest`. If the head changed or finalization cannot safely complete, send `review-needs-human` instead. Finalization never includes merge.
 

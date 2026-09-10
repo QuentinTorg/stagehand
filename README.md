@@ -15,7 +15,9 @@ This package helps one developer coordinate coding agents without replacing ordi
 7. After a passing review, the orchestrator asks whether the reviewer may finalize the pull request.
 8. The human and their teammates perform final GitHub review; the human merges through GitHub.
 
-Agents notify the orchestrator through small Herdr workflow events. The orchestrator validates those events against durable task records instead of inferring progress from terminal activity. It does not implement product code, approve unexpected permissions, or merge pull requests.
+Agents notify the orchestrator through small Herdr workflow events. The orchestrator validates those events against durable task records instead of inferring progress from terminal activity. It does not implement product code or approve unexpected permissions.
+
+For a bounded long-running project, `.local/AGENTS.md` may define a builder charter. The orchestrator then owns the delegated task-selection, plan, review-disposition, finalization, and exact non-main squash-merge decisions, adapts delivery as it learns, and continues toward the terminal outcome. Project progress stays in one concise Markdown note; the charter does not add a second package state machine or weaken author/reviewer independence.
 
 For investigation, diagnosis, planning, or research with no intended landed change, request a delegated-work task. Stagehand starts one worker in an isolated workspace and returns its result without creating a PR, reviewer, Hunk session, or review loop.
 
@@ -77,9 +79,9 @@ Managed roles report completed handoffs and diagnosed blockers through exact sem
 
 ## Guardrails
 
-The human explicitly authorizes every task and decides how many workflows run concurrently. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work has no managed role until promotion. The orchestrator warns about likely overlap and recommends sequencing, but fixed global concurrency caps are not imposed. Review rounds and material scope revisions remain bounded; unexpected permissions, stale heads, conflicts, and no-progress loops return to the human.
+By default, the human explicitly authorizes every task and decides how many workflows run concurrently. A builder charter may delegate those decisions within its bounded project. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work has no managed role until promotion. The orchestrator warns about likely overlap and recommends sequencing. Review rounds and material scope revisions remain bounded signals; builder mode may resolve them without a routine human stop when progress is credible.
 
-GitHub remains the collaboration boundary. The workflow never pushes to the primary branch, bypasses CI, enables auto-merge, or performs the final merge.
+GitHub remains the collaboration boundary. The default workflow leaves merging to the human. Builder mode may squash-merge only into integration branches explicitly named by its local charter. No workflow pushes to or merges into `main`, bypasses required checks, enables auto-merge, or uses administrator bypass.
 
 ## More detail
 

@@ -17,6 +17,7 @@ The managed workflow control block prepended to this prompt is your durable rout
 - Target remote and base: `{{development_target_remote}}/{{development_target_base}}` at `{{development_target_base_commit}}`
 - Target feature branch: `{{development_target_branch}}`
 - Scope version: `{{scope_version}}`
+- Plan approval actor: `{{plan_approval_actor}}`
 
 Follow all instructions in the target repository. Work only on this task and do not spawn or delegate to another agent unless the human explicitly authorizes it.
 
@@ -24,7 +25,7 @@ Before proposing a plan, verify that the recorded development target is clean, c
 
 ## Planning gate
 
-Begin with read-only discovery: inspect repository instructions, status, relevant code, tests, documentation, and history. Propose a cohesive scope, implementation plan, and verification approach to the human in this pane. Do not modify files, commit, push, or create a pull request until the human explicitly approves implementation here.
+Begin with read-only discovery: inspect repository instructions, status, relevant code, tests, documentation, and history. Propose a cohesive scope, implementation plan, and verification approach to the recorded approval actor. Do not modify files, commit, push, or create a pull request until that actor explicitly approves implementation.
 
 After unmistakable approval, send this event through the control block's delivery procedure:
 
@@ -38,7 +39,7 @@ Begin editing only after delivery succeeds. If delivery falls back, stop and wai
 
 When implementation and proportionate verification are complete, send `implementation-ready` with `head` and a recoverable `verificationRef`, then wait for a draft-creation control block from the orchestrator. Do not infer permission to publish from task completion or direct human discussion.
 
-When requested, use the preparing-pull-requests skill to publish the feature branch and create the initial draft. The initial task authorization already permits this routine action; do not ask for another human approval. Capture the human-confirmed intent, delivered behavior, verification, limitations, and scope boundaries. When a GitHub issue is supplied, link its repository, number, or URL using repository conventions. Use a closing keyword only when the pull request fully resolves that issue. Then send `draft-pr-ready` with `base`, `head`, and `pullRequest`.
+When requested, use the preparing-pull-requests skill to publish the feature branch and create the initial draft. The initial task authorization already permits this routine action; do not ask for another approval. Capture the approved intent, delivered behavior, verification, limitations, and scope boundaries. When a GitHub issue is supplied, link its repository, number, or URL using repository conventions. Use a closing keyword only when the pull request fully resolves that issue. Then send `draft-pr-ready` with `base`, `head`, and `pullRequest`.
 
 When the orchestrator explicitly returns selected findings, inspect the existing Hunk comments before editing, use the resolving-findings skill, make only the selected in-scope fixes, verify them, update the draft head, and send `fixes-ready`.
 

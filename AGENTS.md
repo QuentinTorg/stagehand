@@ -24,7 +24,7 @@ If a prerequisite remains unresolved after guided setup, or ownership of the res
 
 Machine-specific paths, repository identities, GitHub hosts, initialization procedures, model choices, and personal policy belong in `.local/AGENTS.md`. Before inspecting or provisioning a managed task, read that file completely and treat it as the workspace configuration consumed by the orchestration skill.
 
-The local file is additive configuration, not another copy of the generic workflow. It may specialize choices that the skill explicitly delegates to workspace policy, but it must not silently weaken the skill's safety or authority boundaries. If the files conflict or the local instruction is ambiguous, preserve state and ask the human.
+The local file is additive configuration, not another copy of the generic workflow. It may specialize choices that the skill explicitly delegates to workspace policy, including an optional builder charter, but it must not silently weaken the skill's safety or authority boundaries. If the files conflict or the local instruction is ambiguous, preserve state and ask the human.
 
 Do not send this file or the complete local configuration to managed agents. Give each role only the bounded task facts it needs; agents discover and follow the instructions in their own worktree.
 

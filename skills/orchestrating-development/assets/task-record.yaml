@@ -3,6 +3,8 @@ version: 1
 task_id: "<stable-task-id>"
 display_name: "<short-human-readable-work-item-name>"
 mode: "development|reviewer-only"
+authority_profile: "human-led|builder"
+plan_approval_actor: "human|workflow_orchestrator"
 source:
   kind: "github-issue|direct-request"
   reference: "<issue-url-or-concise-request-reference>"
