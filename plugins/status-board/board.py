@@ -342,6 +342,7 @@ def help_lines(width, warnings):
             "Clear removes only the current draft. Task and general drafts stay separate.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
+            "Drag the Workspaces bottom border to resize; Auto restores automatic sizing. Sizing lasts for this board session.",
             "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
             "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
             "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
@@ -356,20 +357,20 @@ def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
 
-def columns(width, pr_width=9, next_width=12):
+def columns(width, pr_width=9, next_width=12, stage_width=30):
     # Size Next to its labels, not spare terminal space. Keep Status when both
     # descriptive columns have useful room (24 for workspace, 16 for status).
     roles = min(20, max(4, next_width))
-    budget = width - pr_width - roles - 5
+    budget = width - pr_width - roles - 6
     if budget < 40:
-        return max(1, width - pr_width - roles - 3), 0, roles
+        return max(1, width - pr_width - roles - 4), 0, roles
     name = min(48, budget * 3 // 5)
-    return name, min(30, budget - name), roles
+    return name, min(30, max(6, stage_width), budget - name), roles
 
 
-def pr_column(width, pr_width=9, next_width=12):
-    sizes = columns(width, pr_width, next_width)
-    return sum(sizes) + 2 * (sum(size > 0 for size in sizes) - 1) + 1
+def pr_column(width, pr_width=9, next_width=12, stage_width=30):
+    sizes = columns(width, pr_width, next_width, stage_width)
+    return sum(sizes) + 2 * sum(size > 0 for size in sizes)
 
 
 def pr_labels(row):
@@ -431,10 +432,10 @@ def open_pr(url):
     return False
 
 
-def table_line(row, width, pr_width=9, next_width=12):
-    name_width, stage_width, roles_width = columns(width, pr_width, next_width)
+def table_line(row, width, pr_width=9, next_width=12, stage_width=30):
+    name_width, stage_width, roles_width = columns(width, pr_width, next_width, stage_width)
     fields = [(row['label'], name_width), (row['stage'], stage_width), (row['roles'], roles_width)]
-    return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + " " + pr_cell(row, pr_width)[0]
+    return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + "  " + pr_cell(row, pr_width)[0]
 
 
 def detail_lines(row, width, info=False):
@@ -483,6 +484,10 @@ def mouse_event():
         return ("open", x, y, 0)
     if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
         return ("select", x, y, 0)
+    if buttons & curses.BUTTON1_RELEASED:
+        return ("release", x, y, 0)
+    if buttons & getattr(curses, "REPORT_MOUSE_POSITION", 0):
+        return ("motion", x, y, 0)
     return None
 
 
@@ -802,6 +807,14 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             note = "Draft save failed; keep this window open until saved."
 
 
+def task_visible_rows(height, count, requested, message_top):
+    # Manual inventory views can borrow detail space, but never cover the
+    # navigation controls, a few lines of context, or the growing message box.
+    available = max(1, message_top - 14)
+    preferred = min(12, (height - 20) // 2) if requested is None else requested
+    return max(1, min(count, preferred, available))
+
+
 def draw_task_frame(screen, width, visible, selected, count, caption):
     # Reserve the outer columns for the frame, independent of table content.
     right, bottom = width - 2, 6 + visible
@@ -816,6 +829,9 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
             screen.addnstr(y, 0, "│", 1)
             screen.addnstr(y, right, "█" if y == thumb else "│", 1)
         screen.addnstr(bottom, 0, "└" + "─" * (right - 1) + "┘", right + 1)
+        grip = " ↕ Drag to resize "
+        screen.addnstr(bottom, max(1, (width - len(grip)) // 2), grip, len(grip), curses.A_DIM)
+        draw_button(screen, bottom, width - 10, " Auto ")
     except curses.error:
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
@@ -900,9 +916,10 @@ def display_loop(screen, args, executor, previews):
     except curses.error:
         pass
     # Accept releases too: filtering them inside curses can block getch beyond
-    # its timeout. mouse_event ignores them after control returns to our loop.
+    # its timeout. Motion reports support dragging the workspace divider.
     curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED |
-                     curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0))
+                     curses.BUTTON4_PRESSED | getattr(curses, "BUTTON5_PRESSED", 0) |
+                     getattr(curses, "REPORT_MOUSE_POSITION", 0))
     curses.mouseinterval(0)
     if curses.has_colors():
         curses.start_color()
@@ -919,6 +936,7 @@ def display_loop(screen, args, executor, previews):
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
+    requested_rows, dragging = None, False
     viewer = ViewerState(args.tasks)
     notice, pending, queued_mouse = "", None, None
     editor, editor_task = None, None
@@ -933,7 +951,7 @@ def display_loop(screen, args, executor, previews):
     while True:
         # Preserve click coordinates until a blur event is handled; a refresh may
         # otherwise reorder the task rows between leaving the editor and selection.
-        if pending is not None and pending.done() and queued_mouse is None:
+        if pending is not None and pending.done() and queued_mouse is None and not dragging:
             previous_row = rows[min(selected, len(rows) - 1)] if rows else None
             selected_id = previous_row["id"] if previous_row else None
             try:
@@ -970,6 +988,7 @@ def display_loop(screen, args, executor, previews):
 
         # Avoid overlapping controls on a transient tiny resize. No input is sent.
         if width < 60 or height < 24:
+            dragging = False
             put(0, "STAGEHAND — enlarge this pane to at least 60 × 24.")
             put(2, "Your drafts are saved. q closes the board.")
             screen.refresh()
@@ -1033,15 +1052,22 @@ def display_loop(screen, args, executor, previews):
             legend_x += len(text) + 3
 
         table_links, detail_links = {}, {}
-        visible = max(1, min(12, len(rows), (height - 20) // 2))
+        try:
+            path = draft_path(args, message_target)
+            draft = path.read_text() if path.exists() else ""
+        except OSError:
+            draft = ""
+        _, _, message_top, _, _ = message_layout(draft, height, width)
+        visible = task_visible_rows(height, len(rows), requested_rows, message_top)
         offset = max(0, selected - visible + 1)
         show_tasks = not (viewing_controller or show_help)
         if show_tasks:
             header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
             table_rows = [row for row in rows if row is not None]
             next_width = max((len(task_next(row)) for row in table_rows), default=4)
+            stage_width = max((len(task_stage(row)) for row in table_rows), default=6)
             pr_width = max(9, min(width // 3, max((len(", ".join(label for label, _ in pr_labels(row))) for row in table_rows), default=9)))
-            put(4, "    " + table_line(header, width - 8, pr_width, next_width), bold=True)
+            put(4, "    " + table_line(header, width - 8, pr_width, next_width, stage_width), bold=True)
             for i, row in enumerate(rows[offset:offset + visible], offset):
                 marker, y = ("›" if i == selected else " "), 5 + i - offset
                 if row is None:
@@ -1054,7 +1080,7 @@ def display_loop(screen, args, executor, previews):
                     summary["label"] = "  " + row["label"]
                 # Color only the dot on unselected rows; a long red/yellow row
                 # competes with the selected task and its requested action.
-                put(y, f"{marker} ● {table_line(summary, width - 8, pr_width, next_width)}",
+                put(y, f"{marker} ● {table_line(summary, width - 8, pr_width, next_width, stage_width)}",
                     highlight=i == selected)
                 try:
                     style = curses.color_pair(row["color"]) if curses.has_colors() else 0
@@ -1062,7 +1088,7 @@ def display_loop(screen, args, executor, previews):
                 except curses.error:
                     pass
                 if row["prs"]:
-                    pr_x = 5 + pr_column(width - 8, pr_width, next_width)
+                    pr_x = 5 + pr_column(width - 8, pr_width, next_width, stage_width)
                     text, spans = pr_cell(row, pr_width)
                     for left, right, url in spans:
                         try:
@@ -1073,6 +1099,7 @@ def display_loop(screen, args, executor, previews):
                             pass
             draw_task_frame(screen, width, visible, selected, len(rows),
                             f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
+            actions.append((6 + visible, width - 10, width - 4, "auto-size"))
             detail_y = 7 + visible
         else:
             detail_y = 3
@@ -1097,12 +1124,6 @@ def display_loop(screen, args, executor, previews):
         if viewing_controller and not show_help and controller_offset is None:
             put(detail_y, "Following latest", 10)
         actions += context_hits
-        try:
-            path = draft_path(args, message_target)
-            draft = path.read_text() if path.exists() else ""
-        except OSError:
-            draft = ""
-        _, _, message_top, _, _ = message_layout(draft, height, width)
         detail_height = max(1, message_top - 1 - (title_y + 1))
         if show_help:
             details = help_lines(width, warnings)
@@ -1178,6 +1199,8 @@ def display_loop(screen, args, executor, previews):
             continue
         screen.refresh()
         key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        if key != curses.KEY_MOUSE and key != -1:
+            dragging = False
         action = None
         if key == ord("q"):
             return
@@ -1221,6 +1244,10 @@ def display_loop(screen, args, executor, previews):
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
+                if dragging and kind in {"select", "motion", "release"}:
+                    requested_rows = task_visible_rows(height, len(rows), y - 6, message_top)
+                    dragging = kind != "release"
+                    continue
                 action = next((name for line, left, right, name in actions if y == line and left <= x < right), None) if kind == "select" else None
                 if kind == "wheel":
                     if show_tasks and 3 <= y <= 6 + visible:
@@ -1233,6 +1260,8 @@ def display_loop(screen, args, executor, previews):
                         detail_offset = max(0, active_offset + delta)
                 elif kind == "select" and action:
                     pass
+                elif kind == "select" and show_tasks and y == 6 + visible and 1 <= x < width - 2:
+                    dragging = True
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif kind == "select" and message_top <= y < height - 2:
@@ -1256,7 +1285,9 @@ def display_loop(screen, args, executor, previews):
                             if left <= x < right:
                                 open_pr(url)
                                 break
-        if action == "task":
+        if action == "auto-size":
+            requested_rows = None
+        elif action == "task":
             general, show_help, detail_offset = False, False, 0
         elif action == "controller":
             general, show_help, controller_offset = True, False, None

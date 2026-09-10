@@ -30,7 +30,7 @@ Click a task row to select it. Recent output follows the latest lines; scroll ba
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
-The task list has a position indicator and clickable scroll rail. Delayed-refresh warnings expose update health, not agent progress. **Details** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
+The task list has a position indicator and clickable scroll rail. It grows automatically up to 12 rows (fewer in short panes). Drag its bottom border to show more or fewer rows, leaving space for details and messages; click **Auto** to restore the default. Manual sizing lasts for the current board session. Delayed-refresh warnings expose update health, not agent progress. **Details** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once

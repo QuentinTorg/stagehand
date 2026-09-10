@@ -27,6 +27,33 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_workspace_size_defaults_and_manual_bounds(self):
+        self.assertEqual(board.task_visible_rows(60, 40, None, 52), 12)
+        self.assertEqual(board.task_visible_rows(60, 5, None, 52), 5)
+        self.assertEqual(board.task_visible_rows(60, 40, 30, 52), 30)
+        self.assertEqual(board.task_visible_rows(60, 40, 100, 52), 38)
+        self.assertEqual(board.task_visible_rows(60, 40, 30, 25), 11)
+        self.assertEqual(board.task_visible_rows(24, 40, 30, 16), 2)
+        self.assertEqual(board.task_visible_rows(60, 40, -10, 52), 1)
+
+    def test_workspace_drag_release_and_auto_restore(self):
+        rows = [dict(board.task_summary(self.task(), 0, None, None, 5), id=str(i)) for i in range(40)]
+        ready = Future()
+        ready.set_result((rows, []))
+        executor = Mock()
+        executor.submit.return_value = ready
+        events = [("select", 30, 18, 0), ("motion", 30, 30, 0),
+                  ("release", 30, 30, 0), ("motion", 30, 40, 0),
+                  ("select", 131, 30, 0)]
+        with patch.object(board, "mouse_event", side_effect=events), patch.object(
+            board, "draw_task_frame", wraps=board.draw_task_frame
+        ) as frame, patch.object(board, "send_message") as send, patch.object(board, "open_pr") as navigate:
+            self.run_display(executor, [-1] + [board.curses.KEY_MOUSE] * len(events) + [ord("q")], (60, 140))
+        sizes = [call.args[2] for call in frame.call_args_list]
+        self.assertEqual(sizes, [12, 12, 24, 24, 24, 12])
+        send.assert_not_called()
+        navigate.assert_not_called()
+
     def test_later_persists_without_changing_workflow_or_drafts(self):
         with tempfile.TemporaryDirectory() as root:
             tasks = Path(root) / "tasks"
@@ -227,6 +254,72 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 process.wait(timeout=5)
                 os.close(master)
 
+    def test_real_terminal_workspace_drag_and_auto(self):
+        import fcntl
+        import pty
+        import struct
+        import termios
+
+        # Exercise SGR press/motion/release reports, not only translated events.
+        source = '''
+import curses, importlib.util, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+spec = importlib.util.spec_from_file_location("board", sys.argv[1])
+board = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(board)
+rows = [board.task_summary({"task_id": str(i), "state": {"name": "active"}}, 0, None, None, 5) for i in range(40)]
+board.board_snapshot = lambda *args: (rows, [])
+board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
+original_mouse, original_frame = board.mouse_event, board.draw_task_frame
+def observed_mouse():
+    event = original_mouse()
+    os.write(int(sys.argv[3]), (repr(event) + "\\n").encode())
+    return event
+def observed_frame(*args):
+    original_frame(*args)
+    os.write(int(sys.argv[3]), f"rows={args[2]}\\n".encode())
+board.mouse_event, board.draw_task_frame = observed_mouse, observed_frame
+curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=True, interval=5))
+'''
+        with tempfile.TemporaryDirectory() as root:
+            master, slave = pty.openpty()
+            signals, writer = os.pipe()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 100, 0, 0))
+            process = subprocess.Popen([sys.executable, "-c", source, board.__file__, root, str(writer)],
+                                       stdin=slave, stdout=slave, stderr=slave,
+                                       env=dict(os.environ, TERM="xterm-256color"), start_new_session=True,
+                                       pass_fds=(writer,))
+            os.close(slave)
+            os.close(writer)
+
+            def wait_for(marker):
+                output, deadline = b"", time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    for fd in select.select([master, signals], [], [], 0.05)[0]:
+                        chunk = os.read(fd, 65536)
+                        if fd == signals:
+                            output += chunk
+                            if marker in output:
+                                return
+                self.fail(f"Missing terminal output {marker!r}: {output!r}")
+
+            try:
+                wait_for(b"rows=12")
+                os.write(master, b"\x1b[<0;31;19M")
+                wait_for(b"('select', 30, 18, 0)")
+                os.write(master, b"\x1b[<32;31;31M")
+                wait_for(b"rows=24")
+                os.write(master, b"\x1b[<0;31;31m")
+                wait_for(b"('release', 30, 30, 0)")
+                os.write(master, b"\x1b[<0;92;31M")
+                wait_for(b"rows=12")
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+                os.close(master)
+                os.close(signals)
+
     def test_responsive_views_stay_inside_terminal_bounds(self):
         for height, width in ((24, 60), (28, 80), (38, 110), (44, 160), (60, 240), (72, 320)):
             for view in ("t", "c", "?"):
@@ -380,13 +473,14 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_task_frame_has_matching_corners_and_separate_scroll_rail(self):
         for width in (40, 140):
             screen = Mock()
+            screen.getmaxyx.return_value = (60, width)
             board.draw_task_frame(screen, width, 5, 9, 10, "Tasks 6–10 of 10")
             calls = [call.args for call in screen.addnstr.call_args_list]
             self.assertEqual(calls[0][2][0], "┌")
             self.assertEqual(calls[0][2][-1], "┐")
             self.assertEqual(len(calls[0][2]), width - 1)
             self.assertNotIn("…", calls[0][2])
-            self.assertEqual(calls[-1], (11, 0, "└" + "─" * (width - 3) + "┘", width - 1))
+            self.assertIn((11, 0, "└" + "─" * (width - 3) + "┘", width - 1), calls)
             self.assertIn((10, width - 2, "█", 1), calls)
 
     def test_enter_sends_and_ctrl_j_inserts_newline(self):
@@ -804,7 +898,14 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 start = board.pr_column(width, 9, next_width)
                 self.assertEqual(line[start:], "#123456")
                 self.assertLessEqual(len(line), width)
-                self.assertEqual(start - (line.index("Next") + 4), next_width - 4 + 1)
+                self.assertEqual(start - (line.index("Next") + 4), next_width - 4 + 2)
+
+    def test_status_does_not_reserve_unused_space(self):
+        row = {"label": "Workspace", "stage": "Ready", "roles": "You",
+               "prs": ["https://github.com/team/repo/pull/123"]}
+        line = board.table_line(row, 140, 9, 4, 6)
+        self.assertIn("Ready   You   #123", line)
+        self.assertEqual(line.index("#123"), board.pr_column(140, 9, 4, 6))
 
     def test_pr_overflow_is_explicit_and_never_links_partial_ids(self):
         row = {"prs": [f"https://github.com/team/repo/pull/{number}" for number in (123456, 234567, 345678, 456789)]}
@@ -830,7 +931,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor.submit.return_value = pending
         width = 88
         pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))
-        start = 5 + board.pr_column(width - 8, pr_width, len(board.task_next(row)))
+        start = 5 + board.pr_column(width - 8, pr_width, len(board.task_next(row)), len(board.task_stage(row)))
         _, spans = board.pr_cell(row, pr_width)
         with patch.object(board, "mouse_event", return_value=("select", start + spans[-1][0], 5, 0)), patch.object(board, "open_pr") as open_pr:
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("q")], (60, width))
@@ -1010,6 +1111,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
 
     def test_mouse_reports_clicks_and_wheel_direction(self):
         for flag, expected in [(board.curses.BUTTON1_CLICKED, "select"),
+                               (board.curses.BUTTON1_RELEASED, "release"),
+                               (board.curses.REPORT_MOUSE_POSITION, "motion"),
                                (board.curses.BUTTON1_DOUBLE_CLICKED, "open"),
                                (board.curses.BUTTON4_PRESSED, "wheel")]:
             with patch.object(board.curses, "getmouse", return_value=(0, 10, 6, 0, flag)):
