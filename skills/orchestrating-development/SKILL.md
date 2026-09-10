@@ -49,9 +49,9 @@ Keep author and reviewer side by side in the task's `agents` tab, adding the rev
 4. **Resolve material findings.** Route only human-selected findings or those covered by an explicit standing finding policy to the original author with `resolving-findings`. Tangential improvements remain follow-ups. After fixes and verification, the same reviewer reviews the complete updated changeset.
 5. **Finalize with permission.** A passing review of the unchanged current head makes a ready candidate. Ask the human to authorize that reviewer to use `preparing-pull-requests` for finalization. The reviewer may improve impact, risk, verification, and navigation context, not redefine intent. Verify the ready state and head before declaring orchestration complete. Humans review and merge in GitHub.
 
-Keep review results bound to their actual head and scope. Stop after three completed reviews per scope or six total unless the human continues. Escalate repeated unproductive fixes or author–reviewer deadlock; one ordinary correction is not a failure.
+Keep review results bound to the actual changeset and human intent. Continue while making useful progress within the authorized task; ask the human when findings repeat without progress, conclusions conflict materially, or continuing needs broader scope or substantially more work. Review counts are not approval gates.
 
-Human feedback after review returns to the same pair and invalidates the old pass. Material scope changes reset the per-scope count, not total usage; a third material revision prompts a progress/cost check. Small fixes need rereview too. Return material post-readiness changes to draft under human instruction or local standing policy; ask if that authority is missing. A new pass requires new finalization authorization.
+Human feedback after review returns to the same pair; changed code or intent needs rereview, including small fixes. Update intent without scope-version bookkeeping. Return material post-readiness changes to draft under human instruction or local standing policy; ask if that authority is missing. A new pass requires new finalization authorization.
 
 ## Other modes
 
@@ -69,6 +69,6 @@ Save meaningful outcomes and next actions in the task records—not a diary of e
 
 The board renders saved progress. With it available, chat should report results and decisions, not repeat the table. Identify tasks by their live workspace labels, disambiguating with IDs; keep issue and PR links repository-qualified. Summarize what needs the human, not CI minutiae.
 
-If the board is unavailable or a text inventory is requested, show `Workspace | Stage | Agents | PR`, with 🔴 needs you, 🟡 in progress, and 🟢 orchestration complete. Include the latest role milestone and review round when needed to identify who works next. End with **Needs your attention**, one concrete action per workspace, or `None.`
+If the board is unavailable or a text inventory is requested, show `Workspace | Stage | Agents | PR`, with 🔴 needs you, 🟡 in progress, and 🟢 orchestration complete. Describe current work and who acts next, not review counters. End with **Needs your attention**, one concrete action per workspace, or `None.`
 
 After a verified merge or explicit cleanup request, apply the safety reference, cancel that task's watches, remove only its owned linked worktree/workspace, and archive its record outside the active task directory.

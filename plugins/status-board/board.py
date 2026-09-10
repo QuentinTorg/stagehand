@@ -19,7 +19,7 @@ import webbrowser
 import yaml
 
 
-COMPLETE = {"ready-for-team-review", "review-complete", "delegated-complete", "merged", "closed"}
+COMPLETE = {"complete", "ready-for-team-review", "review-complete", "delegated-complete", "merged", "closed"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
 
 
@@ -121,25 +121,19 @@ def task_summary(task, modified, workspaces, agents, now):
         label += " [workspace missing]"
     elif not workspace_id:
         label += " [workspace not created]"
-    color = 3 if stage in COMPLETE else 1 if state.get("attention_required") else 2
-    review = mapping(task.get("review"))
-    rounds = review.get("rounds_this_scope", 0)
-    scope = mapping(task.get("scope")).get("version", 1)
-    details = stage.replace("-", " ")
-    if review:
-        details += f" · r{rounds} done"
-        if isinstance(rounds, int) and stage == "reviewing":
-            details += f" · reviewing r{rounds + 1}"
-        elif stage == "resolving":
-            details += f" · fixing r{rounds}"
-    if scope != 1:
-        details += f" · scope {scope}"
+    # Human attention wins over a stale completion label; counters never drive UI.
+    needs_human = bool(state.get("attention_required")) or stage == "ready-candidate"
+    color = 1 if needs_human else 3 if stage in COMPLETE else 2
+    summary = clean(state.get("summary"))
+    details = summary or stage.replace("-", " ")
     expected = state.get("next_role") or mapping(task.get("event_recovery")).get("expected_role")
     if not expected:
         expected = {"planning": "author", "implementing": "author", "drafting": "author",
                     "resolving": "author", "reviewing": "reviewer", "finalizing": "reviewer",
                     "publishing-review": "reviewer", "delegated-working": "worker"}.get(stage)
-    next_actor = "you" if state.get("attention_required") or stage == "ready-candidate" else None if stage in COMPLETE else expected
+    next_actor = "you" if needs_human else None if stage in COMPLETE else expected
+    if next_actor == "human":
+        next_actor = "you"
     role_text = []
     for role in ROLES:
         identity = mapping(task.get("agents")).get(role)
@@ -155,15 +149,15 @@ def task_summary(task, modified, workspaces, agents, now):
     repository = clean(mapping(task.get("repository")).get("name"))
     prs = pr_links(task)
     pr = prs[0] if prs else ""
-    action = None
+    action = clean(state.get("next_action")) or None
     if state.get("attention_required"):
-        action = clean(state.get("attention_reason")) or "Human decision needed; ask the orchestrator."
+        action = clean(state.get("attention_reason")) or action or "Human decision needed; ask the orchestrator."
     elif stage == "ready-candidate":
         action = "Authorize reviewer finalization."
     elif stage == "ready-for-team-review":
         action = "Review the ready PR on GitHub; merge when satisfied."
     return {"id": str(task["task_id"]), "label": label, "color": color,
-            "phase": stage, "rounds": rounds,
+            "phase": stage, "summary": summary,
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
@@ -179,7 +173,7 @@ def snapshot(directory, offline=False):
     now = time.time()
     rows = [task_summary(task, modified, workspaces, agents, now) for task, modified in tasks]
     # Surface decisions first without changing saved workflow state or task order on disk.
-    rows.sort(key=lambda row: (0 if row["action"] and row["color"] != 3 else 1 if row["action"] else 2))
+    rows.sort(key=lambda row: row["color"])
     return rows, warnings
 
 
@@ -294,21 +288,20 @@ def pr_labels(row):
 
 
 def task_stage(row):
+    if row.get("summary"):
+        return row["summary"]
     phase = row.get("phase", "")
     label = {"ready-candidate": "Ready to finalize", "ready-for-team-review": "Ready on GitHub",
              "decision-required": "Needs a decision", "delegated-complete": "Work complete",
              "review-complete": "Review complete", "implementation-ready": "Ready for review",
              "reviewing": "In review", "resolving": "Fixing findings"}.get(phase, phase.replace("-", " ").capitalize())
-    rounds = row.get("rounds", 0)
-    if isinstance(rounds, int) and phase in {"reviewing", "resolving"}:
-        label += f" · round {rounds + 1 if phase == 'reviewing' else rounds}"
     return label or row["stage"]
 
 
 def task_next(row):
     if row["color"] == 3:
         return "GitHub review" if row.get("phase") == "ready-for-team-review" else "—"
-    if row["action"]:
+    if row["color"] == 1:
         return "You"
     actor = row["next"]
     return actor.replace("_", " ").capitalize() if actor not in {"Awaiting workflow update", "Complete"} else "Agents"
@@ -339,7 +332,7 @@ def table_line(row, width, pr_width=9):
 def detail_lines(row, width, info=False):
     width = min(width, 114)
     action = row["action"] or ("Work is handed off; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
-    entries = [("NEXT: " + action, 1 if row["action"] and row["color"] != 3 else 0, None),
+    entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
                ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
     if info:
         entries += [(row["stage"] + " · " + row["roles"], 0, None),
@@ -974,7 +967,8 @@ def main():
             print(f"● {row['label']} | {row['stage']} | {row['roles']}")
             print(f"  PURPOSE: {row['objective']}")
             if row["action"]:
-                print(f"  YOUR ACTION: {row['action']}")
+                label = "YOUR ACTION" if row["color"] == 1 else "NEXT"
+                print(f"  {label}: {row['action']}")
             print(f"  {row['repository']} | {', '.join(row['prs']) or 'No PR'} | saved {row['saved']} ago")
     elif not sys.stdout.isatty():
         parser.error("Interactive board needs a terminal; use --once for text output")

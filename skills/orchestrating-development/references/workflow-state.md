@@ -4,26 +4,17 @@ Read when dispatching work or recovering coordination. Workers do not read or wr
 
 ## Durable record
 
-Use [task-record.yaml](../assets/task-record.yaml) for development/reviewer-only work, [delegated-task-record.yaml](../assets/delegated-task-record.yaml) for bounded non-development work, or [workspace-task-record.yaml](../assets/workspace-task-record.yaml) for open-ended work. Keep active records in the configured directory, normally `.orchestrator/tasks`.
+Use the common [task-record.yaml](../assets/task-record.yaml) for all modes; omit unused fields. Keep active records in the configured directory, normally `.orchestrator/tasks`. This is a recovery note and dashboard input, not a checklist or permission system.
 
-Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, current reviewed head, review usage, next action, and human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
+Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, latest result/evidence, next action, and relevant human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
-Update `state.name`, `waiting_on`, and human `attention_required/attention_reason` together. Keep a short evidence reference in `state.decision_reason`. Runtime `idle/working/blocked/done` is separate from workflow progress. Attention means a concrete human action; dependencies or active agents do not make a task red.
+Use `state.name: active` while work or human discussion continues and `complete` for a verified orchestration handoff, not necessarily a merge. `queued`, `closed`, and `cleaned` describe waiting, ended, and removed tasks. These are observations, not phases to visit. The board also accepts existing detailed state names.
 
-The status board consumes these state names:
+Keep `state.summary` short (e.g. “Author fixing findings”), `next_role` for who acts next, and `next_action` for the concrete next step. Mark `attention_required` only for a human action and explain it in `attention_reason`; dependencies or active agents remain yellow. Runtime idle/done is not workflow completion.
 
-| States | Meaning |
-| --- | --- |
-| `queued`, `human-working`, `planning` | Authorized waiting, open-ended work, or author/human planning |
-| `implementing`, `drafting`, `resolving` | Author implementation, draft preparation, or selected fixes |
-| `reviewing`, `ready-candidate`, `finalizing` | Independent review, current-head pass awaiting permission, or authorized finalization |
-| `review-awaiting-publication`, `publishing-review` | External review proposal awaiting permission, or authorized publication |
-| `delegated-working` | Bounded non-development work |
-| `decision-required` | Human decision needed; retain prior state and reason |
-| `ready-for-team-review`, `review-complete`, `delegated-complete` | Completed orchestration handoff, not necessarily merged |
-| `merged`, `closed`, `cleaned` | Confirmed merge, ended task, or removed resources |
+Add detail only when relevant: review outcome and evidence bound to each PR/head, selected feedback, or human authorization with its action, scope, and source. Preserve published/finalized references to avoid repeating external actions. Do not maintain review counters, scope versions, phase history, or eligibility flags. Verify current Git/GitHub and cleanup conditions when acting rather than trusting saved booleans.
 
-Record role milestones with review rounds when useful, e.g. `fixing r2` or `passed r3`; do not infer them from runtime idle state. Meaningful outcomes need records; every intermediate label need not be visited.
+Save meaningful outcomes, not every message. Reference the author's plan or PR instead of duplicating it. Open-ended work needs no review fields or invented delivery stages.
 
 ## Wake registration
 
@@ -42,7 +33,7 @@ The plugin observes working-to-settled transitions and queues `HERDR_AGENT_WAKE`
 
 On a wake, inspect the identified role's latest answer and relevant artifacts, save the reconciled outcome/next action, then `ack --state-root <root> --wake <wake-id>`. A blocked notice prompts inspection of the actual permission or question, never automatic approval. No worker JSON, callbacks, control blocks, or acknowledgment gate is required.
 
-A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or stale notices must not repeat a review count, publication, or finalization. Human text may arrive with a wake appended by terminal input; preserve the human request separately and give it authority over conflicting stale observations.
+A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or stale notices must not repeat work, publication, or finalization. Human text may arrive with a wake appended by terminal input; preserve the human request separately and give it authority over conflicting stale observations.
 
 ## Reconciliation and recovery
 
@@ -61,9 +52,9 @@ Advance directly to the furthest supported state; do not replay ceremonial hando
 
 If a transcript is truncated, use available durable context or ask the same role once for its current result, head, and any missing evidence. A temporary Markdown result is appropriate when terminal output cannot be recovered. Do not demand a historical event sequence or JSON. If human authority remains uncertain, ask the human rather than accepting the worker's paraphrase as approval.
 
-Unexpected head changes invalidate a pass; establish who changed what before resuming. Count a complete review outcome once, bound to scope and head, not once per wake. Human-authorized material scope changes increment `scope.version` and `revision_count`, reset `rounds_this_scope`, and preserve `rounds_total`. Selected repairs do not reset counters. Update durable intent without making the author wait for record synchronization.
+Changed code or human intent invalidates a prior pass; establish the current changeset before reusing review evidence. Update durable intent without making the author wait for record synchronization.
 
-When adopting an older task record, preserve its evidence and ownership, replace one-shot watches with persistent ones, and stop requiring `event_recovery` or `last_event`. Tell existing roles once that the old signaling instructions no longer apply. Do not edit active sessions during package installation without a coordinated cutover.
+Existing records remain usable; ignore obsolete counters and phase gates, preserving evidence, ownership, and human decisions. No bulk migration is required. Replace one-shot watches with persistent ones when adopting a task, and retire old worker signaling instructions. Do not edit active sessions during package installation without a coordinated cutover.
 
 ## Cleanup
 

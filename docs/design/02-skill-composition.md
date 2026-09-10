@@ -4,7 +4,7 @@ Stagehand coordinates; [Skilldex](https://github.com/QuentinTorg/skilldex) suppl
 
 | Component | Consumer | Responsibility |
 | --- | --- | --- |
-| `orchestrating-development` | Coordinator | Task ownership, workspace setup, handoffs, limits, human decisions, and recoverable state |
+| `orchestrating-development` | Coordinator | Task ownership, workspace setup, handoffs, progress, human decisions, and recoverable state |
 | Herdr skill | Coordinator | Installed CLI and runtime semantics |
 | Agent Wake Relay | Herdr runtime | Persistent identity-bound watches and durable, bounded wake delivery |
 | Status board | Human | Saved progress, live activity, task navigation, and messages to the coordinator |

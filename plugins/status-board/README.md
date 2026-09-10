@@ -38,6 +38,8 @@ python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/
 
 Add `--offline` to skip live Herdr queries and disable messaging/navigation. The board never modifies task records, reads private session files, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
 
+The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) supplies a short status, next actor/action, and human-attention flag. Older records still render, but scope/review counters are ignored. Tasks needing you appear first, ongoing work next, and completed work last. Agent next steps are not labeled as human requests.
+
 ## Navigation and orchestrator view
 
 - **Tasks** (**t**): select a workspace; **Open workspace** (**o**) opens its existing Herdr session for direct agent work. Selecting a row alone never navigates away.

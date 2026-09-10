@@ -1,6 +1,6 @@
 # Workspace Safety
 
-Read for provisioning, permissions, overlap, or cleanup. The main skill owns workflow authority and review limits; this reference preserves operational caveats.
+Read for provisioning, permissions, overlap, or cleanup. The main skill owns workflow authority and progress boundaries; this reference preserves operational caveats.
 
 ## Preparation and overlap
 
@@ -24,7 +24,7 @@ Workspace rules allow bounded Herdr operations; task authorization is not a comm
 
 The interrupt-only wrapper `./scripts/herdr-interrupt-agent <name>` is for an owned agent whose work was invalidated or whose next external mutation is no longer authorized. Inspect it first; the wrapper sends Escape, not an approval.
 
-Repeated unproductive fixes, incompatible conclusions, unexplained head changes, overlap, or configured review/cost limits need intervention rather than more loops or replacement agents. Model escalation follows [Agent Selection](agent-selection.md). A long build or quiet output is not failure; inspect the owned process and its actual timeout before proposing interruption. Report elapsed time when useful without inventing token measurements.
+Repeated unproductive fixes, incompatible conclusions, unexplained head changes, overlap, or an explicit human budget need intervention rather than more loops or replacement agents. Model escalation follows [Agent Selection](agent-selection.md). A long build or quiet output is not failure; inspect the owned process and its actual timeout before proposing interruption. Report elapsed time when useful without inventing token measurements.
 
 ## Cleanup
 

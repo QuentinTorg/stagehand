@@ -53,17 +53,75 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(compose.call_args_list[1].args[2]["id"], row["id"])
         navigate.assert_not_called()
 
-    def test_compact_stages_keep_active_review_rounds(self):
+    def test_legacy_stages_remain_readable_without_counters(self):
         row = board.task_summary(self.task("reviewing"), 0, None, None, 5)
-        self.assertEqual(board.task_stage(row), "In review · round 3")
+        self.assertEqual(board.task_stage(row), "In review")
         row = board.task_summary(self.task("resolving"), 0, None, None, 5)
-        self.assertEqual(board.task_stage(row), "Fixing findings · round 2")
+        self.assertEqual(board.task_stage(row), "Fixing findings")
 
     def test_prose_does_not_stretch_across_ultrawide_screen(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "An intentionally long description. " * 40
         self.assertTrue(all(len(line) <= 110 for line, _, _ in board.detail_lines(row, 320)))
         self.assertTrue(all(len(line) <= 120 for line, _, _ in board.controller_lines({"status": "idle", "output": row["objective"]}, 320)))
+
+    def test_common_record_shows_work_and_next_actor_without_review_metadata(self):
+        for mode in ("development", "reviewer-only", "delegated-work", "workspace-only"):
+            task = {"task_id": "simple", "mode": mode, "state": {
+                "name": "active", "summary": "Author fixing findings", "next_role": "author",
+                "next_action": "Apply the selected fix", "attention_required": False}}
+            row = board.task_summary(task, 0, None, None, 5)
+            self.assertEqual(board.task_stage(row), "Author fixing findings")
+            self.assertEqual(board.task_next(row), "Author")
+            self.assertEqual(row["color"], 2)
+            self.assertEqual(board.detail_lines(row, 100)[0], ("NEXT: Apply the selected fix", 0, []))
+
+    def test_obsolete_counters_do_not_change_display(self):
+        task = self.task()
+        before = board.task_summary(task, 0, None, None, 5)
+        task.update(scope={"version": 50}, review={"rounds_this_scope": 99, "rounds_total": 999},
+                    limits={"max_rounds_total": 6})
+        self.assertEqual(before, board.task_summary(task, 0, None, None, 5))
+
+    def test_text_snapshot_distinguishes_worker_steps_from_human_actions(self):
+        task = {"task_id": "simple", "state": {"name": "active", "next_role": "author",
+                "next_action": "Apply the fix"}}
+        for attention in (False, True):
+            task["state"]["attention_required"] = attention
+            row = board.task_summary(task, 0, None, None, 5)
+            with patch.object(board, "snapshot", return_value=([row], [])), patch.object(
+                board.sys, "argv", ["board", "--tasks", "/unused", "--once", "--offline"]
+            ), patch("builtins.print") as output:
+                board.main()
+            lines = [call.args[0] for call in output.call_args_list]
+            label = "YOUR ACTION" if attention else "NEXT"
+            self.assertIn(f"  {label}: Apply the fix", lines)
+            self.assertEqual(any("YOUR ACTION:" in line for line in lines), attention)
+
+    def test_complete_is_green_but_explicit_human_attention_wins(self):
+        task = {"task_id": "simple", "state": {"name": "complete", "summary": "Ready on GitHub"}}
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["color"], 3)
+        self.assertEqual(board.task_next(row), "—")
+        task["state"].update(attention_required=True, attention_reason="Confirm the changed scope")
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["color"], 1)
+        self.assertEqual(board.task_next(row), "You")
+        self.assertEqual(row["action"], "Confirm the changed scope")
+
+    def test_common_template_parses_and_renders_without_optional_sections(self):
+        path = Path(__file__).parents[3] / "skills/orchestrating-development/assets/task-record.yaml"
+        task = board.yaml.safe_load(path.read_text())
+        task.pop("development_target")
+        row = board.task_summary(task, 0, None, None, 5)
+        self.assertEqual(row["color"], 2)
+        self.assertEqual(row["prs"], [])
+
+    def test_ready_candidate_remains_a_human_decision_for_legacy_records(self):
+        row = board.task_summary(self.task("ready-candidate"), 0, None, None, 5)
+        self.assertEqual(row["color"], 1)
+        self.assertEqual(board.task_next(row), "You")
+        self.assertEqual(row["action"], "Authorize reviewer finalization.")
 
     def test_task_frame_has_matching_corners_and_separate_scroll_rail(self):
         for width in (40, 140):
@@ -412,7 +470,7 @@ class BoardTests(unittest.TestCase):
         row = board.task_summary(task, 0, [{"workspace_id": "w1", "label": "new-name"}],
             [{"name": "reviewer", "workspace_id": "w1", "agent_status": "done"}], 5)
         self.assertEqual((row["label"], row["color"]), ("new-name", 2))
-        self.assertIn("reviewing r3", row["stage"])
+        self.assertEqual("reviewing", row["stage"])
         self.assertIn("Reviewer done → reviewer", row["roles"])
         self.assertIsNone(row["action"])
         self.assertEqual(task["workspace"]["label"], "old-name")
@@ -422,7 +480,7 @@ class BoardTests(unittest.TestCase):
         del task["event_recovery"]
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual("author", row["next"])
-        self.assertIn("fixing r2", row["stage"])
+        self.assertEqual("resolving", row["stage"])
         task["state"].update(attention_required=True, attention_reason="Choose findings")
         row = board.task_summary(task, 0, None, None, 5)
         self.assertEqual("you", row["next"])
@@ -452,7 +510,7 @@ class BoardTests(unittest.TestCase):
         decision["state"].update(attention_required=True, attention_reason="Choose scope")
         with patch.object(board, "read_tasks", return_value=([(t, 0) for t in [passive, ready, decision]], [])):
             rows, _ = board.snapshot(Path("/unused"), offline=True)
-        self.assertEqual([row["id"] for row in rows], ["decision", "ready", "passive"])
+        self.assertEqual([row["id"] for row in rows], ["decision", "passive", "ready"])
 
     def test_bad_record_does_not_hide_other_tasks_or_modify_files(self):
         with tempfile.TemporaryDirectory() as directory:

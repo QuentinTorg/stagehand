@@ -100,8 +100,9 @@ current changeset identity remain authoritative when a role must be replaced.
 - The original author fixes findings and the original reviewer rereviews them.
   Spawning a fresh fixer or reviewer each round wastes context and weakens
   accountability.
-- Review and scope loops are bounded. Repeated failures, stale changeset identity,
-  conflicting conclusions, or lack of progress return to the human.
+- Review continues while it makes useful progress within authorized work, not
+  until a counter expires. Repeated failures, stale changeset identity,
+  conflicting conclusions, or substantially more work return to the human.
 - Repository-specific paths, build policy, hosts, and initialization behavior
   belong in private local configuration rather than the reusable skill.
 
