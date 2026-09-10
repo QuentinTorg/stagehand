@@ -1,0 +1,185 @@
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).parents[1] / "agent-wake"
+loader = importlib.machinery.SourceFileLoader("agent_wake", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+wake = importlib.util.module_from_spec(spec)
+loader.exec_module(wake)
+
+
+class WakePluginTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.config_dir = self.root / "plugin-config"
+        self.state_root = self.root / "wake-state"
+        self.config_dir.mkdir()
+        self.state_root.mkdir()
+        (self.config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "consumers": [
+                        {"root": str(self.state_root), "target": "controller_agent"}
+                    ],
+                }
+            )
+        )
+        self.environment = mock.patch.dict(
+            os.environ,
+            {"HERDR_PLUGIN_CONFIG_DIR": str(self.config_dir)},
+            clear=False,
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def arm(self):
+        args = wake._parser().parse_args(
+            [
+                "arm",
+                "--state-root",
+                str(self.state_root),
+                "--key",
+                "example",
+                "--workspace-id",
+                "w2",
+                "--workspace-label",
+                "example-workspace",
+                "--pane",
+                "w2:p1",
+                "--agent",
+                "example_author",
+                "--metadata",
+                '{"role":"author"}',
+            ]
+        )
+        with mock.patch("builtins.print"):
+            args.run(args)
+
+    def emit(self, status):
+        event = {
+            "event": "pane.agent_status_changed",
+            "data": {
+                "type": "pane_agent_status_changed",
+                "pane_id": "w2:p1",
+                "workspace_id": "w2",
+                "agent_status": status,
+                "agent": "example_author",
+            },
+        }
+        with mock.patch.dict(os.environ, {"HERDR_PLUGIN_EVENT_JSON": json.dumps(event)}):
+            wake._hook()
+
+    def documents(self, name):
+        directory = self.state_root / name
+        return [json.loads(path.read_text()) for path in directory.glob("*.json")]
+
+    def test_working_then_done_wakes_once(self):
+        self.arm()
+        prompts = []
+
+        def herdr(*args):
+            if args[:3] == ("agent", "get", "w2:p1"):
+                return {
+                    "result": {
+                        "agent": {
+                            "agent_status": "done",
+                            "pane_id": "w2:p1",
+                            "workspace_id": "w2",
+                            "name": "example_author",
+                        }
+                    }
+                }, None
+            if args[:3] == ("agent", "get", "controller_agent"):
+                return {"result": {"agent": {"agent_status": "idle"}}}, None
+            if args[:3] == ("agent", "prompt", "controller_agent"):
+                prompts.append(args[3])
+                return {"result": {"type": "agent_prompted"}}, None
+            self.fail(f"unexpected Herdr call: {args}")
+
+        with mock.patch.object(wake, "_herdr", side_effect=herdr), mock.patch.object(
+            wake.time, "sleep"
+        ):
+            self.emit("working")
+            self.emit("done")
+            self.emit("done")
+
+        self.assertEqual(1, len(prompts))
+        self.assertTrue(prompts[0].startswith("HERDR_AGENT_WAKE ["))
+        self.assertTrue(self.documents("inbox")[0]["notified"])
+        self.assertEqual("fired", self.documents("watches")[0]["state"])
+
+    def test_settled_without_observed_working_is_ignored(self):
+        self.arm()
+        with mock.patch.object(wake, "_herdr") as herdr:
+            self.emit("idle")
+        herdr.assert_not_called()
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual("armed", self.documents("watches")[0]["state"])
+
+    def test_busy_target_defers_until_flush(self):
+        self.arm()
+        target_status = ["working", "working", "idle"]
+        prompts = []
+
+        def herdr(*args):
+            if args[:3] == ("agent", "get", "w2:p1"):
+                return {"result": {"agent": {"agent_status": "done"}}}, None
+            if args[:3] == ("agent", "get", "controller_agent"):
+                return {
+                    "result": {"agent": {"agent_status": target_status.pop(0)}}
+                }, None
+            if args[:3] == ("agent", "prompt", "controller_agent"):
+                prompts.append(args[3])
+                return {"result": {"type": "agent_prompted"}}, None
+            self.fail(f"unexpected Herdr call: {args}")
+
+        with mock.patch.object(wake, "_herdr", side_effect=herdr), mock.patch.object(
+            wake.time, "sleep"
+        ):
+            self.emit("working")
+            self.emit("done")
+            self.assertFalse(self.documents("inbox")[0]["notified"])
+            wake._flush()
+
+        self.assertEqual(1, len(prompts))
+        self.assertTrue(self.documents("inbox")[0]["notified"])
+
+    def test_target_settling_during_delivery_recheck_is_not_missed(self):
+        self.arm()
+        target_status = ["working", "idle"]
+        prompts = []
+
+        def herdr(*args):
+            if args[:3] == ("agent", "get", "w2:p1"):
+                return {"result": {"agent": {"agent_status": "done"}}}, None
+            if args[:3] == ("agent", "get", "controller_agent"):
+                return {
+                    "result": {"agent": {"agent_status": target_status.pop(0)}}
+                }, None
+            if args[:3] == ("agent", "prompt", "controller_agent"):
+                prompts.append(args[3])
+                return {"result": {"type": "agent_prompted"}}, None
+            self.fail(f"unexpected Herdr call: {args}")
+
+        with mock.patch.object(wake, "_herdr", side_effect=herdr), mock.patch.object(
+            wake.time, "sleep"
+        ):
+            self.emit("working")
+            self.emit("done")
+
+        self.assertEqual(1, len(prompts))
+        self.assertTrue(self.documents("inbox")[0]["notified"])
+
+
+if __name__ == "__main__":
+    unittest.main()

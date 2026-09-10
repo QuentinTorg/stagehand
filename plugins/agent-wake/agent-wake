@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""Durable, one-shot wake relay between Herdr agents."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+
+PLUGIN_ID = "quentintorg.agent-wake"
+SETTLED = {"idle", "done", "blocked"}
+TARGET_READY = {"idle", "done"}
+MAX_NOTIFY_ATTEMPTS = 3
+BUSY_RECHECK_SECONDS = 0.5
+IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _json_file(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return default
+
+
+def _atomic_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream, sort_keys=True)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+def _config_dir() -> Path:
+    configured = os.environ.get("HERDR_PLUGIN_CONFIG_DIR")
+    if configured:
+        return Path(configured)
+    result = subprocess.run(
+        ["herdr", "plugin", "config-dir", PLUGIN_ID],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _config() -> dict:
+    return _json_file(_config_dir() / "config.json", {"version": 1, "consumers": []})
+
+
+@contextlib.contextmanager
+def _locked(state_root: Path):
+    if not state_root.is_dir():
+        raise FileNotFoundError(f"configured wake state directory does not exist: {state_root}")
+    root = state_root
+    with (root / "lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield root
+
+
+def _documents(directory: Path):
+    if not directory.exists():
+        return []
+    return [(path, _json_file(path, None)) for path in sorted(directory.glob("*.json"))]
+
+
+def _herdr(*arguments: str) -> tuple[dict | None, str | None]:
+    binary = os.environ.get("HERDR_BIN_PATH", "herdr")
+    try:
+        result = subprocess.run(
+            [binary, *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, str(error)
+    output = result.stdout.strip()
+    try:
+        payload = json.loads(output) if output else None
+    except json.JSONDecodeError:
+        payload = None
+    if result.returncode != 0:
+        return payload, result.stderr.strip() or output or f"exit {result.returncode}"
+    return payload, None
+
+
+def _agent(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    result = payload.get("result", payload)
+    if isinstance(result, dict) and isinstance(result.get("agent"), dict):
+        return result["agent"]
+    return result if isinstance(result, dict) else {}
+
+
+def _status(agent: dict) -> str:
+    return str(agent.get("agent_status") or agent.get("status") or "unknown")
+
+
+def _configured_consumers() -> list[dict]:
+    entries = _config().get("consumers", [])
+    return [entry for entry in entries if isinstance(entry, dict) and entry.get("root")]
+
+
+def _configure(args) -> int:
+    state_root = Path(args.state_root).resolve()
+    state_root.mkdir(parents=True, exist_ok=True)
+    root = str(state_root)
+    config_path = _config_dir() / "config.json"
+    config = _json_file(config_path, {"version": 1, "consumers": []})
+    entries = [
+        item
+        for item in config.get("consumers", [])
+        if isinstance(item, dict) and item.get("root") != root
+    ]
+    entries.append({"root": root, "target": args.target})
+    config["version"] = 1
+    config["consumers"] = entries
+    _atomic_json(config_path, config)
+    print(json.dumps(entries[-1], sort_keys=True))
+    return 0
+
+
+def _arm(args) -> int:
+    state_root = Path(args.state_root).resolve()
+    consumers = {
+        Path(item["root"]).resolve(): item for item in _configured_consumers()
+    }
+    if state_root not in consumers:
+        raise SystemExit(f"wake state directory is not configured for {PLUGIN_ID}: {state_root}")
+    target = consumers[state_root].get("target")
+    if not target:
+        raise SystemExit("no target agent was supplied or configured")
+    try:
+        metadata = json.loads(args.metadata)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid metadata JSON: {error}")
+    if not isinstance(metadata, dict):
+        raise SystemExit("metadata must be a JSON object")
+    with _locked(state_root) as root:
+        for path, watch in _documents(root / "watches"):
+            if not watch or watch.get("state") != "armed" or watch.get("pane_id") != args.pane:
+                continue
+            identity = (watch.get("key"), watch.get("workspace_id"), watch.get("agent_name"))
+            if identity == (args.key, args.workspace_id, args.agent):
+                print(json.dumps(watch, sort_keys=True))
+                return 0
+            raise SystemExit(f"pane already has an active wake watch: {path.stem}")
+        now = time.time()
+        watch = {
+            "version": 1,
+            "id": uuid.uuid4().hex,
+            "key": args.key,
+            "metadata": metadata,
+            "workspace_id": args.workspace_id,
+            "workspace_label": args.workspace_label,
+            "pane_id": args.pane,
+            "agent_name": args.agent,
+            "observed_working": bool(args.observed_working),
+            "state": "armed",
+            "created_at": now,
+            "updated_at": now,
+        }
+        _atomic_json(root / "watches" / f"{watch['id']}.json", watch)
+    print(json.dumps(watch, sort_keys=True))
+    return 0
+
+
+def _remove(args, acknowledge: bool) -> int:
+    state_root = Path(args.state_root).resolve()
+    identifier = args.wake if acknowledge else args.watch
+    if not IDENTIFIER.fullmatch(identifier):
+        raise SystemExit("wake identifiers must be 32 lowercase hexadecimal characters")
+    removed = False
+    with _locked(state_root) as root:
+        paths = [
+            root / "watches" / f"{identifier}.json",
+            root / "inbox" / f"{identifier}.json",
+        ]
+        for path in paths:
+            if path.exists():
+                path.unlink()
+                removed = True
+    print(json.dumps({"id": identifier, "removed": removed}))
+    return 0
+
+
+def _event() -> dict:
+    raw = os.environ.get("HERDR_PLUGIN_EVENT_JSON", "{}")
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    for key in ("data", "payload"):
+        if isinstance(event.get(key), dict):
+            return event[key]
+    return event
+
+
+def _event_value(event: dict, name: str):
+    nested = event.get("agent")
+    return event.get(name) or (nested.get(name) if isinstance(nested, dict) else None)
+
+
+def _confirm_settled(watch: dict) -> bool:
+    time.sleep(0.2)
+    payload, error = _herdr("agent", "get", watch["pane_id"])
+    if error:
+        return False
+    agent = _agent(payload)
+    if _status(agent) not in SETTLED:
+        return False
+    pane = agent.get("pane_id") or agent.get("id")
+    workspace = agent.get("workspace_id")
+    name = agent.get("name") or agent.get("agent_name")
+    return (
+        (not pane or pane == watch["pane_id"])
+        and (not workspace or workspace == watch["workspace_id"])
+        and (not name or name == watch["agent_name"])
+    )
+
+
+def _record_event_for(state_root: Path, event: dict) -> None:
+    pane_id = _event_value(event, "pane_id")
+    status = str(_event_value(event, "agent_status") or _event_value(event, "status") or "")
+    if not pane_id or status not in ({"working"} | SETTLED):
+        return
+    with _locked(state_root) as root:
+        matches = [
+            (path, watch)
+            for path, watch in _documents(root / "watches")
+            if watch and watch.get("state") == "armed" and watch.get("pane_id") == pane_id
+        ]
+        for path, watch in matches:
+            if status == "working":
+                watch["observed_working"] = True
+                watch["updated_at"] = time.time()
+                _atomic_json(path, watch)
+                continue
+            # A fresh working transition distinguishes the dispatched turn from
+            # a pane that was already idle when its watch was armed.
+            if not watch.get("observed_working") or not _confirm_settled(watch):
+                continue
+            now = time.time()
+            watch["state"] = "fired"
+            watch["updated_at"] = now
+            wake = {
+                "version": 1,
+                "id": watch["id"],
+                "key": watch["key"],
+                "metadata": watch["metadata"],
+                "workspace_id": watch["workspace_id"],
+                "workspace_label": watch["workspace_label"],
+                "pane_id": watch["pane_id"],
+                "agent_name": watch["agent_name"],
+                "status": status,
+                "settled_at": now,
+                "notified": False,
+                "attempts": 0,
+                "last_error": None,
+            }
+            _atomic_json(path, watch)
+            _atomic_json(root / "inbox" / f"{wake['id']}.json", wake)
+
+
+def _notify_consumer(state_root: Path, configured_target: str) -> None:
+    with _locked(state_root) as root:
+        pending = [
+            (path, wake)
+            for path, wake in _documents(root / "inbox")
+            if wake and not wake.get("notified") and wake.get("attempts", 0) < MAX_NOTIFY_ATTEMPTS
+        ]
+        if not pending:
+            return
+        target = configured_target
+        payload, error = _herdr("agent", "get", target)
+        if error:
+            return
+        if _status(_agent(payload)) not in TARGET_READY:
+            # Close the narrow race where the target settles just before this
+            # inbox write; longer work remains queued for its later status hook.
+            time.sleep(BUSY_RECHECK_SECONDS)
+            payload, error = _herdr("agent", "get", target)
+            if error or _status(_agent(payload)) not in TARGET_READY:
+                return
+        notices = [
+            {
+                "id": wake["id"],
+                "key": wake["key"],
+                "metadata": wake["metadata"],
+                "workspace": wake.get("workspace_label") or wake["workspace_id"],
+                "pane": wake["pane_id"],
+                "status": wake["status"],
+            }
+            for _, wake in pending
+        ]
+        message = "HERDR_AGENT_WAKE " + json.dumps(notices, separators=(",", ":"), sort_keys=True)
+        response, prompt_error = _herdr("agent", "prompt", target, message)
+        accepted = (
+            not prompt_error
+            and isinstance(response, dict)
+            and (response.get("result") or {}).get("type") == "agent_prompted"
+        )
+        for path, wake in pending:
+            if accepted:
+                wake["notified"] = True
+                wake["notified_at"] = time.time()
+                wake["last_error"] = None
+            else:
+                wake["attempts"] = wake.get("attempts", 0) + 1
+                wake["last_error"] = prompt_error or "Herdr did not confirm agent_prompted"
+            _atomic_json(path, wake)
+
+
+def _flush() -> int:
+    for entry in _configured_consumers():
+        state_root = Path(entry["root"]).resolve()
+        if state_root.is_dir():
+            _notify_consumer(state_root, entry.get("target", ""))
+    return 0
+
+
+def _hook() -> int:
+    event = _event()
+    for entry in _configured_consumers():
+        state_root = Path(entry["root"]).resolve()
+        if state_root.is_dir():
+            _record_event_for(state_root, event)
+            _notify_consumer(state_root, entry.get("target", ""))
+    return 0
+
+
+def _status_command(args) -> int:
+    state_root = Path(args.state_root).resolve()
+    with _locked(state_root) as root:
+        watches = [value for _, value in _documents(root / "watches") if value]
+        inbox = [value for _, value in _documents(root / "inbox") if value]
+    print(json.dumps({"watches": watches, "inbox": inbox}, sort_keys=True))
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    configure = commands.add_parser("configure")
+    configure.add_argument("--state-root", required=True)
+    configure.add_argument("--target", required=True)
+    configure.set_defaults(run=_configure)
+    arm = commands.add_parser("arm")
+    arm.add_argument("--state-root", required=True)
+    arm.add_argument("--key", required=True)
+    arm.add_argument("--workspace-id", required=True)
+    arm.add_argument("--workspace-label", required=True)
+    arm.add_argument("--pane", required=True)
+    arm.add_argument("--agent", required=True)
+    arm.add_argument("--metadata", default="{}")
+    arm.add_argument("--observed-working", action="store_true")
+    arm.set_defaults(run=_arm)
+    cancel = commands.add_parser("cancel")
+    cancel.add_argument("--state-root", required=True)
+    cancel.add_argument("--watch", required=True)
+    cancel.set_defaults(run=lambda args: _remove(args, False))
+    acknowledge = commands.add_parser("ack")
+    acknowledge.add_argument("--state-root", required=True)
+    acknowledge.add_argument("--wake", required=True)
+    acknowledge.set_defaults(run=lambda args: _remove(args, True))
+    status = commands.add_parser("status")
+    status.add_argument("--state-root", required=True)
+    status.set_defaults(run=_status_command)
+    commands.add_parser("hook").set_defaults(run=lambda _args: _hook())
+    commands.add_parser("flush").set_defaults(run=lambda _args: _flush())
+    return parser
+
+
+def main() -> int:
+    try:
+        args = _parser().parse_args()
+        return args.run(args)
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"agent-wake: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

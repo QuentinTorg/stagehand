@@ -14,7 +14,7 @@ The operating model is:
 - human-authorized PR finalization by the reviewer; and
 - final review and merge by humans in GitHub.
 
-This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, cascading worktree-group closure, and personal configuration leaking into a portable package. Long-lived orchestrators also need concise, single-owner instructions to preserve context across many tasks.
+This design responds to observed failures: inferred plan approval, missing or misrouted events, stale task records, recursive agents, unbounded review cycles, scope bloat, Hunk watch-mode comment loss, incorrect submodule review roots, noisy dashboards, unsafe workspace cleanup, cascading worktree-group closure, and personal configuration leaking into a portable package. A bundled Herdr plugin supplies durable, bounded wakeups for watched agent turns without interpreting workflow state. Long-lived orchestrators still need concise, single-owner instructions to preserve context across many tasks.
 
 See [Stagehand design principles](../../docs/design/01-design-principles.md) and [skill composition](../../docs/design/02-skill-composition.md) for product-level rationale.
 
@@ -39,7 +39,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 9. Return only human-selected material findings to the author. Every changed head receives a complete rereview by the same reviewer.
 10. Treat direct human scope changes in the author pane as sufficient authority, synchronize them through a versioned scope update without duplicate approval, and require a new phase-zero review.
 11. Require human authorization for reviewer finalization, reviewer-only publication, exceptional permissions, risky actions, budget overrides, and ambiguous cleanup. Reviewer-only publication puts attachable code-specific findings inline and reserves the body for summary and non-attachable findings. Humans always merge.
-12. Reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
+12. Arm one-shot wake watches only for orchestrator-owned role handoffs. Treat their working-to-settled notifications as runtime hints, then reconcile missing events to the furthest independently proven state with at most one catch-up request; preserve ambiguity.
 13. Report all open tasks with the fixed dashboard and a single human-action section.
 14. Interpret ordinary task/workspace cleanup language as guarded removal of the uniquely identified task's recorded linked workspace and worktree, then archive its cleaned record outside the active set; preserve ambiguous targets.
 15. Keep delegated work to one worker, two outcomes, and no PR or review loop; landed changes require development authorization.
@@ -52,6 +52,7 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 - Default limits are three accepted review outcomes per scope and six total. A third material scope revision requires a progress and cost check.
 - Repeated findings, no-progress fixes, conflicting conclusions, missing events, unknown head changes, or overlap trigger escalation rather than another loop.
 - Herdr lifecycle proves activity only. Git and GitHub prove artifacts only. Neither proves human authority or reviewer conclusions.
+- Wake delivery is deduplicated and durable with bounded retries; it never creates workflow authority or an unbounded monitor.
 - The orchestrator never implements, reviews, fixes, merges, pushes primary branches, force-pushes, bypasses policy, publishes unapproved reviews, or cleans ambiguous work.
 - The orchestrator never invokes `herdr workspace close`; audited task cleanup uses worktree removal on the recorded linked workspace.
 - Product agents receive role contracts, not this skill or private orchestration configuration.
@@ -66,12 +67,13 @@ The canonical procedure is [SKILL.md](../orchestrating-development/SKILL.md). It
 - [hunk-coordination.md](../orchestrating-development/references/hunk-coordination.md): pane topology, changeset identity, reload order, and recovery;
 - [installation.md](../orchestrating-development/references/installation.md): installation only;
 - `assets/`: rendered role prompts, event controls, task-record schema, and Codex rules;
-- repository scripts: narrowly validated Hunk launch and agent interruption.
+- repository scripts: narrowly validated Hunk launch and agent interruption;
+- bundled Herdr plugin: filtered one-shot watches, durable wake delivery, and duplicate suppression.
 
 Root `AGENTS.md` owns portable workspace policy. Personal repositories, paths, hosts, models, initialization, and stricter limits belong in the ignored local overlay represented by `templates/AGENTS.local.md`. SkillDex supplies complementary author/reviewer skills; Herdr supplies terminal control.
 
 ## 6. Evaluation
 
-[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the executable contract. Compare runs with and without the skill and preserve transcripts. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
+[Manual acceptance scenarios](../orchestrating-development/evals/evals.md) are the workflow contract. The bundled generic relay also has automated unit tests under `plugins/agent-wake/tests`. The suite covers setup guidance, triggering, authority gates, repository preparation, role persistence, wake and event recovery, Hunk identity and comment preservation, stale heads, scope and review budgets, permissions, conflicts, reviewer-only publication, post-review reentry, dashboard output, and guarded cleanup.
 
 Every passing run must preserve one task/workspace/worktree identity, bounded roles and loops, independently validated transitions, human-owned scope and finalization, reviewer independence, no primary-branch mutation or merge, and no loss of dirty, active, unrecoverable, or ambiguous state.

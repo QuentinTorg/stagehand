@@ -32,7 +32,7 @@ Use [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to create `.local
 
 ## Package and runtime boundaries
 
-- `skills/`, `scripts/`, `docs/`, and packaged rules are portable source.
+- `skills/`, `plugins/`, `scripts/`, `docs/`, and packaged rules are portable source.
 - `AGENTS.md` is the portable workspace bootstrap contract.
 - `.local/` contains private machine and user configuration and is not versioned here.
 - `.orchestrator/` contains mutable task records and scratch state and is not versioned here.

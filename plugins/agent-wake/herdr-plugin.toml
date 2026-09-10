@@ -1,0 +1,13 @@
+id = "quentintorg.agent-wake"
+name = "Agent Wake Relay"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Wake a target Herdr agent when an explicitly watched agent turn settles."
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["./agent-wake", "flush"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./agent-wake", "hook"]

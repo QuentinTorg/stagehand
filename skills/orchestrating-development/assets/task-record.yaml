@@ -88,6 +88,10 @@ event_recovery:
   expected_events: []
   attempts: 0
   last_attempt_reason: null
+wake:
+  watch_id: null
+  role: null
+  pane: null
 cleanup:
   eligible: false
   requested_by: null

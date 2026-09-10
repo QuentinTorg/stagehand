@@ -108,6 +108,19 @@ prefix_rule(
     ],
 )
 
+# The bundled relay manages one-shot watches in ignored controller state.
+prefix_rule(
+    pattern = ["./plugins/agent-wake/agent-wake", ["arm", "cancel", "ack", "status"]],
+    decision = "allow",
+    justification = "Manage bounded wake watches for authorized Stagehand role turns.",
+    match = [
+        "./plugins/agent-wake/agent-wake arm --state-root /tmp/stagehand/.orchestrator/wake --key example --workspace-id w2 --workspace-label example --pane w2:p1 --agent example_author --metadata {\"role\":\"author\"}",
+        "./plugins/agent-wake/agent-wake cancel --state-root /tmp/stagehand/.orchestrator/wake --watch 0123456789abcdef0123456789abcdef",
+        "./plugins/agent-wake/agent-wake ack --state-root /tmp/stagehand/.orchestrator/wake --wake 0123456789abcdef0123456789abcdef",
+        "./plugins/agent-wake/agent-wake status --state-root /tmp/stagehand/.orchestrator/wake",
+    ],
+)
+
 # Hunk launch and agent interruption use validated repository scripts rather
 # than granting arbitrary remote terminal execution or input.
 prefix_rule(
