@@ -310,6 +310,10 @@ def clipped(text, width):
 
 
 def columns(width, pr_width=9):
+    if width < 100:
+        # Keep the next actor and PRs visible; full status remains in Details.
+        roles = min(12, max(1, width // 5))
+        return max(1, width - pr_width - roles - 4), 0, roles
     budget = max(1, width - pr_width - 6)
     name, stage = min(48, budget // 2), min(30, budget // 3)
     return name, stage, min(20, max(1, budget - name - stage))
@@ -317,6 +321,26 @@ def columns(width, pr_width=9):
 
 def pr_labels(row):
     return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1], url) for url in row.get("prs", [])]
+
+
+def pr_cell(row, width):
+    """Fit whole clickable IDs; an overflow target opens the complete PR list."""
+    labels = pr_labels(row)
+    if not labels:
+        return clipped(row.get("pr") or "—", width), []
+    text, spans = "", []
+    for index, (label, url) in enumerate(labels):
+        separator = ", " if text else ""
+        remaining = len(labels) - index - 1
+        reserve = len(f", +{remaining}") if remaining else 0
+        if len(text) + len(separator) + len(label) + reserve > width:
+            start = len(text) + len(separator)
+            overflow = f"+{len(labels) - index}"
+            return text + separator + overflow, spans + [(start, start + len(overflow), None)]
+        start = len(text) + len(separator)
+        text += separator + label
+        spans.append((start, len(text), url))
+    return text, spans
 
 
 def task_stage(row):
@@ -351,14 +375,9 @@ def open_pr(url):
 
 
 def table_line(row, width, pr_width=9):
-    if width < 100:
-        name_width = max(12, width // 2)
-        return f"{clipped(row['label'], name_width):<{name_width}}  {row['stage']}"
     name_width, stage_width, roles_width = columns(width, pr_width)
-    pr = ", ".join(label for label, _ in pr_labels(row)) or row.get("pr") or "—"
-    return (f"{clipped(row['label'], name_width):<{name_width}}  "
-            f"{clipped(row['stage'], stage_width):<{stage_width}}  "
-            f"{clipped(row['roles'], roles_width):<{roles_width}}  {clipped(pr, pr_width)}")
+    fields = [(row['label'], name_width), (row['stage'], stage_width), (row['roles'], roles_width)]
+    return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + "  " + pr_cell(row, pr_width)[0]
 
 
 def detail_lines(row, width, info=False):
@@ -367,7 +386,7 @@ def detail_lines(row, width, info=False):
     entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
                ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
     if info:
-        entries += [(row["stage"] + " · " + row["roles"], 0, None),
+        entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
                     (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
     if info and row.get("location"):
         entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
@@ -828,20 +847,17 @@ def display_loop(screen, args, executor):
                     screen.addnstr(y, 3, "●", 1, style | (curses.A_REVERSE if i == selected else 0))
                 except curses.error:
                     pass
-                if width - 8 >= 100 and row["prs"]:
-                    pr_x = 5 + sum(columns(width - 8, pr_width)) + 6
-                    end = min(pr_x + pr_width, width - 2)
-                    for label, url in pr_labels(row):
-                        length = min(len(label), end - pr_x)
-                        if length <= 0:
-                            break
+                if row["prs"]:
+                    sizes = columns(width - 8, pr_width)
+                    pr_x = 5 + sum(sizes) + 2 * sum(size > 0 for size in sizes)
+                    text, spans = pr_cell(row, pr_width)
+                    for left, right, url in spans:
                         try:
                             style = curses.A_UNDERLINE | (curses.A_REVERSE if i == selected else 0)
-                            screen.addnstr(y, pr_x, label, length, style)
-                            table_links.setdefault(y, []).append((pr_x, pr_x + length, url))
+                            screen.addnstr(y, pr_x + left, text[left:right], right - left, style)
+                            table_links.setdefault(y, []).append((pr_x + left, pr_x + right, url))
                         except curses.error:
                             pass
-                        pr_x += len(label) + 2
             draw_task_frame(screen, width, visible, selected, len(rows),
                             f"Workspaces {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
             detail_y = 7 + visible
@@ -977,7 +993,10 @@ def display_loop(screen, args, executor):
                         selected = index
                         for left, right, url in table_links.get(y, []):
                             if left <= x < right:
-                                open_pr(url)
+                                if url:
+                                    open_pr(url)
+                                else:
+                                    action = "pr-list"
                                 break
                     else:
                         for left, right, url in detail_links.get(y, []):
@@ -992,6 +1011,11 @@ def display_loop(screen, args, executor):
             show_help, detail_offset = not show_help, 0
         elif action == "info":
             info, detail_offset = not info, 0
+        elif action == "pr-list":
+            info = True
+            # Details place links last; scroll directly to them, including on selection change.
+            detail_task = rows[selected]["id"]
+            detail_offset = len(detail_lines(rows[selected], width, info=True))
         elif action and action.startswith("role-"):
             preview_role, preview_offset, info = action[5:], None, False
         elif action == "latest":

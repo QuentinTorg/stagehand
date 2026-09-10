@@ -329,6 +329,52 @@ class BoardTests(unittest.TestCase):
             self.assertIn(text, output)
         self.assertNotIn("\n\n\n", output)
 
+    def test_compact_table_keeps_next_actor_and_whole_pr_numbers(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(label="A very long workspace name " * 3, stage="A lengthy status " * 3,
+                   roles="Reviewer", prs=["https://github.com/team/repo/pull/123456"])
+        for width in (52, 60, 80, 99, 100, 140, 300):
+            line = board.table_line(row, width, 9)
+            self.assertLessEqual(len(line), width)
+            self.assertIn("#123456", line)
+            self.assertIn("Reviewer", line)
+        details = "\n".join(line for line, _, _ in board.detail_lines(row, 80, info=True))
+        self.assertIn("A very long workspace name", details)
+
+    def test_pr_overflow_is_explicit_and_never_links_partial_ids(self):
+        row = {"prs": [f"https://github.com/team/repo/pull/{number}" for number in (123456, 234567, 345678, 456789)]}
+        for width in (9, 12, 20, 40):
+            text, spans = board.pr_cell(row, width)
+            self.assertLessEqual(len(text), width)
+            visible = 0
+            for left, right, url in spans:
+                if url:
+                    self.assertEqual(text[left:right], "#" + url.rsplit("/", 1)[-1])
+                    visible += 1
+                else:
+                    self.assertEqual(text[left:right], f"+{len(row['prs']) - visible}")
+            if visible < len(row["prs"]):
+                self.assertIsNone(spans[-1][2])
+
+    def test_overflow_click_opens_full_pr_details_in_narrow_pane(self):
+        executor = Mock()
+        pending = Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["prs"] = [f"https://github.com/team/repo/pull/{n}" for n in (123456, 234567, 345678, 456789)]
+        pending.set_result(([row], [], {"status": "idle", "output": "Ready"}))
+        executor.submit.return_value = pending
+        width = 88
+        pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))
+        sizes = board.columns(width - 8, pr_width)
+        start = 5 + sum(sizes) + 2 * sum(size > 0 for size in sizes)
+        _, spans = board.pr_cell(row, pr_width)
+        with patch.object(board, "mouse_event", return_value=("select", start + spans[-1][0], 5, 0)), patch.object(board, "open_pr") as open_pr:
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, ord("q")], (60, width))
+        open_pr.assert_not_called()
+        rendered = " ".join(str(call) for call in screen.addnstr.call_args_list)
+        for number in (123456, 234567, 345678, 456789):
+            self.assertIn(f"repo#{number}", rendered)
+
     def test_multiple_prs_preserve_hosts_and_ignore_historical_links(self):
         public = "https://github.com/team/project/pull/12"
         enterprise = "https://github.carnegierobotics.com/team/project/pull/12"

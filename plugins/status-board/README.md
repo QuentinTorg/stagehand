@@ -26,7 +26,7 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Click a task row to select it. Recent output follows the latest lines; scroll back with the mouse wheel or **[ / ]**, and press End to follow again. **Details** (**i**) shows the saved task context and all PR links, including those hidden in narrow tables. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
+Click a task row to select it. Recent output follows the latest lines; scroll back with the mouse wheel or **[ / ]**, and press End to follow again. Narrow tables keep the next actor and whole PR numbers, omitting the status column. A clickable `+N` opens the remaining PR links in **Details** (**i**), which also preserves full workspace names and status text. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
