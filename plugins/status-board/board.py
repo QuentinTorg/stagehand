@@ -811,8 +811,9 @@ def task_visible_rows(height, count, requested, message_top):
     # Manual inventory views can borrow detail space, but never cover the
     # navigation controls, a few lines of context, or the growing message box.
     available = max(1, message_top - 14)
-    preferred = min(12, (height - 20) // 2) if requested is None else requested
-    return max(1, min(count, preferred, available))
+    # Only Auto hugs the list. Manual space can be reserved before expanding Later.
+    preferred = min(count, 12, (height - 20) // 2) if requested is None else requested
+    return max(1, min(preferred, available))
 
 
 def draw_task_frame(screen, width, visible, selected, count, caption):

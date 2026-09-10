@@ -30,6 +30,8 @@ class BoardTests(unittest.TestCase):
     def test_workspace_size_defaults_and_manual_bounds(self):
         self.assertEqual(board.task_visible_rows(60, 40, None, 52), 12)
         self.assertEqual(board.task_visible_rows(60, 5, None, 52), 5)
+        self.assertEqual(board.task_visible_rows(60, 5, 30, 52), 30)
+        self.assertEqual(board.task_visible_rows(60, 25, 30, 52), 30)
         self.assertEqual(board.task_visible_rows(60, 40, 30, 52), 30)
         self.assertEqual(board.task_visible_rows(60, 40, 100, 52), 38)
         self.assertEqual(board.task_visible_rows(60, 40, 30, 25), 11)
