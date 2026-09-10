@@ -60,6 +60,8 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Appearance
 
+White rules join view tabs on their existing rows; navigation buttons remain detached. Preview failures show an error instead of an indefinite loading message.
+
 The message box grows from three to at most twelve text rows, using less height in short panes. Longer messages scroll around the cursor; Enter still sends and Ctrl-J inserts a newline. Send/Clear stay at the bottom as the editor grows upward.
 
 Filled buttons and underlined PRs are clickable; other labels are information. Cyan marks the active view and Send when a draft has text. Magenta marks navigation away from the board; **Open workspace ↗** and **Open orchestrator ↗** sit at the right edge of their menus. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. The preview highlights an existing Conversation recap heading and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.

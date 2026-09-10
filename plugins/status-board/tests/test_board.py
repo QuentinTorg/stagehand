@@ -219,6 +219,20 @@ class BoardTests(unittest.TestCase):
         self.assertIn("Jump to latest", output)
         self.assertIn("Open orchestrator ↗", output)
 
+    def test_failed_worker_future_is_visible_instead_of_loading_forever(self):
+        executor, previews = Mock(), Mock()
+        first, failure = Future(), Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        first.set_result(([row], []))
+        executor.submit.return_value = first
+        failure.set_exception(RuntimeError("preview backend unavailable"))
+        previews.submit.return_value = failure
+        with patch.object(board, "mouse_event", return_value=("select", 16, 8, 0)):
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, ord("q")], previews=previews)
+        output = " ".join(str(c) for c in screen.addnstr.call_args_list)
+        self.assertIn("Reviewer · unavailable", output)
+        self.assertIn("Preview failed: preview backend unavailable", output)
+
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
         pending = Future()
@@ -304,6 +318,14 @@ class BoardTests(unittest.TestCase):
         with patch.object(board, "herdr_call") as call:
             self.assertEqual(board.worker_snapshot(row, offline=True)["status"], "offline")
         call.assert_not_called()
+
+    def test_missing_requested_role_never_falls_back_to_another_agent(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        with patch.object(board, "herdr_call") as call:
+            result = board.worker_snapshot(row, "author")
+        call.assert_not_called()
+        self.assertEqual(result["role"], "author")
+        self.assertEqual(result["status"], "unavailable")
 
     def test_inventory_does_not_read_conversations(self):
         rows = [board.task_summary(dict(self.task(), task_id=str(i)), 0, None, None, 5) for i in range(10)]
@@ -415,6 +437,25 @@ class BoardTests(unittest.TestCase):
         self.assertTrue(all("[" not in args[2] for args in calls))
         self.assertEqual(calls[1][-1], 8 | board.curses.A_BOLD)
         self.assertEqual(calls[0][-1], 9 | board.curses.A_BOLD)
+
+    def test_white_tab_lines_join_views_without_touching_navigation_or_adding_rows(self):
+        for width in (60, 88, 200):
+            screen = Mock()
+            screen.getmaxyx.return_value = (60, width)
+            actions = [("info", "Details"), ("role-author", "Author"), ("role-reviewer", "Reviewer"),
+                       ("workspace", "Open workspace ↗")]
+            with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+                board.curses, "color_pair", side_effect=lambda number: number
+            ):
+                hits, bottom = board.draw_actions(screen, 8, width, actions, "info", tabs=True)
+            rules = [call.args for call in screen.addnstr.call_args_list if set(call.args[2]) == {"─"}]
+            self.assertTrue(rules)
+            self.assertEqual(bottom, max(hit[0] for hit in hits) + 1)
+            for y, x, text, count, style in rules:
+                self.assertEqual(style, 4)
+                self.assertLessEqual(x + count, width - 1)
+                for row, left, right, _ in hits:
+                    self.assertTrue(y != row or x + count <= left or x >= right)
 
     def test_recap_heading_is_highlighted_without_dropping_prose(self):
         controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n─ Conversation recap ───\n\nA useful summary.\n\n\n› Your prompt"}

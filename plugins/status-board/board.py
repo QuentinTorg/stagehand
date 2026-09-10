@@ -207,6 +207,8 @@ def controller_snapshot(offline=False):
 def worker_snapshot(row, role=None, offline=False):
     names = row.get("agent_names", {})
     roles = [candidate for candidate in ROLES if names.get(candidate)]
+    if role is not None and role not in roles:
+        return {"role": role, "status": "unavailable", "output": "This task no longer has that agent role. Open Details to check its ownership."}
     role = role if role in roles else row.get("next") if row.get("next") in roles else next(iter(roles), None)
     preview = {"role": role, "status": "unavailable", "output": "No managed agent is available for this workspace."}
     if offline or os.environ.get("HERDR_ENV") != "1":
@@ -714,7 +716,7 @@ def draw_button(screen, y, x, text, active=False, navigation=False):
         return False
 
 
-def draw_actions(screen, top, width, actions, active=None):
+def draw_actions(screen, top, width, actions, active=None, tabs=False):
     hits, x, y = [], 1, top
     for action, label in actions:
         text = "  " + label + "  "
@@ -731,6 +733,25 @@ def draw_actions(screen, top, width, actions, active=None):
         if draw_button(screen, y, x, text, action == active, navigation=navigation):
             hits.append((y, x, x + len(text), action))
         x += len(text) + 2
+    if tabs:
+        # Join view selectors on their existing row; leave navigation detached.
+        navigation = {"workspace", "open-controller"}
+        for line in sorted({line for line, _, _, action in hits if action not in navigation}):
+            end = min((left - 2 for row, left, _, action in hits if row == line and action in navigation), default=width - 1)
+            cursor = 1
+            gaps = []
+            for row, left, right, action in hits:
+                if row == line and action not in navigation:
+                    gaps.append((cursor, left))
+                    cursor = right
+            gaps.append((cursor, end))
+            for left, right in gaps:
+                if right > left:
+                    try:
+                        style = curses.color_pair(4) if curses.has_colors() else 0
+                        screen.addnstr(line, left, "─" * (right - left), right - left, style)
+                    except curses.error:
+                        pass
     return hits, y + 1
 
 
@@ -855,7 +876,7 @@ def display_loop(screen, args, executor, previews):
         put(0, "STAGEHAND" + health, bold=True)
         actions, _ = draw_actions(screen, 1, width,
                                  [("task", "Tasks"), ("controller", "Orchestrator"), ("help", "?")],
-                                 "help" if show_help else "controller" if viewing_controller else "task")
+                                 "help" if show_help else "controller" if viewing_controller else "task", tabs=True)
         legend_x = 1
         for color, label in ((1, "need you"), (2, "in progress"), (3, "handed off")):
             text = f"● {sum(row['color'] == color for row in rows)} {label}"
@@ -915,7 +936,8 @@ def display_loop(screen, args, executor, previews):
             context_actions.append(("workspace", "Open workspace ↗"))
         conversation = preview_result if not viewing_controller and preview_key == request else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
-        context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control)
+        context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
+                                           tabs=not viewing_controller and not show_help)
         if viewing_controller and not show_help and controller_offset is None:
             put(detail_y, "Following latest", 10)
         actions += context_hits
@@ -938,9 +960,8 @@ def display_loop(screen, args, executor, previews):
             details = detail_lines(current, width, info=True)
             title, color = current["label"], 10
         else:
-            # Never show the prior role's response while its replacement loads.
-            if preview_role and conversation.get("role") != preview_role:
-                conversation = {}
+            # The request key already binds this result to the selected role.
+            # Errors may lack a role field; never disguise them as still loading.
             role_label = (preview_role or conversation.get("role") or "Agent").replace("_", " ").title()
             details = terminal_lines(conversation.get("output", "Loading recent conversation…"), width)
             title = f"{current['label']} · {role_label} · {conversation.get('status', 'loading')}"
