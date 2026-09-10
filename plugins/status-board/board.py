@@ -161,6 +161,7 @@ def task_summary(task, modified, workspaces, agents, now):
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
             "workspace_id": workspace_id,
+            "agent_names": mapping(task.get("agents")),
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if stage in COMPLETE else "Awaiting workflow update")}
@@ -202,8 +203,33 @@ def controller_snapshot(offline=False):
         return {"status": "unavailable", "output": f"Cannot read orchestrator: {clean(error)}\nOpen its native session to check setup or permissions."}
 
 
-def board_snapshot(directory, offline=False):
+def worker_snapshot(row, role=None, offline=False):
+    names = row.get("agent_names", {})
+    roles = [candidate for candidate in ROLES if names.get(candidate)]
+    role = role if role in roles else row.get("next") if row.get("next") in roles else next(iter(roles), None)
+    preview = {"role": role, "status": "unavailable", "output": "No managed agent is available for this workspace."}
+    if offline or os.environ.get("HERDR_ENV") != "1":
+        return dict(preview, status="offline", output="Recent conversation is unavailable in offline mode.")
+    if not role:
+        return preview
+    try:
+        agent = json.loads(herdr_call("agent", "get", names[role]))["result"]["agent"]
+        # A reused name must not expose a conversation from another workspace.
+        if (not row.get("workspace_id") or agent.get("workspace_id") != row["workspace_id"]
+                or agent.get("name") != names[role] or not agent.get("pane_id")):
+            raise ValueError("Agent no longer matches the recorded workspace")
+        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
+        return dict(preview, status=clean(agent.get("agent_status", "unknown")), output=output[-32000:])
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return dict(preview, output=f"Cannot read agent: {clean(error)}\nOpen the workspace for its full conversation.")
+
+
+def board_snapshot(directory, offline=False, task_id=None, role=None):
     rows, warnings = snapshot(directory, offline)
+    # Only the selected conversation is read; task count does not multiply reads.
+    selected = next((row for row in rows if row["id"] == task_id), None) if task_id is not None else next(iter(rows), None)
+    if selected:
+        selected["conversation"] = worker_snapshot(selected, role, offline)
     return rows, warnings, controller_snapshot(offline)
 
 
@@ -228,16 +254,21 @@ def open_target(args, row=None):
 
 
 def controller_lines(controller, width):
-    width = min(width, 124)
     status = controller["status"]
     hint = {"blocked": "Needs you — open orchestrator for its permission or question dialog.",
             "working": "Working — messages can be sent when it is ready.",
             "idle": "Ready for a message, setup question, or new task.",
             "done": "Ready for a message, setup question, or new task."}.get(status, "Open orchestrator to check its state.")
-    content = [hint, "Recent terminal output (may include tools or omit earlier responses):", ""]
+    return [(line, 0, []) for line in textwrap.wrap(hint, max(1, min(width, 124) - 4))] + terminal_lines(controller["output"], width)
+
+
+def terminal_lines(output, width):
+    """Share agent-neutral formatting; a terminal preview is not a chat transcript."""
+    width = min(width, 124)
+    content = ["Recent terminal output (may include tools or omit earlier responses):", ""]
     # Preserve line breaks/indentation without allowing terminal control characters.
     content += ["".join(c for c in line.expandtabs(4) if c.isprintable())
-                for line in controller["output"].splitlines()]
+                for line in output.splitlines()]
     lines = []
     for line in content:
         color = 0
@@ -256,7 +287,8 @@ def controller_lines(controller, width):
 
 
 def help_lines(width, warnings):
-    text = ["Tasks: select a workspace to see its next action, purpose, and PRs.",
+    text = ["Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
+            "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
@@ -266,7 +298,7 @@ def help_lines(width, warnings):
             "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
             "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
             "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
-            "a: next task needing you. i: task info. r: refresh. q: close this board."]
+            "a: next task needing you. i: task details. End: follow latest conversation. r: refresh. q: close this board."]
     if warnings:
         text += ["", "UPDATE WARNINGS", *warnings]
     return [(line, 0, []) for paragraph in text
@@ -702,6 +734,7 @@ def display_loop(screen, args, executor):
     detail_offset, detail_task = 0, None
     general, info, show_help = False, False, False
     controller_offset = None
+    preview_role, preview_offset, last_request = None, None, None
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     while True:
         # Preserve click coordinates until a blur event is handled; a refresh may
@@ -715,8 +748,11 @@ def display_loop(screen, args, executor):
             selected = next((i for i, row in enumerate(rows) if row["id"] == selected_id), min(selected, max(0, len(rows) - 1)))
             refresh_at = time.monotonic() + args.interval
             pending = None
-        if pending is None and time.monotonic() >= refresh_at:
-            pending = executor.submit(board_snapshot, args.tasks, args.offline)
+        requested_task = "" if general or show_help else rows[min(selected, len(rows) - 1)]["id"] if rows else None
+        request = (requested_task, preview_role)
+        if pending is None and (time.monotonic() >= refresh_at or request != last_request):
+            pending = executor.submit(board_snapshot, args.tasks, args.offline, *request)
+            last_request = request
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         screen.erase()
@@ -752,6 +788,7 @@ def display_loop(screen, args, executor):
         selected_id = current["id"] if current else None
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
+            preview_role, preview_offset = None, None
             info = False
 
         health = " · Offline" if args.offline else ""
@@ -816,8 +853,12 @@ def display_loop(screen, args, executor):
         elif viewing_controller:
             context_actions = [("open-controller", "Open orchestrator"), ("latest", "Follow latest")]
         else:
-            context_actions = [("workspace", "Open workspace"), ("info", "Hide info" if info else "Info")]
-        context_hits, title_y = draw_actions(screen, detail_y, width, context_actions)
+            context_actions = [("workspace", "Open workspace"), ("info", "Details")]
+            context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
+                                if current.get("agent_names", {}).get(role)]
+        conversation = current.get("conversation", {}) if current else {}
+        active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
+        context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control)
         actions += context_hits
         detail_height = max(1, height - 9 - (title_y + 1))
         if show_help:
@@ -828,12 +869,22 @@ def display_loop(screen, args, executor):
             status = {"idle": "Ready for you", "done": "Ready for you", "blocked": "Needs you — open native session",
                       "working": "Working", "unavailable": "Unavailable — check native session"}.get(controller["status"], controller["status"].capitalize())
             title, color = f"Orchestrator · {status}", 1 if controller["status"] in {"blocked", "unavailable"} else 10
-        else:
-            details = detail_lines(current, width, info)
+        elif info:
+            details = detail_lines(current, width, info=True)
             title, color = current["label"], 10
+        else:
+            # Never show the prior role's response while its replacement loads.
+            if preview_role and conversation.get("role") != preview_role:
+                conversation = {}
+            role_label = (preview_role or conversation.get("role") or "Agent").replace("_", " ").title()
+            details = terminal_lines(conversation.get("output", "Loading recent conversation…"), width)
+            title = f"{current['label']} · {role_label} · {conversation.get('status', 'loading')}"
+            color = 10
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
         if viewing_controller and not show_help:
             active_offset = max(0, len(details) - detail_height) if controller_offset is None else max(0, min(controller_offset, len(details) - detail_height))
+        elif not show_help and not info:
+            active_offset = max(0, len(details) - detail_height) if preview_offset is None else max(0, min(preview_offset, len(details) - detail_height))
         else:
             active_offset = detail_offset
         scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)}" if len(details) > detail_height else ""
@@ -884,12 +935,17 @@ def display_loop(screen, args, executor):
                 delta *= detail_height if viewing_controller or show_help else visible
             if viewing_controller and not show_help:
                 controller_offset = max(0, active_offset + delta)
+            elif not show_help and not info and key in (ord("["), ord("]")):
+                preview_offset = max(0, active_offset + delta)
             elif show_help or key in (ord("["), ord("]")):
                 detail_offset = max(0, active_offset + delta)
             else:
                 selected = max(0, min(len(rows) - 1, selected + delta))
-        elif key == curses.KEY_END and viewing_controller:
-            controller_offset = None
+        elif key == curses.KEY_END:
+            if viewing_controller:
+                controller_offset = None
+            else:
+                preview_offset = None
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1) if rows[i % len(rows)]["color"] == 1), selected)
             general, show_help = False, False
@@ -903,6 +959,8 @@ def display_loop(screen, args, executor):
                         selected = max(0, min(len(rows) - 1, selected + delta))
                     elif viewing_controller and not show_help:
                         controller_offset = max(0, active_offset + delta)
+                    elif not show_help and not info:
+                        preview_offset = max(0, active_offset + delta)
                     else:
                         detail_offset = max(0, active_offset + delta)
                 elif kind == "select" and action:
@@ -934,6 +992,8 @@ def display_loop(screen, args, executor):
             show_help, detail_offset = not show_help, 0
         elif action == "info":
             info, detail_offset = not info, 0
+        elif action and action.startswith("role-"):
+            preview_role, preview_offset, info = action[5:], None, False
         elif action == "latest":
             controller_offset = None
         elif action == "workspace":

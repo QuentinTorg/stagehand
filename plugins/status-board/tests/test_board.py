@@ -19,6 +19,8 @@ class BoardTests(unittest.TestCase):
                 executor = Mock()
                 pending = Future()
                 row = board.task_summary(self.task(), 0, None, None, 5)
+                row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
+                row["conversation"] = {"role": "reviewer", "status": "done", "output": "A long worker response. " * 200}
                 pending.set_result(([row], [], {"status": "idle", "output": "A response.\n" * 60}))
                 executor.submit.return_value = pending
                 screen = self.run_display(executor, [-1, ord(view), ord("q")], (height, width))
@@ -167,7 +169,7 @@ class BoardTests(unittest.TestCase):
         executor.submit.return_value = pending
         screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
         self.assertFalse(pending.done())
-        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True)
+        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True, None, None)
         self.assertEqual(screen.getch.call_count, 4)
 
     def test_failed_background_refresh_is_visible_without_crashing(self):
@@ -234,6 +236,63 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(len(result["output"]), 32000)
         self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120"))
         self.assertIn("Needs you", board.controller_lines(result, 80)[0][0])
+
+    def test_worker_preview_is_bounded_and_agent_neutral(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        for kind in ("codex", "claude", "other"):
+            agent = {"workspace_id": "w1", "pane_id": "w1:p2", "name": "reviewer",
+                     "agent": kind, "agent_status": "done"}
+            with patch.dict(board.os.environ, {"HERDR_ENV": "1"}), patch.object(
+                board, "herdr_call", side_effect=[board.json.dumps({"result": {"agent": agent}}), "x" * 40000]
+            ) as call:
+                result = board.worker_snapshot(row)
+            self.assertEqual(result["role"], "reviewer")
+            self.assertEqual(len(result["output"]), 32000)
+            self.assertEqual(call.call_count, 2)
+            self.assertEqual(call.call_args.args, ("agent", "read", "w1:p2", "--source", "recent-unwrapped", "--lines", "120"))
+
+    def test_worker_preview_does_not_read_a_reused_or_missing_identity(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        for agent in ({"workspace_id": "other", "pane_id": "other:p1", "name": "reviewer"},
+                      {"workspace_id": "w1", "pane_id": "w1:p1", "name": "unrelated"},
+                      {"workspace_id": "w1", "name": "reviewer"}):
+            with patch.dict(board.os.environ, {"HERDR_ENV": "1"}), patch.object(
+                board, "herdr_call", return_value=board.json.dumps({"result": {"agent": agent}})
+            ) as call:
+                result = board.worker_snapshot(row)
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(call.call_count, 1)
+        with patch.object(board, "herdr_call") as call:
+            self.assertEqual(board.worker_snapshot(row, offline=True)["status"], "offline")
+        call.assert_not_called()
+
+    def test_refresh_reads_only_selected_workspace_and_role(self):
+        rows = [board.task_summary(dict(self.task(), task_id=str(i)), 0, None, None, 5) for i in range(10)]
+        with patch.object(board, "snapshot", return_value=(rows, [])), patch.object(
+            board, "controller_snapshot", return_value={}
+        ), patch.object(board, "worker_snapshot", return_value={"output": "Selected reply"}) as read:
+            result, _, _ = board.board_snapshot(Path("/unused"), False, "5", "reviewer")
+            read.assert_called_once_with(rows[5], "reviewer", False)
+            self.assertEqual([row["id"] for row in result if "conversation" in row], ["5"])
+            read.reset_mock()
+            board.board_snapshot(Path("/unused"), False, "")
+            read.assert_not_called()
+
+    def test_workspace_conversation_and_details_keep_message_routing(self):
+        executor = Mock()
+        pending = Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["objective"] = "Task purpose remains available."
+        row["conversation"] = {"role": "reviewer", "status": "done", "output": "Please clarify the boundary case."}
+        pending.set_result(([row], [], {"status": "idle", "output": "Orchestrator reply"}))
+        executor.submit.return_value = pending
+        with patch.object(board, "compose", return_value="Draft saved") as compose:
+            screen = self.run_display(executor, [-1, ord("m"), ord("i"), ord("q")])
+        rendered = " ".join(str(call) for call in screen.addnstr.call_args_list)
+        self.assertIn("Please clarify the boundary case.", rendered)
+        self.assertIn("Task purpose remains available.", rendered)
+        self.assertIn("Details", rendered)
+        self.assertEqual(compose.call_args.args[2]["id"], row["id"])
 
     def test_actions_wrap_and_hit_targets_do_not_overlap(self):
         for width in (40, 80, 140):

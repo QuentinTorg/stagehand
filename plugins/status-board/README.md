@@ -2,7 +2,7 @@
 
 A terminal pane beside the orchestrator conversation. It reads existing active YAML/JSON task records and refreshes Herdr workspace labels and named-agent runtime status every five seconds. Workers have no new reporting duties. The orchestrator keeps saving and reconciling task state; ordinary code handles presentation.
 
-Two views separate task work from the orchestrator conversation. **Tasks** shows workspaces, concise workflow status, the next actor, and PR links. Selecting a row shows its next action and purpose below; **Info** reveals technical details. **Orchestrator** provides recent output and a general message box for setup or new tasks. Red needs you, yellow is in progress, and green is handed off (including ready PRs awaiting human merge). Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted; invalid records and unavailable live state produce visible warnings.
+Two views separate task work from the orchestrator conversation. **Tasks** shows workspaces, concise workflow status, the next actor, and PR links. Selecting a row previews recent agent output; role buttons switch between its Author/Reviewer or worker. **Details** preserves purpose, next action, PR links, and technical context. **Orchestrator** provides recent output and a general message box for setup or new tasks. Red needs you, yellow is in progress, and green is handed off (including ready PRs awaiting human merge). Runtime `idle` or `done` never advances workflow state. Archived/cleaned tasks are omitted; invalid records and unavailable live state produce visible warnings.
 
 ## Setup
 
@@ -26,11 +26,11 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Click a task row to select it. The lower panel contains its next action, purpose, and PRs; scroll there with the mouse wheel or **[ / ]**. Arrow keys or j/k select a workspace; Page Up/Down page. Narrow panes hide table columns, but the lower panel retains all PR links. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
+Click a task row to select it. Recent output follows the latest lines; scroll back with the mouse wheel or **[ / ]**, and press End to follow again. **Details** (**i**) shows the saved task context and all PR links, including those hidden in narrow tables. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
-The task list has a position indicator and clickable scroll rail. Delayed-refresh warnings expose update health, not agent progress. **Info** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
+The task list has a position indicator and clickable scroll rail. Delayed-refresh warnings expose update health, not agent progress. **Details** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
 
 ```sh
 python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/tasks --once
@@ -47,6 +47,8 @@ The [common task record](../../skills/orchestrating-development/assets/task-reco
 - **Open orchestrator** (**o** in that view, or **Shift-O** anywhere) opens its native agent pane for full conversations, permissions, or setup problems. It does not approve prompts or start agents.
 
 With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. The preview reads at most 120 terminal lines per background refresh, not a guaranteed complete or final assistant response; it may contain tool output. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
+
+Workspace previews use the same agent-neutral terminal formatting, reading only the selected agent (up to 120 lines/32 KB), not every task. They are recent context, not a generated summary or proof of completion. Purpose remains saved separately under Details. Reads do not focus agents or mark them seen. Messages from either workspace view still go through the orchestrator, never directly to the previewed worker.
 
 ## Message the orchestrator
 
