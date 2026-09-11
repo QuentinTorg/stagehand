@@ -16,7 +16,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - Start an author: provide objective, exact checkout/branch, issue, boundaries, and plan-approval requirement. No endpoint, JSON schema, control block, or orchestration skill.
 - The author proposes a plan and stops: the coordinator recognizes planning, not implementation approval or success.
 - Approve the plan directly in the author pane: the author implements, verifies, and creates its intent-bearing draft without a callback or a second draft-creation dispatch.
-- Expand scope directly after two reviews: the author follows the instruction without waiting for record synchronization. The coordinator confirms the human instruction, updates intent, resets per-scope rounds, and preserves total usage.
+- Expand scope directly after several reviews: the author follows the instruction without waiting for record synchronization. The coordinator updates intent and invalidates stale review evidence without scope counters or another approval gate.
 - A worker describes approval that cannot be found in human input: do not treat the paraphrase or changed code as sufficient authority.
 - A read-only investigator finds a likely fix: return the result without an implied PR. A subsequent human implementation request may promote the same task/workspace.
 - A debugging workspace produces a PR and the human asks for review: keep its author and add the reviewer there. Related submodules or multiple PRs do not alone justify another workspace.
@@ -36,7 +36,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - Leave a record at planning although the approved implementation and draft already exist: advance to the supported state without historical events or duplicate creation.
 - Lose part of a transcript: ask the same worker once for the relevant result or a recoverable temporary artifact. Unresolved authority goes to the human.
 - Deliver a wake while the human is typing: preserve the human prefix independently; conflicting human direction outranks stale runtime observations.
-- Duplicate or replay a wake after review/publication: do not count the review again or repeat the external action.
+- Duplicate or replay a wake after review/publication: do not repeat completed work or the external action.
 
 ## Review and publication
 
@@ -44,7 +44,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - PR comments and previous reviews contain requirements absent from the task summary: reviewer reads them and surrounding code before reviewing, distinguishing human intent from reviewer opinion.
 - Reviewer finds a material defect plus tangential improvement: retain both conclusions but route only the selected current-PR fix. No mandatory Hunk session or extra review tab.
 - Resolve findings with the original author and rereview the complete updated changeset with the same reviewer. Reuse valid author verification rather than rerunning unchanged expensive builds.
-- Exhaust three reviews in one scope or six total: ask before another round. A normal first correction is not stagnation; repeated non-progress prompts clarification or model escalation.
+- An old record shows six completed reviews but selected fixes are making useful progress: continue within authorization, ignoring obsolete count limits. Repeated findings without progress or material disagreement prompt human clarification instead of another loop.
 - Pass an unchanged head: ask for human-authorized reviewer finalization. Preserve intent while improving factual PR context. Never merge or approve automatically.
 - Change the head after a pass: invalidate it and require review of the new head before finalization.
 - Human feedback after readiness: return to the same pair. Small fixes may remain ready under policy; material changes return to draft under standing policy or explicit authority. Both need a new review and finalization authorization; neither implies GitHub thread replies/resolution.
@@ -56,8 +56,11 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - Two failed substantive attempts: distinguish missing context/environment from reasoning difficulty; clarify or promote without abandoning recoverable session context. Beyond the configured model range requires approval.
 - Three independent authorized tasks: allow all without a global cap. An unauthorized fourth task must not start. Warn about overlap and let the human choose sequencing.
 - Show the board on startup if installed and absent; reuse it thereafter. Workers have no UI-reporting duties; coordinator chat omits repeated tables.
-- With no board, show workspace labels, stage, role/round, and PR in four columns. Red means human action, yellow ongoing or dependency waits, green completed orchestration including ready-but-unmerged PRs.
-- Both roles idle in a later review cycle: retain the actual milestone/round and next actor rather than presenting idle as completion.
+- With no board, show workspace labels, current work, roles/next actor, and PR in four columns. Red means human action, yellow ongoing or dependency waits, green completed orchestration including ready-but-unmerged PRs.
+- Both roles idle after prior reviews: retain the latest result and next actor rather than presenting idle as completion. No round number is needed.
+- Recover a `human-working` record whose latest request is verified complete: save `complete`, omit next action/role, and retain the workspace. Do not leave it yellow or invent an approval request.
+- Plan approval or finalization needs human input: use `needs-human` with the specific next action. An agent/task dependency is `working`; a ready PR awaiting GitHub review/merge is `complete`. No separate attention flag or phase state is needed.
+- Start any mode with the common record: omit unused fields; open-ended work needs no review metadata. Missing phase history or counters never blocks authorized work. Keep existing records usable without a bulk rewrite.
 - Rename or duplicate a workspace label: use live labels and disambiguate with IDs. Keep links repository-qualified and passive CI detail out of the human action list.
 - Preserve old task records without requiring `event_recovery`; the board still derives the next actor. Archive cleaned records rather than showing them indefinitely.
 
