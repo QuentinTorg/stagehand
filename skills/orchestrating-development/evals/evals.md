@@ -53,6 +53,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 ## Models, capacity, and status
 
 - Bounded known-pattern task: choose the configured economical model explicitly. Difficult architecture/concurrency/security: choose the stronger model with a brief reason. File count alone is not promotion.
+- Non-Codex setup: load the shared bootstrap and skills through that agent's discovery mechanism; do not apply Codex rules or unsupported reasoning options. Honor a local pane-layout override without changing review independence.
 - Two failed substantive attempts: distinguish missing context/environment from reasoning difficulty; clarify or promote without abandoning recoverable session context. Beyond the configured model range requires approval.
 - Three independent authorized tasks: allow all without a global cap. An unauthorized fourth task must not start. Warn about overlap and let the human choose sequencing.
 - Show the board on startup if installed and absent; reuse it thereafter. Workers have no UI-reporting duties; coordinator chat omits repeated tables.

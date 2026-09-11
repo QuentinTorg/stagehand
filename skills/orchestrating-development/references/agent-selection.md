@@ -1,6 +1,6 @@
 # Agent Selection
 
-Choose from a small, locally configured set and set model and reasoning effort explicitly at launch. Never inherit the terminal's last-used choice.
+Choose the agent and model from a small, locally configured set. Set supported options, such as reasoning effort, explicitly rather than inheriting unintended terminal defaults. Author and reviewer may use different agent products.
 
 - **Economical:** exploration, known-pattern implementation, focused tests, and small reviews with clear acceptance criteria.
 - **Stronger:** unresolved architecture, cross-component semantics, ambiguous diagnosis, subtle concurrency/ownership/security, or risks focused tests cannot expose.
@@ -12,4 +12,4 @@ After two substantive attempts fail to advance the same problem, distinguish mis
 
 Record a brief selection reason in task state, not a worker protocol. Do not create an extra planning agent for routine choices.
 
-For Codex, [OpenAI's GPT-5.6 guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6) describes Luna as efficient and Sol as flagship-capability, with medium reasoning as a balanced starting point. A two-choice Luna/Sol policy is a Stagehand starting recommendation, not a measured quality or cost guarantee. Set exact choices in local configuration and adjust from actual accepted results; stronger reasoning should earn its cost.
+Keep exact agents, models, and supported options in local configuration. Adjust choices from accepted results; stronger reasoning should earn its cost.

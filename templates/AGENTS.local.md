@@ -6,7 +6,7 @@ Copy this template to `.local/AGENTS.md`, or place a symbolic link there to a fi
 
 Task authorization, implementation-plan approval, pull-request finalization, and merge ownership are defined by the orchestration skill. Do not restate them here.
 
-Record only choices delegated to local policy, such as the preferred merge interface and strategy, standing draft-state policy for post-readiness changes, or stricter local limits.
+Record only choices delegated to local policy, such as the preferred pane layout, merge interface and strategy, standing draft-state policy for post-readiness changes, or stricter local limits.
 
 ## Repository resolution
 
@@ -43,13 +43,13 @@ Leave product build selection and product-repository instructions to the author 
 
 ## Managed-agent defaults
 
-Set explicit model/effort choices; do not inherit the terminal's last-used model. For example:
+Configure a small set of agent/model choices and their supported options:
 
-- Economical bounded work: `gpt-5.6-luna`, `xhigh` reasoning.
-- Difficult reasoning or promotion: `gpt-5.6-sol`, `medium` reasoning.
+- Economical bounded work: `<agent>`, `<model>`, `<optional reasoning or other settings>`.
+- Difficult reasoning or promotion: `<agent>`, `<model>`, `<optional reasoning or other settings>`.
 - Anything beyond these choices requires human approval.
 
-These are starting choices, not a benchmark claim. Adjust for installed models and observed results; explicit task-specific human choices take precedence. Use the skill's agent-selection guidance for routing rather than duplicating it here.
+Use installed agents supported by Herdr; roles may use different products. Adjust choices from observed results; explicit task-specific human choices take precedence. Use the skill's agent-selection guidance for routing rather than duplicating it here.
 
 ## Local command policy
 

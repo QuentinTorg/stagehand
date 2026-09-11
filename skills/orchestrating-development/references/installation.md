@@ -12,11 +12,13 @@ The host needs Herdr, Git, GitHub CLI authentication for the relevant hosts, and
 
 ## Workspace and skills
 
-Keep the tracked `.codex/skills/orchestrating-development` relative link and `.codex/rules/herdr.rules`. Do not install orchestration globally.
+Use the selected agent's workspace instruction and skill-discovery mechanisms. The shared bootstrap is [AGENTS.md](../../../AGENTS.md); if the agent does not load it automatically, use its startup instructions or a thin loader that points to it rather than copying the workflow. Keep orchestration workspace-local, not globally available to workers.
+
+For Codex, keep the tracked `.codex/skills/orchestrating-development` relative link and `.codex/rules/herdr.rules`. Other agents need equivalent local skill discovery and their own permission configuration; Codex rules do not configure other agents.
 
 Copy [the local template](../../../templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, or link that file to a private configuration repository. Configure repository paths, hosts, initialization caveats, and model choices. Confirm `git check-ignore .local/AGENTS.md` succeeds. Never commit private configuration or credentials.
 
-Load the Herdr skill before control operations. If it is not discoverable, run `herdr --skill` for version-matched bootstrap guidance, then link the installed skill directory individually into this workspace's `.codex/skills/herdr`. Do not guess an npm/reference-checkout path or link an entire skills parent.
+Load the Herdr skill before control operations. If it is not discoverable, run `herdr --skill` for version-matched bootstrap guidance, then expose the installed skill to the selected agent (for Codex, link it into this workspace's `.codex/skills/herdr`). Do not guess an npm/reference-checkout path or link an entire skills parent.
 
 ## Managed-role skills
 
@@ -53,14 +55,14 @@ Reserve `workflow_orchestrator` for exactly one live controller. Inspect any exi
 
 Follow [status-board setup](../../../plugins/status-board/README.md#setup) to install its dependency and link the plugin. The orchestrator opens or reuses one board beside its conversation, using the configured task directory. Text status remains available if the board is unavailable.
 
-Validate installed links, enabled plugins, the consumer's exact target/root, Skilldex discovery, and local configuration. Check workspace rules, for example:
+Validate instruction and skill discovery, enabled plugins, the consumer's exact target/root, and local configuration for each selected agent. Confirm Herdr can observe its lifecycle and read its output before relying on unattended handoffs. Check the agent's permission policy; for Codex:
 
 ```sh
 codex execpolicy check --rules .codex/rules/herdr.rules --pretty herdr agent list
 codex execpolicy check --rules .codex/rules/herdr.rules --pretty herdr workspace close w2
 ```
 
-Inspection should be allowed; workspace closure forbidden. Restart Codex sessions after rule changes. Run the relay and board unit tests before a live trial.
+Inspection should be allowed; workspace closure forbidden. For Codex, restart sessions after rule changes; follow other agents' reload requirements for their setup. Run the relay and board unit tests before a live trial.
 
 ## Existing installations
 
