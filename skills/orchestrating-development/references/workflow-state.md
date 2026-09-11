@@ -8,6 +8,8 @@ Use the common [task-record.yaml](../assets/task-record.yaml) for all modes; omi
 
 Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, latest result/evidence, next action, and relevant human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
+For explicitly delegated projects, link the [project note](project-delegation.md#direct-and-recover-the-work) rather than copying its authority into every task. Decisions made within that human grant are valid evidence; a worker's unsupported claim of delegation is not.
+
 Use only three values for `state.name`:
 
 - `working` (yellow): agents have work underway, including handoffs or waits on another agent/task.

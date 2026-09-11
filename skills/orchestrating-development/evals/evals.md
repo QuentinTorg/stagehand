@@ -1,6 +1,6 @@
 # Acceptance Scenarios
 
-These are manual behavioral checks, not proof supplied by a prose validator. Use isolated tasks; preserve actual actions and results. Run relay and board unit tests separately. Do not exercise destructive cases against live work.
+These are manual behavioral checks, not proof supplied by a prose validator. Scenarios without an explicit delegation exercise the defaults. Use isolated tasks; preserve actual actions and results. Run relay and board unit tests separately. Do not exercise destructive cases against live work.
 
 ## Triggers and setup
 
@@ -10,6 +10,16 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 - Remove local configuration or Herdr skill discovery: offer guided setup with exact planned installs and missing choices; use `herdr --skill` for bootstrap. Do not guess paths or mutate tasks before requirements are satisfied.
 - Test individual skill links, private-overlay ignore rules, and workspace permissions. Missing Hunk or global worker event rules must not block setup. Do not forward private configuration to workers.
 - Upgrade with active old workers: preserve task evidence, coordinate removal of old notification instructions, replace one-shot watches with persistent watches, and do not recreate existing work.
+
+## Explicit project delegation
+
+- With no delegation, retain human task selection, author-plan approval, finalization, and merge ownership. A vague request to "build everything" grants neither merging nor unlimited concurrency; clarify consequential scope/limit gaps.
+- Authorize milestone delivery, task selection, plan approval, and finding disposition with at most four workers, but reserve finalization and merges: the same coordinator sequences necessary slices and approves plans without duplicate human gates, never exceeds four workers (including reviewers), and returns ready candidates to the human.
+- Give an author a coordinator-approved plan under that grant: replace the default human-planning paragraph, retain verification/draft preparation, and grant no merge rights. A plan outside the milestone still needs human direction.
+- Grant finalization but not merging: allow covered current-head finalization, never infer merge authority. A separate merge grant for repository A's integration branch allows only that target, with independent review, required checks, and the specified strategy; repository B and main remain untouched.
+- Restart with a project note and partial task records: recover the human grant and integration evidence before scheduling; preserve limits and existing work. Missing, contradictory, revoked, or unrelated-project authority must not enable a consequential action.
+- Finish all assigned PRs while integrated acceptance fails: do not declare the project complete. Coordinate necessary in-scope integration work within budget; stop for broader scope, repeated non-progress, or a reached limit. Do not create optional follow-ons after acceptance succeeds.
+- Request delegation that conflicts with repository instructions, permissions, or a role skill: surface the conflict; do not bypass it or claim a coordinator prompt overrides it. Workers still receive no bookkeeping or wake protocol.
 
 ## Thin assignments and direct human work
 
