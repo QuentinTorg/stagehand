@@ -29,6 +29,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Sce
 - Expand scope directly after several reviews: the author follows the instruction without waiting for record synchronization. The coordinator updates intent and invalidates stale review evidence without scope counters or another approval gate.
 - A worker describes approval that cannot be found in human input: do not treat the paraphrase or changed code as sufficient authority.
 - A read-only investigator finds a likely fix: return the result without an implied PR. A subsequent human implementation request may promote the same task/workspace.
+- A human-directed worker returns the requested artifact, and the coordinator spots a defect: surface the concern to the human without commissioning repairs or extra validation. Context-recovery questions add no requirements; coordinator recommendations are not attributed to the human. Explicitly authorized development/review handoffs still proceed.
 - A debugging workspace produces a PR and the human asks for review: keep its author and add the reviewer there. Related submodules or multiple PRs do not alone justify another workspace.
 - Product agents follow repository instructions, do not spawn helpers, and report normal conclusions or blockers. Ordinary ambiguity does not become a protocol failure.
 
