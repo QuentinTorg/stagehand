@@ -53,7 +53,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Use
 ## Models, capacity, and status
 
 - Follow the user's configured agent/model policy or explicit task choice without imposing tiers. If unclear, recommend an option and ask instead of inheriting terminal defaults.
-- Non-Codex setup: load the shared bootstrap and skills through that agent's discovery mechanism; do not apply Codex rules or unsupported reasoning options. Honor a local pane-layout override without changing review independence.
+- Mixed-agent setup: load only the applicable setup references and verify each agent's discovery and permissions; do not apply another product's rules or unsupported options. Honor a local pane-layout override without changing review independence.
 - Three independent authorized tasks: allow all without a global cap. An unauthorized fourth task must not start. Warn about overlap and let the human choose sequencing.
 - Show the board on startup if installed and absent; reuse it thereafter. Workers have no UI-reporting duties; coordinator chat omits repeated tables.
 - With no board, show workspace labels, current work, roles/next actor, and PR in four columns. Red means human action, yellow ongoing or dependency waits, green completed orchestration including ready-but-unmerged PRs.

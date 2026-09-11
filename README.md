@@ -4,7 +4,7 @@ This package helps one developer coordinate coding agents without replacing ordi
 
 [Herdr](https://github.com/ogulcancelik/herdr) supplies workspaces, worktrees, panes, and agent lifecycle management. GitHub draft pull requests preserve intent and become the final handoff to human teammates and CI.
 
-The workflow is agent-neutral, with Codex setup supplied out of the box. Other Herdr-supported agents need their own instruction/skill discovery and permission setup; choose agents and models in local configuration.
+The workflow is agent-neutral. Configure instruction/skill discovery and permissions for your selected Herdr-supported agents; choose agents and models in local configuration.
 
 ## Intended workflow
 
@@ -52,15 +52,15 @@ Then:
 1. Clone this package as a dedicated control workspace. Product code and feature worktrees belong elsewhere.
 2. Copy [`templates/AGENTS.local.md`](./templates/AGENTS.local.md) to the ignored `.local/AGENTS.md`, then add allowed repository locations, GitHub hosts, initialization requirements, workload preferences, and local policy. Alternatively, make that ignored path a symbolic link to a private configuration repository.
 3. Leave the tracked [`AGENTS.md`](./AGENTS.md) generic; it activates orchestration and requires the local overlay without exposing it.
-4. Configure [workspace instructions and skills](./skills/orchestrating-development/references/installation.md#workspace-and-skills) for your agent. For Codex, keep the tracked local skill link and Herdr rule, and link the separately installed Herdr skill into `.codex/skills/`.
+4. Configure [workspace instructions and skills](./skills/orchestrating-development/references/installation.md#workspace-and-skills) using only the setup instructions for your selected agents.
 5. Link, enable, and configure the bundled [Agent Wake Relay](./skills/orchestrating-development/references/installation.md#agent-wake-relay) for this exact control workspace.
 6. Install the individual [managed-role skills](./skills/orchestrating-development/references/installation.md#managed-role-skills) from SkillDex for agents launched in product worktrees. No global worker event rules are needed.
-7. Install the optional [status board](./plugins/status-board/README.md#setup). Apply your agent's reload requirements; Codex requires a restart after rule changes.
+7. Install the optional [status board](./plugins/status-board/README.md#setup), then apply any reload requirements from your agent's setup instructions.
 8. Check that no other live agent owns the reserved name, then start the single active orchestration controller as `workflow_orchestrator`. Maintenance agents in this repository must use another name or remain unnamed.
 
 Exact commands and policy validation are in the [installation guide](./skills/orchestrating-development/references/installation.md).
 
-The public checkout may serve directly as the live control workspace. `.local/`, `.orchestrator/`, and installation-specific Codex entries are ignored, while the portable orchestration skill link and workspace Herdr rule are tracked.
+The public checkout may serve directly as the live control workspace. `.local/` and `.orchestrator/` are ignored. Keep private installation settings out of version control; bundled integration files remain tracked.
 
 Start with a natural request such as:
 
