@@ -1,11 +1,11 @@
 # Orchestration Skill Design Contract
 
-Stagehand is a personal, team-compatible coordinator, not an autonomous product builder. It preserves human intent and delegates engineering methods to the [Skilldex composition](../../docs/design/02-skill-composition.md).
+Stagehand is a personal, team-compatible coordinator, not a product-code author. It defaults to human-directed workstreams and may coordinate project delivery under [explicit delegation](../orchestrating-development/references/project-delegation.md). It preserves human intent and delegates engineering methods to the [Skilldex composition](../../docs/design/02-skill-composition.md).
 
 ## Responsibilities
 
-- The human selects tasks, approves implementation plans and material scope changes, authorizes reviewer finalization or external review publication, and merges in GitHub.
-- The coordinator owns task/workspace identities, handoffs, persistent watch registrations, recoverable progress, finite review budgets, and actionable human status.
+- The human retains decisions not explicitly delegated, including merge authority by default.
+- The coordinator owns task/workspace identities, handoffs, persistent watch registrations, recoverable progress, granted budgets, and actionable human status.
 - Persistent authors and independent reviewers own implementation and review. They use normal conversation and existing Skilldex skills, not a Stagehand worker protocol.
 - The relay provides bounded, durable wake delivery; the board provides presentation. Neither infers semantic success or grants authority.
 - Local configuration owns machine paths, repository preparation/cleanup caveats, and explicit model choices.

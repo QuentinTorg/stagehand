@@ -4,8 +4,11 @@
 
 Stagehand helps one developer coordinate coding agents while producing pull
 requests that fit ordinary human team practices. It automates workflow
-coordination without taking ownership of product intent, engineering judgment,
-or merge authority.
+coordination under human authority; it does not assume product or merge authority.
+
+The workflow below describes the defaults. A human may grant the same coordinator
+[explicit project responsibility](../../skills/orchestrating-development/references/project-delegation.md)
+without adding another role or weakening repository and runtime safeguards.
 
 This document preserves the reasoning behind the workflow. Operational details
 belong in the [orchestration skill](../../skills/orchestrating-development/SKILL.md),
@@ -32,7 +35,7 @@ underlying contracts or turn the orchestrator into an author, reviewer, or fixer
 
 ## Guiding Principles
 
-- **Human authority:** The human chooses tasks, approves implementation plans,
+- **Human authority:** By default, the human chooses tasks, approves implementation plans,
   controls scope, disposes ambiguous findings, authorizes pull-request
   finalization, and performs every merge.
 - **Explicit intent:** The author and human establish enough context to
@@ -110,8 +113,8 @@ current changeset identity remain authoritative when a role must be replaced.
 
 Stagehand does not implement product code, decide what issue should be pursued
 without human authorization, silently expand scope, approve unexpected risky
-operations, publish an external review without permission, or merge pull
-requests. It does not replace repository instructions, CI, branch protection,
+operations, or publish reviews or merge pull requests without explicit authority.
+It does not replace repository instructions, CI, branch protection,
 required reviews, or company policy.
 
 The workflow is intentionally compatible with native and container builds,

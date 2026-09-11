@@ -15,6 +15,8 @@ Stagehand coordinates; [Skilldex](https://github.com/QuentinTorg/skilldex) suppl
 
 ## Workflow and ethos
 
+This is the default human-directed workflow. [Explicit project delegation](../../skills/orchestrating-development/references/project-delegation.md) lets the same coordinator exercise named decisions for an agreed outcome; it adds no role or default authority.
+
 The human selects work and discusses implementation with the author. After approval, the author implements, verifies, and prepares the draft in one assignment. The draft preserves human intent separately from delivered behavior, tests, limitations, and non-goals; supplied issues are linked without claiming unfulfilled scope is resolved.
 
 A separate reviewer uses GitHub description, discussion, previous comments, linked requirements, and surrounding code. It investigates broadly but surfaces material, evidence-backed findings, not a quota of comments. The original author resolves only selected findings; tangential ideas remain follow-ups. The same reviewer assesses the complete updated changeset.

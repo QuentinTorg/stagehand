@@ -17,7 +17,7 @@ The workflow is agent-neutral. Configure instruction/skill discovery and permiss
 7. After a passing review, the orchestrator asks whether the reviewer may finalize the pull request.
 8. The human and their teammates perform final GitHub review; the human merges through GitHub.
 
-Workers answer normally. A bundled plugin watches their turns—including direct human conversations—and wakes the coordinator to inspect results and update task state. Workers need no callbacks, JSON, or orchestration instructions. It does not implement product code, approve unexpected permissions, or merge pull requests.
+Workers answer normally. A bundled plugin watches their turns—including direct human conversations—and wakes the coordinator to inspect results and update task state. Workers need no callbacks, JSON, or orchestration instructions. Stagehand does not implement product code or approve unexpected permissions. Merging stays human-owned by default.
 
 For investigation, diagnosis, planning, or research with no intended landed change, request a delegated-work task. Stagehand starts one worker in an isolated workspace and returns its result without creating a PR, reviewer, or review loop.
 
@@ -77,9 +77,17 @@ The coordinator preserves concise outcomes and next actions, then reconciles wor
 
 ## Guardrails
 
-The human explicitly authorizes every task and decides how many workflows run concurrently. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work can host a human-directed agent without a delivery loop. The orchestrator warns about likely overlap and recommends sequencing, but fixed concurrency or review-count caps are not imposed. Unexpected permissions, stale heads, material disagreement, broader scope, and repeated non-progress return to the human.
+The human authorizes work, individually or through an explicit project delegation, and controls concurrency. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work can host a human-directed agent without a delivery loop. The orchestrator warns about likely overlap and recommends sequencing, but fixed concurrency or review-count caps are not imposed. Unexpected permissions, stale heads, material disagreement, broader scope, and repeated non-progress return to the human.
 
-GitHub remains the collaboration boundary. The workflow never pushes to the primary branch, bypasses CI, enables auto-merge, or performs the final merge.
+GitHub remains the collaboration boundary. The workflow never pushes directly to the primary branch, bypasses required checks, or enables auto-merge. Merging remains human-owned unless explicitly delegated for named repositories and target branches.
+
+## Delegating a project
+
+The same orchestrator can select and coordinate work toward an agreed outcome when explicitly authorized. No additional coordinator is spawned, and ordinary workstream management remains the default. For example:
+
+> Deliver the agreed milestone in this repository against its specification. Choose and sequence tasks, approve implementation plans, and route material in-scope fixes. Use at most four worker agents concurrently. Prepare reviewed draft PRs, but leave finalization and merging to me. Ask about consequential product decisions, broader scope, or repeated non-progress; stop when the milestone is delivered.
+
+Name the repository and milestone when using this prompt. Any additional publication or merge authority must be granted separately. [Project delegation](./skills/orchestrating-development/references/project-delegation.md) defines the boundaries and durable recovery context; task records and the board stay unchanged.
 
 ## More detail
 
