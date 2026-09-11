@@ -867,6 +867,35 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertLess(rendered.index("Task purpose remains available."), rendered.index("Please clarify the boundary case."))
         self.assertEqual(compose.call_args.args[2]["id"], row["id"])
 
+    def test_message_wrap_matches_full_box_interior_and_preview(self):
+        for width in (60, 88, 128, 200, 320):
+            interior = width - 7
+            message = "x" * interior + "Z"
+            lines, positions, top, _, line_width = board.message_layout(message, 60, width)
+            self.assertEqual(line_width, interior)
+            self.assertEqual(lines, ["x" * interior, "Z"])
+            self.assertEqual(positions[interior - 1], (0, interior - 1))
+            self.assertEqual(positions[interior], (1, 0))
+            self.assertEqual(positions[-1], (1, 1))
+            screen = Mock()
+            screen.getmaxyx.return_value = (60, width)
+            board.draw_message_box(screen, None, message)
+            first = next(call.args[2] for call in screen.addnstr.call_args_list if call.args[0] == top + 1)
+            self.assertEqual(first, "│ " + "x" * interior + " │")
+
+    def test_message_resize_reflows_without_changing_draft_or_cursor_identity(self):
+        message = "x" * 150 + "\n" + "y" * 230
+        for width in (320, 88, 200, 60, 320):
+            lines, positions, _, _, interior = board.message_layout(message, 60, width)
+            self.assertEqual(len(positions), len(message) + 1)
+            for index, character in enumerate(message):
+                row, column = positions[index]
+                self.assertLess(column, interior)
+                if character != "\n":
+                    self.assertEqual(lines[row][column], character)
+            self.assertEqual("".join(lines), message.replace("\n", ""))
+        self.assertEqual(board.message_layout(message, 60, 320)[0], ["x" * 150, "y" * 230])
+
     def test_message_box_grows_then_caps_without_losing_text(self):
         for height, width in ((24, 60), (38, 88), (60, 200)):
             short = board.message_layout("Hi", height, width)

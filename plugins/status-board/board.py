@@ -659,7 +659,8 @@ def send_message(args, row, message):
 
 def message_layout(message, height, width):
     """Share wrapping and geometry so editing, previews, and clicks stay aligned."""
-    line_width = max(1, min(120, width - 6))
+    # Match the box interior: outer margins, borders, and one-cell side padding.
+    line_width = max(1, width - 7)
     lines, positions = [""], []
     for character in message:
         positions.append((len(lines) - 1, len(lines[-1])))
@@ -677,7 +678,7 @@ def message_layout(message, height, width):
 
 def draw_message_box(screen, row, message, active=False, can_send=None, activity=""):
     height, width = screen.getmaxyx()
-    preview, _, top, visible, _ = message_layout(message, height, width)
+    preview, _, top, visible, line_width = message_layout(message, height, width)
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
     if activity:
         # Keep live state visible even when the workspace label must be shortened.
@@ -692,7 +693,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
     heading = clipped(title, max(1, box_width - 4))
     lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
     for i in range(1, visible + 2):
-        lines[i] = "│ " + clipped(lines[i][2:], box_width - 4).ljust(box_width - 4) + " │"
+        lines[i] = "│ " + clipped(lines[i][2:], line_width).ljust(line_width) + " │"
     lines[-1] = "└" + "─" * (box_width - 2) + "┘"
     for i, text in enumerate(lines):
         try:
