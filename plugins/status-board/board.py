@@ -4,15 +4,19 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import curses
+from dataclasses import dataclass, replace
+from functools import lru_cache
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
 import time
+import unicodedata
 from urllib.parse import urlsplit
 import webbrowser
 
@@ -26,6 +30,211 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
 VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True}
+
+
+@dataclass(frozen=True)
+class TerminalStyle:
+    foreground: int | tuple[int, int, int] = -1
+    background: int | tuple[int, int, int] = -1
+    bold: bool = False
+    dim: bool = False
+    italic: bool = False
+    underline: bool = False
+    reverse: bool = False
+
+
+class StyledText(str):
+    """Plain display text with per-character styles; never executable escapes."""
+
+    def __new__(cls, text, styles):
+        value = super().__new__(cls, text)
+        value.styles = tuple(styles)
+        return value
+
+
+def sgr_style(style, parameters):
+    # Herdr emits semicolon SGR; also accept the common colon RGB notation.
+    parameters = re.sub(r"(38|48):2:(?:0)?:", r"\1;2;", parameters).replace(":", ";")
+    try:
+        codes = [int(value or 0) for value in parameters.split(";")]
+    except ValueError:
+        return style
+    index = 0
+    attributes = {1: ("bold", True), 2: ("dim", True), 3: ("italic", True),
+                  4: ("underline", True), 7: ("reverse", True), 23: ("italic", False),
+                  24: ("underline", False), 27: ("reverse", False)}
+    while index < len(codes):
+        code = codes[index]
+        index += 1
+        if code == 0:
+            style = TerminalStyle()
+        elif code == 22:
+            style = replace(style, bold=False, dim=False)
+        elif code in attributes:
+            name, value = attributes[code]
+            style = replace(style, **{name: value})
+        elif code in (39, 49):
+            style = replace(style, **{"foreground" if code == 39 else "background": -1})
+        elif 30 <= code <= 37 or 90 <= code <= 97:
+            style = replace(style, foreground=code - 30 if code < 90 else code - 90 + 8)
+        elif 40 <= code <= 47 or 100 <= code <= 107:
+            style = replace(style, background=code - 40 if code < 100 else code - 100 + 8)
+        elif code in (38, 48):
+            mode = codes[index] if index < len(codes) else None
+            count = 2 if mode == 5 else 4 if mode == 2 else 0
+            if not count or index + count > len(codes):
+                break
+            values = codes[index + 1:index + count]
+            if all(0 <= value <= 255 for value in values):
+                color = values[0] if mode == 5 else tuple(values)
+                style = replace(style, **{"foreground" if code == 38 else "background": color})
+            index += count
+    return style
+
+
+def cell_width(character):
+    if unicodedata.combining(character):
+        return 0
+    return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+
+
+def styled_lines(output):
+    """Read snapshot styling only. Discard cursor, OSC, clipboard and mode commands."""
+    style, characters, styles, column, index = TerminalStyle(), [], [], 0, 0
+    while index < len(output):
+        character = output[index]
+        index += 1
+        if character in {"\x1b", "\x9b", "\x9d", "\x90", "\x98", "\x9e", "\x9f"}:
+            if character == "\x1b":
+                if index == len(output):
+                    break
+                kind = output[index]
+                index += 1
+            else:
+                kind = {"\x9b": "[", "\x9d": "]", "\x90": "P", "\x98": "X", "\x9e": "^", "\x9f": "_"}[character]
+            start = index
+            if kind == "[":
+                while index < len(output) and not "@" <= output[index] <= "~":
+                    index += 1
+                if index < len(output) and output[index] == "m":
+                    style = sgr_style(style, output[start:index])
+                index += 1
+            elif kind in "]PX^_":
+                # String controls end at ST; OSC also accepts BEL. An incomplete
+                # sequence is discarded through EOF instead of displaying its payload.
+                ending = re.search(r"\x1b\\|\x9c|\x07" if kind == "]" else r"\x1b\\|\x9c", output[index:])
+                index = index + ending.end() if ending else len(output)
+            elif " " <= kind <= "/":
+                while index < len(output) and " " <= output[index] <= "/":
+                    index += 1
+                index += 1
+            continue
+        if character == "\n":
+            yield StyledText("".join(characters), styles)
+            characters, styles, column = [], [], 0
+        elif character == "\t":
+            count = 4 - column % 4
+            characters.extend(" " * count)
+            styles.extend([style] * count)
+            column += count
+        elif character.isprintable():
+            characters.append(character)
+            styles.append(style)
+            column += cell_width(character)
+    yield StyledText("".join(characters), styles)
+
+
+def wrap_styled(line, width):
+    # Wrap terminal cells, keeping spacing/table alignment and source line breaks.
+    start, cells = 0, 0
+    for index, character in enumerate(line):
+        size = cell_width(character)
+        if cells + size > width and index > start:
+            yield StyledText(line[start:index], line.styles[start:index])
+            start, cells = index, 0
+        cells += size
+    yield StyledText(line[start:], line.styles[start:])
+
+
+def indexed_rgb(index):
+    # xterm-compatible extended palettes have a fixed cube and grayscale ramp.
+    if index >= 232:
+        return (8 + 10 * (index - 232),) * 3
+    index, levels = index - 16, (0, 95, 135, 175, 215, 255)
+    return (levels[index // 36], levels[index // 6 % 6], levels[index % 6])
+
+
+class PreviewPalette:
+    """Bounded curses colors, separate from board controls and workflow colors."""
+
+    def __init__(self):
+        self.pairs, self.palette = {}, []
+        self.colors = min(getattr(curses, "COLORS", 0), 256) if curses.has_colors() else 0
+        self.limit = min(getattr(curses, "COLOR_PAIRS", 0), 256)
+        for index in range(self.colors):
+            try:
+                # ncurses may return repeated basic-color placeholders for the
+                # extended palette; do not use those to quantize source RGB.
+                rgb = indexed_rgb(index) if index >= 16 else tuple(round(value * 255 / 1000) for value in curses.color_content(index))
+                self.palette.append((index, rgb))
+            except curses.error:
+                pass
+
+    def begin_frame(self):
+        # The board erases and redraws the entire screen. Reclaim pairs only at
+        # that boundary so animated RGB output cannot exhaust a long-lived board.
+        self.pairs.clear()
+
+    @lru_cache(maxsize=512)
+    def color(self, value):
+        if value == -1 or not self.colors:
+            return -1
+        if isinstance(value, int):
+            if value < self.colors:
+                return value
+            if value < 16:
+                return value % self.colors
+            value = indexed_rgb(value)
+        return min(self.palette, key=lambda entry: sum((a - b) ** 2 for a, b in zip(entry[1], value)))[0] if self.palette else -1
+
+    def attributes(self, style):
+        attributes = 0
+        for enabled, flag in ((style.bold, curses.A_BOLD), (style.dim, curses.A_DIM),
+                              (style.italic, getattr(curses, "A_ITALIC", 0)),
+                              (style.underline, curses.A_UNDERLINE), (style.reverse, curses.A_REVERSE)):
+            if enabled:
+                attributes |= flag
+        pair = (self.color(style.foreground), self.color(style.background))
+        if pair != (-1, -1) and self.colors:
+            if pair not in self.pairs and len(self.pairs) + 12 < self.limit:
+                number = len(self.pairs) + 12
+                try:
+                    curses.init_pair(number, *pair)
+                    self.pairs[pair] = number
+                except curses.error:
+                    return attributes
+            # Never recycle within a frame: it would recolor already drawn text.
+            if pair in self.pairs:
+                attributes |= curses.color_pair(self.pairs[pair])
+        return attributes
+
+
+def draw_preview_line(screen, y, line, palette, width):
+    x, start = 1, 0
+    while start < len(line):
+        end = start + 1
+        while end < len(line) and line.styles[end] == line.styles[start]:
+            end += 1
+        text = line[start:end]
+        cells = sum(cell_width(character) for character in text)
+        if x + cells > width - 1:
+            break
+        try:
+            screen.addnstr(y, x, text, len(text), palette.attributes(line.styles[start]))
+        except curses.error:
+            pass
+        x += cells
+        start = end
 
 
 def mapping(value):
@@ -232,14 +441,30 @@ def controller_identity():
     return agent
 
 
+def read_preview(pane):
+    output = herdr_call("agent", "read", pane, "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi")
+    if len(output) <= 32000:
+        return output
+    # Do not start the bounded snapshot in the middle of an ANSI sequence.
+    start = len(output) - 32000
+    boundary = output.find("\n", start)
+    if boundary >= 0:
+        return output[boundary + 1:]
+    boundary = output.find("\x1b[0m", start)
+    if boundary >= 0:
+        return output[boundary:]
+    # A single oversized line has no safe raw cut; flatten it before tailing.
+    return "\n".join(styled_lines(output))[-32000:]
+
+
 def controller_snapshot(offline=False):
     if offline or os.environ.get("HERDR_ENV") != "1":
         return {"status": "offline", "output": "Live orchestrator output is unavailable in offline mode."}
     try:
         agent = controller_identity()
         # Read a bounded terminal preview, not private session files or a model summary.
-        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
-        return {"status": clean(agent.get("agent_status", "unknown")), "output": output[-32000:]}
+        output = read_preview(agent["pane_id"])
+        return {"status": clean(agent.get("agent_status", "unknown")), "output": output}
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         return {"status": "unavailable", "output": f"Cannot read orchestrator: {clean(error)}\nOpen its native session to check setup or permissions."}
 
@@ -261,8 +486,8 @@ def worker_snapshot(row, role=None, offline=False):
         if (not row.get("workspace_id") or agent.get("workspace_id") != row["workspace_id"]
                 or agent.get("name") != names[role] or not agent.get("pane_id")):
             raise ValueError("Agent no longer matches the recorded workspace")
-        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
-        return dict(preview, status=clean(agent.get("agent_status", "unknown")), output=output[-32000:])
+        output = read_preview(agent["pane_id"])
+        return dict(preview, status=clean(agent.get("agent_status", "unknown")), output=output)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         return dict(preview, output=f"Cannot read agent: {clean(error)}\nOpen the workspace for its full conversation.")
 
@@ -324,30 +549,23 @@ def controller_lines(controller, width):
             "working": "Working — sending during work follows your board setting.",
             "idle": "Ready for a message, setup question, or new task.",
             "done": "Ready for a message, setup question, or new task."}.get(status, "Open orchestrator to check its state.")
-    return [(line, 0, []) for line in textwrap.wrap(hint, max(1, min(width, 124) - 4))] + terminal_lines(controller["output"], width)
+    return [(line, 0, []) for line in textwrap.wrap(hint, max(1, width - 3))] + terminal_lines(controller["output"], width)
 
 
+@lru_cache(maxsize=8)
 def terminal_lines(output, width):
     """Share agent-neutral formatting; a terminal preview is not a chat transcript."""
-    width = min(width, 124)
-    content = ["Recent terminal output (may include tools or omit earlier responses):", ""]
-    # Preserve line breaks/indentation without allowing terminal control characters.
-    content += ["".join(c for c in line.expandtabs(4) if c.isprintable())
-                for line in output.splitlines()]
     lines = []
-    for line in content:
-        color = 0
-        # Style the terminal's own recap; do not infer or generate a new summary.
-        if line.strip(" ─━-_").casefold() == "conversation recap":
-            line, color = "CONVERSATION RECAP", 10
+    content = "Recent terminal output (may include tools or omit earlier responses):\n\n" + output
+    for line in styled_lines(content):
         # Repeated terminal rules crowd out prose in the smaller preview panel.
         if line.strip() and set(line.strip()) <= set("─━-_"):
-            wrapped = [""]
+            wrapped = [StyledText("", [])]
         else:
-            wrapped = textwrap.wrap(line, max(1, width - 4), replace_whitespace=False) or [""]
+            wrapped = wrap_styled(line, max(1, width - 3))
         for text in wrapped:
             if text or not lines or lines[-1][0]:
-                lines.append((text, color, []))
+                lines.append((text, 0, []))
     return lines
 
 
@@ -996,6 +1214,7 @@ def display_loop(screen, args, executor, previews):
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(10, curses.COLOR_CYAN, -1)
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
+    preview_palette = PreviewPalette()
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
@@ -1034,6 +1253,7 @@ def display_loop(screen, args, executor, previews):
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         screen.erase()
+        preview_palette.begin_frame()
         args.send_while_working = viewer.settings["send_while_working"]
         args.activity_label = activity_label(activity, args.interval, viewer.settings["animate_activity"])
 
@@ -1240,7 +1460,10 @@ def display_loop(screen, args, executor, previews):
         put(title_y, title + scroll_hint, color, bold=True)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
             y = title_y + 1 + i
-            put(y, line, color, bold=bool(color))
+            if isinstance(line, StyledText):
+                draw_preview_line(screen, y, line, preview_palette, width)
+            else:
+                put(y, line, color, bold=bool(color))
             detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
             for left, right, _ in links:
                 try:

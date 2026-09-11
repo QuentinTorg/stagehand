@@ -27,6 +27,104 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_terminal_colors_and_attributes_survive_wrap_and_resets(self):
+        text = "\x1b[1;33mYellow\x1b[22;34mBlue\x1b[39mPlain\n\x1b[2;3;4;7mStyled\x1b[0mNormal"
+        lines = list(board.styled_lines(text))
+        self.assertEqual(list(map(str, lines)), ["YellowBluePlain", "StyledNormal"])
+        self.assertEqual(lines[0].styles[0], board.TerminalStyle(foreground=3, bold=True))
+        self.assertEqual(lines[0].styles[6], board.TerminalStyle(foreground=4))
+        self.assertEqual(lines[0].styles[10], board.TerminalStyle())
+        self.assertEqual(lines[1].styles[0], board.TerminalStyle(dim=True, italic=True, underline=True, reverse=True))
+        self.assertEqual(lines[1].styles[-1], board.TerminalStyle())
+        wrapped = list(board.wrap_styled(lines[0], 8))
+        self.assertEqual(list(map(str, wrapped)), ["YellowBl", "uePlain"])
+        self.assertEqual(wrapped[1].styles[0].foreground, 4)
+        self.assertEqual(wrapped[1].styles[2].foreground, -1)
+
+    def test_terminal_rgb_indexed_colors_and_malformed_sgr(self):
+        line = list(board.styled_lines("\x1b[38;2;137;180;250;48;5;123mA\x1b[38:2::249:226:175mB\x1b[49mC"))[0]
+        self.assertEqual(line.styles[0].foreground, (137, 180, 250))
+        self.assertEqual(line.styles[0].background, 123)
+        self.assertEqual(line.styles[1].foreground, (249, 226, 175))
+        self.assertEqual(line.styles[2].background, -1)
+        for parameters in ("38;2;999;0;0", "38;2;1", "38;5;256", "?", "38;9"):
+            self.assertEqual(board.sgr_style(board.TerminalStyle(), parameters), board.TerminalStyle())
+
+    def test_terminal_control_payloads_are_never_rendered_or_executed(self):
+        text = ("A\x1b[2JB\x1b[H\x1b]52;c;SECRET\x07C"
+                "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+                "\x1bPPRIVATE\x1b\\\x1b[?1000h\x1b(BD\x9dPRIVATE\x9cE\x1b]unfinished")
+        lines = list(board.styled_lines(text))
+        self.assertEqual("".join(lines), "ABClinkDE")
+        self.assertEqual("".join(board.styled_lines("safe\x1b[38;2;")), "safe")
+
+    def test_terminal_wrap_respects_cells_indentation_and_hard_breaks(self):
+        original = "  界e\u0301  │ data"
+        line = list(board.styled_lines(original))[0]
+        wrapped = list(board.wrap_styled(line, 6))
+        self.assertEqual("".join(wrapped), original)
+        self.assertTrue(all(sum(board.cell_width(c) for c in part) <= 6 for part in wrapped))
+        self.assertIn("e\u0301", wrapped[0])
+        preview = board.terminal_lines("short\n  indented\n" + "x" * 180, 200)
+        self.assertIn(("short", 0, []), preview)
+        self.assertIn(("  indented", 0, []), preview)
+        self.assertIn(("x" * 180, 0, []), preview)
+
+    def test_palette_preserves_theme_indices_maps_rgb_and_reserves_ui_pairs(self):
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "COLORS", 8, create=True
+        ), patch.object(board.curses, "COLOR_PAIRS", 14, create=True), patch.object(
+            board.curses, "color_content", side_effect=lambda index: (0, 0, 1000) if index == 4 else (0, 0, 0)
+        ), patch.object(board.curses, "init_pair") as init, patch.object(
+            board.curses, "color_pair", side_effect=lambda number: number << 8
+        ):
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.color(3), 3)
+            self.assertEqual(palette.color((0, 0, 250)), 4)
+            self.assertEqual(palette.color(-1), -1)
+            blue = board.TerminalStyle(foreground=(0, 0, 250), bold=True)
+            self.assertEqual(palette.attributes(blue), (12 << 8) | board.curses.A_BOLD)
+            palette.attributes(blue)
+            init.assert_called_once_with(12, 4, -1)
+            palette.attributes(board.TerminalStyle(foreground=3))
+            self.assertEqual(palette.attributes(board.TerminalStyle(foreground=2, underline=True)), board.curses.A_UNDERLINE)
+            self.assertEqual([call.args[0] for call in init.call_args_list], [12, 13])
+
+    def test_monochrome_preview_retains_bold_without_initializing_colors(self):
+        with patch.object(board.curses, "has_colors", return_value=False), patch.object(board.curses, "init_pair") as init:
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.attributes(board.TerminalStyle(foreground=3, bold=True)), board.curses.A_BOLD)
+            init.assert_not_called()
+
+    def test_extended_palette_ignores_ncurses_placeholder_rgb(self):
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "COLORS", 256, create=True
+        ), patch.object(board.curses, "color_content", return_value=(0, 0, 0)):
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.color((249, 226, 175)), 223)
+            self.assertEqual(palette.color((137, 180, 250)), 111)
+            self.assertEqual(palette.color(3), 3)
+            self.assertEqual(palette.color(246), 246)
+            palette.pairs[(1, -1)] = 12
+            palette.begin_frame()
+            self.assertEqual(palette.pairs, {})
+
+    def test_styled_drawing_keeps_span_positions_and_never_writes_escapes(self):
+        line = list(board.styled_lines("\x1b[33m界\x1b[1;34mBlue\x1b[0m!"))[0]
+        palette, screen = Mock(), Mock()
+        palette.attributes.side_effect = lambda style: style.foreground
+        board.draw_preview_line(screen, 3, line, palette, 80)
+        self.assertEqual([call.args for call in screen.addnstr.call_args_list],
+                         [(3, 1, "界", 1, 3), (3, 3, "Blue", 4, 4), (3, 7, "!", 1, -1)])
+
+    def test_bounded_preview_does_not_cut_into_escape_sequences(self):
+        text = "old" * 12000 + "\n\x1b[1;33mCurrent\x1b[0m"
+        with patch.object(board, "herdr_call", return_value=text):
+            result = board.read_preview("pane")
+        self.assertEqual(result, "\x1b[1;33mCurrent\x1b[0m")
+        with patch.object(board, "herdr_call", return_value="\x1b[33m" + "a" * 40000):
+            self.assertEqual(board.read_preview("pane"), "a" * 32000)
+
     def test_settings_persist_without_erasing_later(self):
         with tempfile.TemporaryDirectory() as root:
             tasks = Path(root) / "tasks"
@@ -469,11 +567,13 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row = board.task_summary(self.task("resolving"), 0, None, None, 5)
         self.assertEqual(board.task_stage(row), "Fixing findings")
 
-    def test_prose_does_not_stretch_across_ultrawide_screen(self):
+    def test_task_prose_stays_compact_but_terminal_preview_uses_full_width(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "An intentionally long description. " * 40
         self.assertTrue(all(len(line) <= 110 for line, _, _ in board.detail_lines(row, 320)))
-        self.assertTrue(all(len(line) <= 120 for line, _, _ in board.controller_lines({"status": "idle", "output": row["objective"]}, 320)))
+        lines = board.controller_lines({"status": "idle", "output": row["objective"]}, 320)
+        self.assertTrue(all(len(line) <= 317 for line, _, _ in lines))
+        self.assertTrue(any(len(line) > 120 for line, _, _ in lines))
 
     def test_common_record_shows_work_and_next_actor_without_review_metadata(self):
         for mode in ("development", "reviewer-only", "delegated-work", "workspace-only"):
@@ -793,7 +893,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             result = board.controller_snapshot()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(len(result["output"]), 32000)
-        self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120"))
+        self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi"))
         self.assertIn("Needs you", board.controller_lines(result, 80)[0][0])
 
     def test_worker_preview_is_bounded_and_agent_neutral(self):
@@ -808,7 +908,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertEqual(result["role"], "reviewer")
             self.assertEqual(len(result["output"]), 32000)
             self.assertEqual(call.call_count, 2)
-            self.assertEqual(call.call_args.args, ("agent", "read", "w1:p2", "--source", "recent-unwrapped", "--lines", "120"))
+            self.assertEqual(call.call_args.args, ("agent", "read", "w1:p2", "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi"))
 
     def test_worker_preview_does_not_read_a_reused_or_missing_identity(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
@@ -992,10 +1092,11 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 for row, left, right, _ in hits:
                     self.assertTrue(y != row or x + count <= left or x >= right)
 
-    def test_recap_heading_is_highlighted_without_dropping_prose(self):
-        controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n─ Conversation recap ───\n\nA useful summary.\n\n\n› Your prompt"}
+    def test_recap_heading_preserves_source_style_without_dropping_prose(self):
+        controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n\x1b[1;33m─ Conversation recap ───\x1b[0m\n\nA useful summary.\n\n\n› Your prompt"}
         lines = board.controller_lines(controller, 40)
-        self.assertIn(("CONVERSATION RECAP", 10, []), lines)
+        heading = next(line for line, _, _ in lines if "Conversation recap" in line)
+        self.assertTrue(all(style.bold and style.foreground == 3 for style in heading.styles))
         output = "\n".join(line for line, _, _ in lines)
         for text in ("Tool output", "A useful summary.", "› Your prompt"):
             self.assertIn(text, output)
