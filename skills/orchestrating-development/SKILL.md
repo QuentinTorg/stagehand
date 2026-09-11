@@ -33,7 +33,7 @@ Before provisioning or cleanup, read [Workspace Safety](references/safety-and-es
 
 ## Assign work
 
-Choose model and reasoning effort explicitly using local policy and [Agent Selection](references/agent-selection.md). Keep each prompt to the objective, exact checkout/branch, relevant issue or PR, constraints, and expected result. Do not send this skill, private configuration, task-record schemas, routing IDs, or notification instructions.
+Choose the agent, model, and supported options using local policy and [Agent Selection](references/agent-selection.md). Keep each prompt to the objective, exact checkout/branch, relevant issue or PR, constraints, and expected result. Do not send this skill, private configuration, task-record schemas, routing IDs, or notification instructions.
 
 The startup assets are short assignment examples, not repeated headers:
 
@@ -41,7 +41,7 @@ The startup assets are short assignment examples, not repeated headers:
 - [Reviewer](assets/reviewer-startup-prompt.md): independently review the exact changeset; use its external-review modifier for another developer's PR.
 - [Delegated worker](assets/delegated-worker-startup-prompt.md): investigate, diagnose, research, or plan without an implied development loop.
 
-Keep author and reviewer side by side in the task's `agents` tab, adding the reviewer when needed. Builds normally belong to the author. Hunk is not required; use ordinary review responses and preserve the relevant findings when routing them.
+By default, keep author and reviewer side by side in the task's `agents` tab, adding the reviewer when needed; local configuration may override the layout. Builds normally belong to the author. Hunk is not required; use ordinary review responses and preserve the relevant findings when routing them.
 
 ## Development loop
 

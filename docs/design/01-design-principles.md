@@ -96,8 +96,8 @@ current changeset identity remain authoritative when a role must be replaced.
   neither success nor authority.
 - Worker prompts describe objectives and boundaries, not infrastructure. Direct
   human instructions need no second approval for coordinator bookkeeping.
-- Explicit economical/stronger model choices match task difficulty. Escalate
-  repeated reasoning failures without making every assignment use a large model.
+- Agent selection follows user preferences, task needs, and observed results;
+  more expensive agents should earn their cost.
 - One Herdr workspace and worktree owns one task. Parallel task count remains a
   human decision, with the orchestrator warning about likely overlap.
 - The original author fixes findings and the original reviewer rereviews them.
