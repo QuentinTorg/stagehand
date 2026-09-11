@@ -62,6 +62,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Sce
 
 ## Models, capacity, and status
 
+- A working notice follows your own dispatch: reconcile and acknowledge without redispatching or asking for approval. A human resumes a settled worker: reflect its current activity without inferring scope or invalidating unrelated work. Coalesced or stale notices are observations, not a command sequence.
 - Follow the user's configured agent/model policy or explicit task choice without imposing tiers. If unclear, recommend an option and ask instead of inheriting terminal defaults.
 - Mixed-agent setup: load only the applicable setup references and verify each agent's discovery and permissions; do not apply another product's rules or unsupported options. Honor a local pane-layout override without changing review independence.
 - Three independent authorized tasks: allow all without a global cap. An unauthorized fourth task must not start. Warn about overlap and let the human choose sequencing.
