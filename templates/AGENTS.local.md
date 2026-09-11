@@ -43,13 +43,7 @@ Leave product build selection and product-repository instructions to the author 
 
 ## Managed-agent defaults
 
-Configure a small set of agent/model choices and their supported options:
-
-- Economical bounded work: `<agent>`, `<model>`, `<optional reasoning or other settings>`.
-- Difficult reasoning or promotion: `<agent>`, `<model>`, `<optional reasoning or other settings>`.
-- Anything beyond these choices requires human approval.
-
-Use installed agents supported by Herdr; roles may use different products. Adjust choices from observed results; explicit task-specific human choices take precedence. Use the skill's agent-selection guidance for routing rather than duplicating it here.
+Record your preferred Herdr-supported agents, models, supported options, and any cost or selection limits. Use whatever policy suits your work; fixed tiers are not required. Explicit task-specific human choices take precedence.
 
 ## Local command policy
 
