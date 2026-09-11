@@ -27,6 +27,186 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_terminal_colors_and_attributes_survive_wrap_and_resets(self):
+        text = "\x1b[1;33mYellow\x1b[22;34mBlue\x1b[39mPlain\n\x1b[2;3;4;7mStyled\x1b[0mNormal"
+        lines = list(board.styled_lines(text))
+        self.assertEqual(list(map(str, lines)), ["YellowBluePlain", "StyledNormal"])
+        self.assertEqual(lines[0].styles[0], board.TerminalStyle(foreground=3, bold=True))
+        self.assertEqual(lines[0].styles[6], board.TerminalStyle(foreground=4))
+        self.assertEqual(lines[0].styles[10], board.TerminalStyle())
+        self.assertEqual(lines[1].styles[0], board.TerminalStyle(dim=True, italic=True, underline=True, reverse=True))
+        self.assertEqual(lines[1].styles[-1], board.TerminalStyle())
+        wrapped = list(board.wrap_styled(lines[0], 8))
+        self.assertEqual(list(map(str, wrapped)), ["YellowBl", "uePlain"])
+        self.assertEqual(wrapped[1].styles[0].foreground, 4)
+        self.assertEqual(wrapped[1].styles[2].foreground, -1)
+
+    def test_terminal_rgb_indexed_colors_and_malformed_sgr(self):
+        line = list(board.styled_lines("\x1b[38;2;137;180;250;48;5;123mA\x1b[38:2::249:226:175mB\x1b[49mC"))[0]
+        self.assertEqual(line.styles[0].foreground, (137, 180, 250))
+        self.assertEqual(line.styles[0].background, 123)
+        self.assertEqual(line.styles[1].foreground, (249, 226, 175))
+        self.assertEqual(line.styles[2].background, -1)
+        for parameters in ("38;2;999;0;0", "38;2;1", "38;5;256", "?", "38;9"):
+            self.assertEqual(board.sgr_style(board.TerminalStyle(), parameters), board.TerminalStyle())
+
+    def test_terminal_control_payloads_are_never_rendered_or_executed(self):
+        text = ("A\x1b[2JB\x1b[H\x1b]52;c;SECRET\x07C"
+                "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+                "\x1bPPRIVATE\x1b\\\x1b[?1000h\x1b(BD\x9dPRIVATE\x9cE\x1b]unfinished")
+        lines = list(board.styled_lines(text))
+        self.assertEqual("".join(lines), "ABClinkDE")
+        self.assertEqual("".join(board.styled_lines("safe\x1b[38;2;")), "safe")
+
+    def test_terminal_wrap_respects_cells_indentation_and_hard_breaks(self):
+        original = "  界e\u0301  │ data"
+        line = list(board.styled_lines(original))[0]
+        wrapped = list(board.wrap_styled(line, 6))
+        self.assertEqual("".join(wrapped), original)
+        self.assertTrue(all(sum(board.cell_width(c) for c in part) <= 6 for part in wrapped))
+        self.assertIn("e\u0301", wrapped[0])
+        preview = board.terminal_lines("short\n  indented\n" + "x" * 180, 200)
+        self.assertIn(("short", 0, []), preview)
+        self.assertIn(("  indented", 0, []), preview)
+        self.assertIn(("x" * 180, 0, []), preview)
+
+    def test_palette_preserves_theme_indices_maps_rgb_and_reserves_ui_pairs(self):
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "COLORS", 8, create=True
+        ), patch.object(board.curses, "COLOR_PAIRS", 14, create=True), patch.object(
+            board.curses, "color_content", side_effect=lambda index: (0, 0, 1000) if index == 4 else (0, 0, 0)
+        ), patch.object(board.curses, "init_pair") as init, patch.object(
+            board.curses, "color_pair", side_effect=lambda number: number << 8
+        ):
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.color(3), 3)
+            self.assertEqual(palette.color((0, 0, 250)), 4)
+            self.assertEqual(palette.color(-1), -1)
+            blue = board.TerminalStyle(foreground=(0, 0, 250), bold=True)
+            self.assertEqual(palette.attributes(blue), (12 << 8) | board.curses.A_BOLD)
+            palette.attributes(blue)
+            init.assert_called_once_with(12, 4, -1)
+            palette.attributes(board.TerminalStyle(foreground=3))
+            self.assertEqual(palette.attributes(board.TerminalStyle(foreground=2, underline=True)), board.curses.A_UNDERLINE)
+            self.assertEqual([call.args[0] for call in init.call_args_list], [12, 13])
+
+    def test_monochrome_preview_retains_bold_without_initializing_colors(self):
+        with patch.object(board.curses, "has_colors", return_value=False), patch.object(board.curses, "init_pair") as init:
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.attributes(board.TerminalStyle(foreground=3, bold=True)), board.curses.A_BOLD)
+            init.assert_not_called()
+
+    def test_extended_palette_ignores_ncurses_placeholder_rgb(self):
+        with patch.object(board.curses, "has_colors", return_value=True), patch.object(
+            board.curses, "COLORS", 256, create=True
+        ), patch.object(board.curses, "color_content", return_value=(0, 0, 0)):
+            palette = board.PreviewPalette()
+            self.assertEqual(palette.color((249, 226, 175)), 223)
+            self.assertEqual(palette.color((137, 180, 250)), 111)
+            self.assertEqual(palette.color(3), 3)
+            self.assertEqual(palette.color(246), 246)
+            palette.pairs[(1, -1)] = 12
+            palette.begin_frame()
+            self.assertEqual(palette.pairs, {})
+
+    def test_styled_drawing_keeps_span_positions_and_never_writes_escapes(self):
+        line = list(board.styled_lines("\x1b[33m界\x1b[1;34mBlue\x1b[0m!"))[0]
+        palette, screen = Mock(), Mock()
+        palette.attributes.side_effect = lambda style: style.foreground
+        board.draw_preview_line(screen, 3, line, palette, 80)
+        self.assertEqual([call.args for call in screen.addnstr.call_args_list],
+                         [(3, 1, "界", 1, 3), (3, 3, "Blue", 4, 4), (3, 7, "!", 1, -1)])
+
+    def test_bounded_preview_does_not_cut_into_escape_sequences(self):
+        text = "old" * 12000 + "\n\x1b[1;33mCurrent\x1b[0m"
+        with patch.object(board, "herdr_call", return_value=text):
+            result = board.read_preview("pane")
+        self.assertEqual(result, "\x1b[1;33mCurrent\x1b[0m")
+        with patch.object(board, "herdr_call", return_value="\x1b[33m" + "a" * 40000):
+            self.assertEqual(board.read_preview("pane"), "a" * 32000)
+
+    def test_settings_persist_without_erasing_later(self):
+        with tempfile.TemporaryDirectory() as root:
+            tasks = Path(root) / "tasks"
+            viewer = board.ViewerState(tasks)
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            viewer.toggle(row)
+            self.assertFalse(viewer.settings["send_while_working"])
+            viewer.toggle_setting("send_while_working")
+            viewer.toggle_setting("animate_activity")
+            restored = board.ViewerState(tasks)
+            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False})
+            self.assertIn(row["id"], restored.later)
+            restored.toggle(row)
+            self.assertEqual(board.ViewerState(tasks).settings, restored.settings)
+            self.assertFalse(tasks.exists())
+
+    def test_settings_menu_keyboard_persists_and_fits(self):
+        for size in ((24, 60), (38, 88), (60, 200)):
+            with tempfile.TemporaryDirectory() as root:
+                viewer = board.ViewerState(Path(root) / "tasks")
+                executor = Mock()
+                executor.submit.return_value = Future()
+                with patch.object(board, "ViewerState", return_value=viewer), patch.object(board, "send_message") as send:
+                    screen = self.run_display(executor, [ord("s"), ord("1"), ord("2"), 27, ord("q")], size)
+                send.assert_not_called()
+                self.assertTrue(board.ViewerState(Path(root) / "tasks").settings["send_while_working"])
+                text = " ".join(str(call) for call in screen.addnstr.call_args_list)
+                self.assertIn("Send while working: On", text)
+                self.assertIn("Animation: Off", text)
+                for call in screen.addnstr.call_args_list:
+                    y, x, value, count, *_ = call.args
+                    self.assertTrue(0 <= y < size[0] and 0 <= x < size[1], call)
+                    self.assertLessEqual(x + min(len(value), count), size[1], call)
+
+    def test_activity_uses_scoped_inventory_without_preview_reads(self):
+        agent = {"name": "workflow_orchestrator", "workspace_id": "control", "agent_status": "working"}
+        for agents, expected in (([agent], "working"), ([dict(agent, workspace_id="other")], "unavailable"),
+                                 ([agent, agent], "unavailable"), (None, "unavailable")):
+            with patch.object(board, "read_tasks", return_value=([], [])), patch.object(
+                board, "inventory", return_value=([], agents, [])
+            ), patch.dict(board.os.environ, {"HERDR_WORKSPACE_ID": "control"}), patch.object(board, "herdr_call") as call:
+                _, _, activity = board.board_snapshot(Path("/unused"))
+            call.assert_not_called()
+            self.assertEqual(activity["status"], expected)
+            self.assertIn("observed_at", activity)
+
+    def test_spinner_stops_for_stale_or_nonworking_states(self):
+        activity = {"status": "working", "observed_at": 100}
+        self.assertNotEqual(board.activity_label(activity, 5, now=100), board.activity_label(activity, 5, now=100.3))
+        self.assertEqual(board.activity_label(activity, 5, animate=False, now=100), "Working")
+        self.assertEqual(board.activity_label(activity, 5, now=111), "Status stale")
+        self.assertEqual(board.activity_label({"status": "done"}, 5), "Ready")
+        self.assertIn("Blocked", board.activity_label({"status": "blocked"}, 5))
+
+    def test_auto_is_adjacent_to_grip_and_highlights_only_automatic_sizing(self):
+        screen = Mock()
+        for width in (60, 88, 200):
+            screen.getmaxyx.return_value = (60, width)
+            left, grip, auto_x = board.resize_controls(width)
+            self.assertEqual(auto_x, left + len(grip) + 1)
+            self.assertLess(auto_x + 6, width - 1)
+            for automatic in (True, False):
+                with patch.object(board, "draw_button") as button:
+                    board.draw_task_frame(screen, width, 5, 0, 5, "Workspaces", automatic=automatic)
+                button.assert_called_once_with(screen, 11, auto_x, " Auto ", active=automatic)
+
+    def test_send_while_working_setting_never_overrides_block_or_identity(self):
+        for enabled in (False, True):
+            for status in ("working", "blocked", "unknown", "idle"):
+                for workspace in ("control", "other"):
+                    args = SimpleNamespace(offline=False, send_while_working=enabled)
+                    response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+                        "workspace_id": workspace, "agent_status": status}}}))
+                    delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+                    with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+                        board.subprocess, "run", side_effect=[response, delivered]
+                    ) as run:
+                        success, _ = board.send_message(args, None, "One note")
+                    expected = workspace == "control" and (status == "idle" or status == "working" and enabled)
+                    self.assertEqual(success, expected)
+                    self.assertEqual(run.call_count, 2 if expected else 1)
+
     def test_workspace_size_defaults_and_manual_bounds(self):
         self.assertEqual(board.task_visible_rows(60, 40, None, 52), 12)
         self.assertEqual(board.task_visible_rows(60, 5, None, 52), 5)
@@ -41,12 +221,12 @@ class BoardTests(unittest.TestCase):
     def test_workspace_drag_release_and_auto_restore(self):
         rows = [dict(board.task_summary(self.task(), 0, None, None, 5), id=str(i)) for i in range(40)]
         ready = Future()
-        ready.set_result((rows, []))
+        ready.set_result((rows, [], {"status": "unknown"}))
         executor = Mock()
         executor.submit.return_value = ready
         events = [("select", 30, 18, 0), ("motion", 30, 30, 0),
                   ("release", 30, 30, 0), ("motion", 30, 40, 0),
-                  ("select", 131, 30, 0)]
+                  ("select", board.resize_controls(140)[2] + 1, 30, 0)]
         with patch.object(board, "mouse_event", side_effect=events), patch.object(
             board, "draw_task_frame", wraps=board.draw_task_frame
         ) as frame, patch.object(board, "send_message") as send, patch.object(board, "open_pr") as navigate:
@@ -110,7 +290,7 @@ class BoardTests(unittest.TestCase):
             row = board.task_summary(self.task(), 0, None, None, 5)
             viewer.toggle(row)
             ready = Future()
-            ready.set_result(([row], []))
+            ready.set_result(([row], [], {"status": "unknown"}))
             executor = Mock()
             executor.submit.return_value = ready
             with patch.object(board, "ViewerState", return_value=viewer), patch.object(
@@ -133,7 +313,7 @@ class BoardTests(unittest.TestCase):
                 row["agent_names"]["author"] = "author"
                 viewer.toggle(row)
                 ready = Future()
-                ready.set_result(([row], []))
+                ready.set_result(([row], [], {"status": "unknown"}))
                 executor = Mock()
                 executor.submit.return_value = ready
                 with patch.object(board, "ViewerState", return_value=viewer):
@@ -215,7 +395,7 @@ board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 row = board.task_summary({"task_id": "preview-test", "state": {"name": "active"}}, 0, None, None, 5)
 row["agent_names"] = {"author": "author"}
-board.board_snapshot = lambda *args: ([row], [])
+board.board_snapshot = lambda *args: ([row], [], {"status": "unknown"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
 def worker(*args):
     time.sleep(0.5)
@@ -271,15 +451,15 @@ spec = importlib.util.spec_from_file_location("board", sys.argv[1])
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 rows = [board.task_summary({"task_id": str(i), "state": {"name": "active"}}, 0, None, None, 5) for i in range(40)]
-board.board_snapshot = lambda *args: (rows, [])
+board.board_snapshot = lambda *args: (rows, [], {"status": "unknown"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
 original_mouse, original_frame = board.mouse_event, board.draw_task_frame
 def observed_mouse():
     event = original_mouse()
     os.write(int(sys.argv[3]), (repr(event) + "\\n").encode())
     return event
-def observed_frame(*args):
-    original_frame(*args)
+def observed_frame(*args, **kwargs):
+    original_frame(*args, **kwargs)
     os.write(int(sys.argv[3]), f"rows={args[2]}\\n".encode())
 board.mouse_event, board.draw_task_frame = observed_mouse, observed_frame
 curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=True, interval=5))
@@ -322,7 +502,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 wait_for(b"rows=24")
                 os.write(master, b"\x1b[<0;31;31m")
                 wait_for(b"('release', 30, 30, 0)")
-                os.write(master, b"\x1b[<0;92;31M")
+                auto_column = board.resize_controls(100)[2] + 1
+                os.write(master, f"\x1b[<0;{auto_column};31M".encode())
                 wait_for(b"rows=12")
                 os.write(master, b"q")
                 process.wait(timeout=5)
@@ -346,7 +527,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 row = board.task_summary(self.task(), 0, None, None, 5)
                 row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
                 row["conversation"] = {"role": "reviewer", "status": "done", "output": "A long worker response. " * 200}
-                pending.set_result(([row], []))
+                pending.set_result(([row], [], {"status": "unknown"}))
                 executor.submit.return_value = pending
                 screen = self.run_display(executor, [-1, ord(view), ord("q")], (height, width))
                 for call in screen.addnstr.call_args_list:
@@ -372,7 +553,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor = Mock()
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose, patch.object(board, "open_target") as navigate:
             self.run_display(executor, [-1, ord("c"), ord("m"), ord("t"), ord("m"), ord("q")])
@@ -386,11 +567,13 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row = board.task_summary(self.task("resolving"), 0, None, None, 5)
         self.assertEqual(board.task_stage(row), "Fixing findings")
 
-    def test_prose_does_not_stretch_across_ultrawide_screen(self):
+    def test_task_prose_stays_compact_but_terminal_preview_uses_full_width(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "An intentionally long description. " * 40
         self.assertTrue(all(len(line) <= 110 for line, _, _ in board.detail_lines(row, 320)))
-        self.assertTrue(all(len(line) <= 120 for line, _, _ in board.controller_lines({"status": "idle", "output": row["objective"]}, 320)))
+        lines = board.controller_lines({"status": "idle", "output": row["objective"]}, 320)
+        self.assertTrue(all(len(line) <= 317 for line, _, _ in lines))
+        self.assertTrue(any(len(line) > 120 for line, _, _ in lines))
 
     def test_common_record_shows_work_and_next_actor_without_review_metadata(self):
         for mode in ("development", "reviewer-only", "delegated-work", "workspace-only"):
@@ -554,7 +737,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor, previews = Mock(), Mock()
         first, blocked, response = Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        first.set_result(([row], []))
+        first.set_result(([row], [], {"status": "unknown"}))
         executor.submit.side_effect = [first, blocked]
         response.set_result({"role": "reviewer", "status": "done", "output": "Loaded independently"})
         previews.submit.return_value = response
@@ -569,7 +752,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_jump_to_latest_appears_only_after_scrolling_back(self):
         executor = Mock()
         first = Future()
-        first.set_result(([], []))
+        first.set_result(([], [], {"status": "unknown"}))
         executor.submit.return_value = first
         screen = self.run_display(executor, [-1, board.curses.KEY_UP, board.curses.KEY_END, ord("q")])
         output = " ".join(str(c) for c in screen.addnstr.call_args_list)
@@ -581,7 +764,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor, previews = Mock(), Mock()
         first, failure = Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        first.set_result(([row], []))
+        first.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = first
         failure.set_exception(RuntimeError("preview backend unavailable"))
         previews.submit.return_value = failure
@@ -596,7 +779,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         inventory, controller, author = Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["agent_names"] = {"author": "author"}
-        inventory.set_result(([row], []))
+        inventory.set_result(([row], [], {"status": "unknown"}))
         controller.set_result({"status": "idle", "output": "Controller"})
         executor.submit.return_value = inventory
         previews.submit.side_effect = [controller, author]
@@ -627,7 +810,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         inventory, controller, author, reviewer = Future(), Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
-        inventory.set_result(([row], []))
+        inventory.set_result(([row], [], {"status": "unknown"}))
         controller.set_result({"status": "idle", "output": "Controller"})
         executor.submit.return_value = inventory
         previews.submit.side_effect = [controller, author, reviewer, author, reviewer]
@@ -659,7 +842,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
         pending = Future()
-        pending.set_result(([], []))
+        pending.set_result(([], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose:
             screen = self.run_display(executor, [-1, ord("m"), ord("q")])
@@ -710,7 +893,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             result = board.controller_snapshot()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(len(result["output"]), 32000)
-        self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120"))
+        self.assertEqual(call.call_args.args, ("agent", "read", "control:p1", "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi"))
         self.assertIn("Needs you", board.controller_lines(result, 80)[0][0])
 
     def test_worker_preview_is_bounded_and_agent_neutral(self):
@@ -725,7 +908,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertEqual(result["role"], "reviewer")
             self.assertEqual(len(result["output"]), 32000)
             self.assertEqual(call.call_count, 2)
-            self.assertEqual(call.call_args.args, ("agent", "read", "w1:p2", "--source", "recent-unwrapped", "--lines", "120"))
+            self.assertEqual(call.call_args.args, ("agent", "read", "w1:p2", "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi"))
 
     def test_worker_preview_does_not_read_a_reused_or_missing_identity(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
@@ -752,10 +935,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
 
     def test_inventory_does_not_read_conversations(self):
         rows = [board.task_summary(dict(self.task(), task_id=str(i)), 0, None, None, 5) for i in range(10)]
-        with patch.object(board, "snapshot", return_value=(rows, [])), patch.object(
+        with patch.object(board, "snapshot", return_value=(rows, [], {"status": "working"})), patch.object(
             board, "controller_snapshot"
         ) as controller, patch.object(board, "worker_snapshot") as read:
-            result, _ = board.board_snapshot(Path("/unused"), False)
+            result, _, _ = board.board_snapshot(Path("/unused"), False)
             self.assertEqual(result, rows)
             read.assert_not_called()
             controller.assert_not_called()
@@ -766,7 +949,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "Task purpose remains available."
         row["conversation"] = {"role": "reviewer", "status": "done", "output": "Please clarify the boundary case."}
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         previews = Mock()
         response = Future()
@@ -783,6 +966,35 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn("Details", rendered)
         self.assertLess(rendered.index("Task purpose remains available."), rendered.index("Please clarify the boundary case."))
         self.assertEqual(compose.call_args.args[2]["id"], row["id"])
+
+    def test_message_wrap_matches_full_box_interior_and_preview(self):
+        for width in (60, 88, 128, 200, 320):
+            interior = width - 7
+            message = "x" * interior + "Z"
+            lines, positions, top, _, line_width = board.message_layout(message, 60, width)
+            self.assertEqual(line_width, interior)
+            self.assertEqual(lines, ["x" * interior, "Z"])
+            self.assertEqual(positions[interior - 1], (0, interior - 1))
+            self.assertEqual(positions[interior], (1, 0))
+            self.assertEqual(positions[-1], (1, 1))
+            screen = Mock()
+            screen.getmaxyx.return_value = (60, width)
+            board.draw_message_box(screen, None, message)
+            first = next(call.args[2] for call in screen.addnstr.call_args_list if call.args[0] == top + 1)
+            self.assertEqual(first, "│ " + "x" * interior + " │")
+
+    def test_message_resize_reflows_without_changing_draft_or_cursor_identity(self):
+        message = "x" * 150 + "\n" + "y" * 230
+        for width in (320, 88, 200, 60, 320):
+            lines, positions, _, _, interior = board.message_layout(message, 60, width)
+            self.assertEqual(len(positions), len(message) + 1)
+            for index, character in enumerate(message):
+                row, column = positions[index]
+                self.assertLess(column, interior)
+                if character != "\n":
+                    self.assertEqual(lines[row][column], character)
+            self.assertEqual("".join(lines), message.replace("\n", ""))
+        self.assertEqual(board.message_layout(message, 60, 320)[0], ["x" * 150, "y" * 230])
 
     def test_message_box_grows_then_caps_without_losing_text(self):
         for height, width in ((24, 60), (38, 88), (60, 200)):
@@ -880,10 +1092,11 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 for row, left, right, _ in hits:
                     self.assertTrue(y != row or x + count <= left or x >= right)
 
-    def test_recap_heading_is_highlighted_without_dropping_prose(self):
-        controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n─ Conversation recap ───\n\nA useful summary.\n\n\n› Your prompt"}
+    def test_recap_heading_preserves_source_style_without_dropping_prose(self):
+        controller = {"status": "idle", "output": "Tool output\n" + "─" * 100 + "\n\n\x1b[1;33m─ Conversation recap ───\x1b[0m\n\nA useful summary.\n\n\n› Your prompt"}
         lines = board.controller_lines(controller, 40)
-        self.assertIn(("CONVERSATION RECAP", 10, []), lines)
+        heading = next(line for line, _, _ in lines if "Conversation recap" in line)
+        self.assertTrue(all(style.bold and style.foreground == 3 for style in heading.styles))
         output = "\n".join(line for line, _, _ in lines)
         for text in ("Tool output", "A useful summary.", "› Your prompt"):
             self.assertIn(text, output)
@@ -945,7 +1158,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["prs"] = [f"https://github.com/team/repo/pull/{n}" for n in (123456, 234567, 345678, 456789)]
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         width = 88
         pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))

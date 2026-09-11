@@ -222,10 +222,100 @@ class PersistentWakeTest(WakePluginTest):
         self.fail(f"unexpected call: {args}")
 
     def turn(self, outcome="done"):
+        # Most existing cases exercise a complete turn coalesced while the
+        # coordinator is occupied. Start delivery is tested separately below.
+        target_status = self.target_status
+        self.target_status = "working"
         self.source["agent_status"] = "working"
         self.emit("working")
+        self.target_status = target_status
         self.source["agent_status"] = outcome
         self.emit(outcome)
+
+    def test_start_is_delivered_once_and_ack_preserves_stop(self):
+        self.arm("--persistent")
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        first = self.documents("inbox")[0]
+        self.assertEqual("working", first["status"])
+        self.assertIn("observed_at", first)
+        self.assertNotIn("settled_at", first)
+        self.assertIn('"status":"working"', self.prompts[0])
+        self.emit("working")
+        wake._flush()
+        self.assertEqual(1, len(self.prompts))
+        self.source["agent_status"] = "done"
+        self.emit("done")
+        self.assertEqual(2, len(self.documents("inbox")))
+        self.command("ack", "--wake", first["id"])
+        remaining = self.documents("inbox")
+        self.assertEqual(1, len(remaining))
+        self.assertEqual("done", remaining[0]["status"])
+        self.assertTrue(remaining[0]["notified"])
+        self.assertNotEqual(first["id"], remaining[0]["id"])
+        self.assertEqual(2, len(self.prompts))
+
+    def test_acknowledged_start_is_not_renotified_by_flush(self):
+        self.arm("--persistent")
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.emit("working")
+        wake._flush()
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual(1, len(self.prompts))
+
+    def test_resuming_after_block_notifies_working(self):
+        self.arm("--persistent")
+        self.turn("blocked")
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.assertEqual("working", self.documents("inbox")[0]["status"])
+        self.assertEqual(2, len(self.prompts))
+
+    def test_busy_start_is_replaced_by_latest_stop(self):
+        self.arm("--persistent")
+        self.target_status = "working"
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        initial_id = self.documents("inbox")[0]["id"]
+        self.source["agent_status"] = "blocked"
+        self.emit("blocked")
+        pending = self.documents("inbox")
+        self.assertEqual(1, len(pending))
+        self.assertEqual(initial_id, pending[0]["id"])
+        self.assertEqual("blocked", pending[0]["status"])
+        self.target_status = "idle"
+        wake._flush()
+        self.assertEqual(1, len(self.prompts))
+        self.assertIn('"status":"blocked"', self.prompts[0])
+
+    def test_delayed_stop_observes_resumed_work_not_obsolete_result(self):
+        self.arm("--persistent")
+        self.turn()
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.source["agent_status"] = "working"
+        self.emit("done")
+        self.assertEqual("working", self.documents("inbox")[0]["status"])
+        self.emit("working")
+        self.assertEqual(2, len(self.prompts))
+
+    def test_reordered_duplicate_hooks_do_not_repeat_a_completed_turn(self):
+        self.arm("--persistent")
+        self.source["state_change_seq"] = 10
+        self.turn()
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.emit("working")
+        self.emit("done")
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual(1, len(self.prompts))
+        # A later short turn can end before its working hook is handled.
+        self.source["state_change_seq"] = 12
+        self.emit("done")
+        self.emit("working")
+        self.assertEqual(2, len(self.prompts))
+        self.assertEqual("done", self.documents("inbox")[0]["status"])
 
     def test_human_followup_after_ack_needs_no_rearm(self):
         self.arm("--persistent")
@@ -315,10 +405,42 @@ class PersistentWakeTest(WakePluginTest):
     def test_registration_during_work_and_restart_flush(self):
         self.source["agent_status"] = "working"
         self.arm("--persistent")
+        start = self.documents("inbox")[0]
+        self.assertEqual("working", start["status"])
         # No stop hook arrived; a bounded startup flush recovers settlement.
         self.source["agent_status"] = "done"
         wake._flush()
         self.assertEqual(1, len(self.prompts))
+        self.command("ack", "--wake", start["id"])
+        self.assertEqual(2, len(self.prompts))
+        self.assertEqual("done", self.documents("inbox")[0]["status"])
+
+    def test_existing_persistent_registration_needs_no_rearm(self):
+        self.arm("--persistent")
+        watch_id = self.documents("watches")[0]["id"]
+        # An old installed watch has no start-notification history yet.
+        self.assertNotIn("last_status", self.documents("watches")[0])
+        self.source["agent_status"] = "working"
+        wake._flush()
+        self.assertEqual("working", self.documents("inbox")[0]["status"])
+        self.assertEqual(watch_id, self.documents("watches")[0]["id"])
+
+    def test_unregistered_source_does_not_create_notifications(self):
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.emit("done")
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual([], self.prompts)
+
+    def test_failed_snapshot_does_not_consume_transition(self):
+        self.arm("--persistent")
+        self.source["agent_status"] = "working"
+        with mock.patch.object(wake, "_herdr", return_value=(None, "unavailable")):
+            self.emit("working")
+        self.assertEqual([], self.documents("inbox"))
+        self.assertNotIn("last_status", self.documents("watches")[0])
+        wake._flush()
+        self.assertEqual("working", self.documents("inbox")[0]["status"])
 
     def test_fast_stop_hook_arrives_before_working_hook(self):
         self.arm("--persistent")

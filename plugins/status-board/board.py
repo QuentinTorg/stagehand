@@ -4,15 +4,19 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import curses
+from dataclasses import dataclass, replace
+from functools import lru_cache
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
 import time
+import unicodedata
 from urllib.parse import urlsplit
 import webbrowser
 
@@ -25,6 +29,212 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "implementation-ready", "resolving", "reviewing", "finalizing", "publishing-review",
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
+VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True}
+
+
+@dataclass(frozen=True)
+class TerminalStyle:
+    foreground: int | tuple[int, int, int] = -1
+    background: int | tuple[int, int, int] = -1
+    bold: bool = False
+    dim: bool = False
+    italic: bool = False
+    underline: bool = False
+    reverse: bool = False
+
+
+class StyledText(str):
+    """Plain display text with per-character styles; never executable escapes."""
+
+    def __new__(cls, text, styles):
+        value = super().__new__(cls, text)
+        value.styles = tuple(styles)
+        return value
+
+
+def sgr_style(style, parameters):
+    # Herdr emits semicolon SGR; also accept the common colon RGB notation.
+    parameters = re.sub(r"(38|48):2:(?:0)?:", r"\1;2;", parameters).replace(":", ";")
+    try:
+        codes = [int(value or 0) for value in parameters.split(";")]
+    except ValueError:
+        return style
+    index = 0
+    attributes = {1: ("bold", True), 2: ("dim", True), 3: ("italic", True),
+                  4: ("underline", True), 7: ("reverse", True), 23: ("italic", False),
+                  24: ("underline", False), 27: ("reverse", False)}
+    while index < len(codes):
+        code = codes[index]
+        index += 1
+        if code == 0:
+            style = TerminalStyle()
+        elif code == 22:
+            style = replace(style, bold=False, dim=False)
+        elif code in attributes:
+            name, value = attributes[code]
+            style = replace(style, **{name: value})
+        elif code in (39, 49):
+            style = replace(style, **{"foreground" if code == 39 else "background": -1})
+        elif 30 <= code <= 37 or 90 <= code <= 97:
+            style = replace(style, foreground=code - 30 if code < 90 else code - 90 + 8)
+        elif 40 <= code <= 47 or 100 <= code <= 107:
+            style = replace(style, background=code - 40 if code < 100 else code - 100 + 8)
+        elif code in (38, 48):
+            mode = codes[index] if index < len(codes) else None
+            count = 2 if mode == 5 else 4 if mode == 2 else 0
+            if not count or index + count > len(codes):
+                break
+            values = codes[index + 1:index + count]
+            if all(0 <= value <= 255 for value in values):
+                color = values[0] if mode == 5 else tuple(values)
+                style = replace(style, **{"foreground" if code == 38 else "background": color})
+            index += count
+    return style
+
+
+def cell_width(character):
+    if unicodedata.combining(character):
+        return 0
+    return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+
+
+def styled_lines(output):
+    """Read snapshot styling only. Discard cursor, OSC, clipboard and mode commands."""
+    style, characters, styles, column, index = TerminalStyle(), [], [], 0, 0
+    while index < len(output):
+        character = output[index]
+        index += 1
+        if character in {"\x1b", "\x9b", "\x9d", "\x90", "\x98", "\x9e", "\x9f"}:
+            if character == "\x1b":
+                if index == len(output):
+                    break
+                kind = output[index]
+                index += 1
+            else:
+                kind = {"\x9b": "[", "\x9d": "]", "\x90": "P", "\x98": "X", "\x9e": "^", "\x9f": "_"}[character]
+            start = index
+            if kind == "[":
+                while index < len(output) and not "@" <= output[index] <= "~":
+                    index += 1
+                if index < len(output) and output[index] == "m":
+                    style = sgr_style(style, output[start:index])
+                index += 1
+            elif kind in "]PX^_":
+                # String controls end at ST; OSC also accepts BEL. An incomplete
+                # sequence is discarded through EOF instead of displaying its payload.
+                ending = re.search(r"\x1b\\|\x9c|\x07" if kind == "]" else r"\x1b\\|\x9c", output[index:])
+                index = index + ending.end() if ending else len(output)
+            elif " " <= kind <= "/":
+                while index < len(output) and " " <= output[index] <= "/":
+                    index += 1
+                index += 1
+            continue
+        if character == "\n":
+            yield StyledText("".join(characters), styles)
+            characters, styles, column = [], [], 0
+        elif character == "\t":
+            count = 4 - column % 4
+            characters.extend(" " * count)
+            styles.extend([style] * count)
+            column += count
+        elif character.isprintable():
+            characters.append(character)
+            styles.append(style)
+            column += cell_width(character)
+    yield StyledText("".join(characters), styles)
+
+
+def wrap_styled(line, width):
+    # Wrap terminal cells, keeping spacing/table alignment and source line breaks.
+    start, cells = 0, 0
+    for index, character in enumerate(line):
+        size = cell_width(character)
+        if cells + size > width and index > start:
+            yield StyledText(line[start:index], line.styles[start:index])
+            start, cells = index, 0
+        cells += size
+    yield StyledText(line[start:], line.styles[start:])
+
+
+def indexed_rgb(index):
+    # xterm-compatible extended palettes have a fixed cube and grayscale ramp.
+    if index >= 232:
+        return (8 + 10 * (index - 232),) * 3
+    index, levels = index - 16, (0, 95, 135, 175, 215, 255)
+    return (levels[index // 36], levels[index // 6 % 6], levels[index % 6])
+
+
+class PreviewPalette:
+    """Bounded curses colors, separate from board controls and workflow colors."""
+
+    def __init__(self):
+        self.pairs, self.palette = {}, []
+        self.colors = min(getattr(curses, "COLORS", 0), 256) if curses.has_colors() else 0
+        self.limit = min(getattr(curses, "COLOR_PAIRS", 0), 256)
+        for index in range(self.colors):
+            try:
+                # ncurses may return repeated basic-color placeholders for the
+                # extended palette; do not use those to quantize source RGB.
+                rgb = indexed_rgb(index) if index >= 16 else tuple(round(value * 255 / 1000) for value in curses.color_content(index))
+                self.palette.append((index, rgb))
+            except curses.error:
+                pass
+
+    def begin_frame(self):
+        # The board erases and redraws the entire screen. Reclaim pairs only at
+        # that boundary so animated RGB output cannot exhaust a long-lived board.
+        self.pairs.clear()
+
+    @lru_cache(maxsize=512)
+    def color(self, value):
+        if value == -1 or not self.colors:
+            return -1
+        if isinstance(value, int):
+            if value < self.colors:
+                return value
+            if value < 16:
+                return value % self.colors
+            value = indexed_rgb(value)
+        return min(self.palette, key=lambda entry: sum((a - b) ** 2 for a, b in zip(entry[1], value)))[0] if self.palette else -1
+
+    def attributes(self, style):
+        attributes = 0
+        for enabled, flag in ((style.bold, curses.A_BOLD), (style.dim, curses.A_DIM),
+                              (style.italic, getattr(curses, "A_ITALIC", 0)),
+                              (style.underline, curses.A_UNDERLINE), (style.reverse, curses.A_REVERSE)):
+            if enabled:
+                attributes |= flag
+        pair = (self.color(style.foreground), self.color(style.background))
+        if pair != (-1, -1) and self.colors:
+            if pair not in self.pairs and len(self.pairs) + 12 < self.limit:
+                number = len(self.pairs) + 12
+                try:
+                    curses.init_pair(number, *pair)
+                    self.pairs[pair] = number
+                except curses.error:
+                    return attributes
+            # Never recycle within a frame: it would recolor already drawn text.
+            if pair in self.pairs:
+                attributes |= curses.color_pair(self.pairs[pair])
+        return attributes
+
+
+def draw_preview_line(screen, y, line, palette, width):
+    x, start = 1, 0
+    while start < len(line):
+        end = start + 1
+        while end < len(line) and line.styles[end] == line.styles[start]:
+            end += 1
+        text = line[start:end]
+        cells = sum(cell_width(character) for character in text)
+        if x + cells > width - 1:
+            break
+        try:
+            screen.addnstr(y, x, text, len(text), palette.attributes(line.styles[start]))
+        except curses.error:
+            pass
+        x += cells
+        start = end
 
 
 def mapping(value):
@@ -197,7 +407,7 @@ def task_summary(task, modified, workspaces, agents, now):
             "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
 
 
-def snapshot(directory, offline=False):
+def snapshot(directory, offline=False, include_controller=False):
     tasks, warnings = read_tasks(directory)
     workspaces, agents, live_warnings = (None, None, ["Saved records only; live state not queried"]) if offline else inventory()
     warnings.extend(live_warnings)
@@ -207,6 +417,14 @@ def snapshot(directory, offline=False):
                     for row in rows if row["status"] is None)
     # Surface decisions first without changing saved workflow state or task order on disk.
     rows.sort(key=lambda row: row["color"])
+    if include_controller:
+        # Reuse inventory; showing activity must not poll hidden conversations.
+        owners = [agent for agent in agents or [] if agent.get("name") == "workflow_orchestrator"]
+        owner = owners[0] if len(owners) == 1 else {}
+        status = "offline" if offline else "unavailable"
+        if os.environ.get("HERDR_WORKSPACE_ID") and owner.get("workspace_id") == os.environ["HERDR_WORKSPACE_ID"]:
+            status = clean(owner.get("agent_status")) or "unknown"
+        return rows, warnings, {"status": status, "observed_at": time.monotonic()}
     return rows, warnings
 
 
@@ -223,14 +441,30 @@ def controller_identity():
     return agent
 
 
+def read_preview(pane):
+    output = herdr_call("agent", "read", pane, "--source", "recent-unwrapped", "--lines", "120", "--format", "ansi")
+    if len(output) <= 32000:
+        return output
+    # Do not start the bounded snapshot in the middle of an ANSI sequence.
+    start = len(output) - 32000
+    boundary = output.find("\n", start)
+    if boundary >= 0:
+        return output[boundary + 1:]
+    boundary = output.find("\x1b[0m", start)
+    if boundary >= 0:
+        return output[boundary:]
+    # A single oversized line has no safe raw cut; flatten it before tailing.
+    return "\n".join(styled_lines(output))[-32000:]
+
+
 def controller_snapshot(offline=False):
     if offline or os.environ.get("HERDR_ENV") != "1":
         return {"status": "offline", "output": "Live orchestrator output is unavailable in offline mode."}
     try:
         agent = controller_identity()
         # Read a bounded terminal preview, not private session files or a model summary.
-        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
-        return {"status": clean(agent.get("agent_status", "unknown")), "output": output[-32000:]}
+        output = read_preview(agent["pane_id"])
+        return {"status": clean(agent.get("agent_status", "unknown")), "output": output}
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         return {"status": "unavailable", "output": f"Cannot read orchestrator: {clean(error)}\nOpen its native session to check setup or permissions."}
 
@@ -252,15 +486,26 @@ def worker_snapshot(row, role=None, offline=False):
         if (not row.get("workspace_id") or agent.get("workspace_id") != row["workspace_id"]
                 or agent.get("name") != names[role] or not agent.get("pane_id")):
             raise ValueError("Agent no longer matches the recorded workspace")
-        output = herdr_call("agent", "read", agent["pane_id"], "--source", "recent-unwrapped", "--lines", "120")
-        return dict(preview, status=clean(agent.get("agent_status", "unknown")), output=output[-32000:])
+        output = read_preview(agent["pane_id"])
+        return dict(preview, status=clean(agent.get("agent_status", "unknown")), output=output)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         return dict(preview, output=f"Cannot read agent: {clean(error)}\nOpen the workspace for its full conversation.")
 
 
 def board_snapshot(directory, offline=False):
-    rows, warnings = snapshot(directory, offline)
-    return rows, warnings
+    return snapshot(directory, offline, include_controller=True)
+
+
+def activity_label(activity, interval, animate=True, now=None):
+    now = time.monotonic() if now is None else now
+    status = activity.get("status", "unknown")
+    if "observed_at" in activity and now - activity["observed_at"] > max(10, 2 * interval):
+        return "Status stale"
+    if status == "working":
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        return (frames[int(now * 5) % len(frames)] + " " if animate else "") + "Working"
+    return {"idle": "Ready", "done": "Ready", "blocked": "Blocked · open orchestrator",
+            "offline": "Offline", "unavailable": "Unavailable"}.get(status, "Checking status")
 
 
 def stamp_preview(result, previous, now):
@@ -301,33 +546,26 @@ def open_target(args, row=None):
 def controller_lines(controller, width):
     status = controller["status"]
     hint = {"blocked": "Needs you — open orchestrator for its permission or question dialog.",
-            "working": "Working — messages can be sent when it is ready.",
+            "working": "Working — sending during work follows your board setting.",
             "idle": "Ready for a message, setup question, or new task.",
             "done": "Ready for a message, setup question, or new task."}.get(status, "Open orchestrator to check its state.")
-    return [(line, 0, []) for line in textwrap.wrap(hint, max(1, min(width, 124) - 4))] + terminal_lines(controller["output"], width)
+    return [(line, 0, []) for line in textwrap.wrap(hint, max(1, width - 3))] + terminal_lines(controller["output"], width)
 
 
+@lru_cache(maxsize=8)
 def terminal_lines(output, width):
     """Share agent-neutral formatting; a terminal preview is not a chat transcript."""
-    width = min(width, 124)
-    content = ["Recent terminal output (may include tools or omit earlier responses):", ""]
-    # Preserve line breaks/indentation without allowing terminal control characters.
-    content += ["".join(c for c in line.expandtabs(4) if c.isprintable())
-                for line in output.splitlines()]
     lines = []
-    for line in content:
-        color = 0
-        # Style the terminal's own recap; do not infer or generate a new summary.
-        if line.strip(" ─━-_").casefold() == "conversation recap":
-            line, color = "CONVERSATION RECAP", 10
+    content = "Recent terminal output (may include tools or omit earlier responses):\n\n" + output
+    for line in styled_lines(content):
         # Repeated terminal rules crowd out prose in the smaller preview panel.
         if line.strip() and set(line.strip()) <= set("─━-_"):
-            wrapped = [""]
+            wrapped = [StyledText("", [])]
         else:
-            wrapped = textwrap.wrap(line, max(1, width - 4), replace_whitespace=False) or [""]
+            wrapped = wrap_styled(line, max(1, width - 3))
         for text in wrapped:
             if text or not lines or lines[-1][0]:
-                lines.append((text, color, []))
+                lines.append((text, 0, []))
     return lines
 
 
@@ -344,6 +582,7 @@ def help_lines(width, warnings):
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
             "Drag the Workspaces bottom border to resize; Auto restores automatic sizing. Sizing lasts for this board session.",
             "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
+            "s: Settings. Enable sending while working only for agents that accept mid-turn input.",
             "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
             "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
             "a: next task needing you. i: task details. End: follow latest conversation. r: refresh. q: close this board."]
@@ -528,6 +767,7 @@ class ViewerState:
     def __init__(self, tasks):
         self.path = tasks.parent / "board-state.json"
         self.later, self.error = {}, None
+        self.settings = dict(VIEWER_DEFAULTS)
         try:
             if self.path.exists():
                 saved = json.loads(self.path.read_text())
@@ -537,6 +777,11 @@ class ViewerState:
                         for value in later.values()):
                     raise ValueError("invalid Later entries")
                 self.later = later
+                settings = saved.get("settings", {})
+                if not isinstance(settings, dict) or any(type(settings[key]) is not bool
+                        for key in VIEWER_DEFAULTS if key in settings):
+                    raise ValueError("invalid viewer settings")
+                self.settings.update({key: settings[key] for key in VIEWER_DEFAULTS if key in settings})
         except (OSError, ValueError, KeyError, TypeError) as error:
             self.error = f"Cannot read viewer state; preserving file: {clean(error)}"
 
@@ -547,11 +792,18 @@ class ViewerState:
                  ("workspace_id", "status", "summary", "action", "next", "objective", "prs", "agent_names")}
         return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
 
-    def save(self, later):
+    def save(self, later, settings=None):
         if self.error:
             raise ValueError(self.error)
-        save_draft(self.path, json.dumps({"later": later}, indent=2) + "\n")
+        settings = self.settings if settings is None else settings
+        save_draft(self.path, json.dumps({"later": later, "settings": settings}, indent=2) + "\n")
         self.later = later
+        self.settings = settings
+
+    def toggle_setting(self, key):
+        if key not in VIEWER_DEFAULTS:
+            raise ValueError("Unknown viewer setting")
+        self.save(self.later, dict(self.settings, **{key: not self.settings[key]}))
 
     def toggle(self, row):
         later = dict(self.later)
@@ -603,8 +855,13 @@ def send_message(args, row, message):
         agent = json.loads(result.stdout)["result"]["agent"]
         if not os.environ.get("HERDR_WORKSPACE_ID") or agent.get("workspace_id") != os.environ["HERDR_WORKSPACE_ID"]:
             return False, "Orchestrator is not in this control workspace. Draft kept."
-        if agent.get("agent_status") not in {"idle", "done"}:
-            return False, "Orchestrator is busy or blocked. Draft kept; send when it is ready."
+        status = agent.get("agent_status")
+        if status == "blocked":
+            return False, "Orchestrator is blocked. Open its native session; draft kept."
+        if status == "working" and not getattr(args, "send_while_working", False):
+            return False, "Orchestrator is working. Enable Send while working in Settings, or wait. Draft kept."
+        if status not in {"idle", "done", "working"}:
+            return False, "Orchestrator status is uncertain. Nothing sent; draft kept."
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return False, "Cannot verify the orchestrator. Nothing sent; draft kept."
     try:
@@ -620,7 +877,8 @@ def send_message(args, row, message):
 
 def message_layout(message, height, width):
     """Share wrapping and geometry so editing, previews, and clicks stay aligned."""
-    line_width = max(1, min(120, width - 6))
+    # Match the box interior: outer margins, borders, and one-cell side padding.
+    line_width = max(1, width - 7)
     lines, positions = [""], []
     for character in message:
         positions.append((len(lines) - 1, len(lines[-1])))
@@ -636,10 +894,13 @@ def message_layout(message, height, width):
     return lines, positions, max(0, height - visible - 5), visible, line_width
 
 
-def draw_message_box(screen, row, message, active=False, can_send=None):
+def draw_message_box(screen, row, message, active=False, can_send=None, activity=""):
     height, width = screen.getmaxyx()
-    preview, _, top, visible, _ = message_layout(message, height, width)
+    preview, _, top, visible, line_width = message_layout(message, height, width)
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
+    if activity:
+        # Keep live state visible even when the workspace label must be shortened.
+        title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
              "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
@@ -650,7 +911,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None):
     heading = clipped(title, max(1, box_width - 4))
     lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
     for i in range(1, visible + 2):
-        lines[i] = "│ " + clipped(lines[i][2:], box_width - 4).ljust(box_width - 4) + " │"
+        lines[i] = "│ " + clipped(lines[i][2:], line_width).ljust(line_width) + " │"
     lines[-1] = "└" + "─" * (box_width - 2) + "┘"
     for i, text in enumerate(lines):
         try:
@@ -689,7 +950,8 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         offset = max(0, cy - visible + 1)
         if inline:
             # The board redraws the background before each editor frame.
-            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()))
+            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()),
+                             activity=getattr(args, "activity_label", ""))
             content = []
         else:
             screen.erase()
@@ -816,7 +1078,13 @@ def task_visible_rows(height, count, requested, message_top):
     return max(1, min(preferred, available))
 
 
-def draw_task_frame(screen, width, visible, selected, count, caption):
+def resize_controls(width):
+    grip = " ↕ Drag to resize "
+    left = max(1, (width - len(grip) - 8) // 2)
+    return left, grip, left + len(grip) + 1
+
+
+def draw_task_frame(screen, width, visible, selected, count, caption, automatic=True):
     # Reserve the outer columns for the frame, independent of table content.
     right, bottom = width - 2, 6 + visible
     if right < 3:
@@ -830,9 +1098,9 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
             screen.addnstr(y, 0, "│", 1)
             screen.addnstr(y, right, "█" if y == thumb else "│", 1)
         screen.addnstr(bottom, 0, "└" + "─" * (right - 1) + "┘", right + 1)
-        grip = " ↕ Drag to resize "
-        screen.addnstr(bottom, max(1, (width - len(grip)) // 2), grip, len(grip), curses.A_DIM)
-        draw_button(screen, bottom, width - 10, " Auto ")
+        left, grip, auto_x = resize_controls(width)
+        screen.addnstr(bottom, left, grip, len(grip), curses.A_DIM)
+        draw_button(screen, bottom, auto_x, " Auto ", active=automatic)
     except curses.error:
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
@@ -946,16 +1214,18 @@ def display_loop(screen, args, executor, previews):
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(10, curses.COLOR_CYAN, -1)
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
+    preview_palette = PreviewPalette()
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
     requested_rows, dragging = None, False
     viewer = ViewerState(args.tasks)
+    activity = {"status": "unknown"}
     notice, pending, queued_mouse = "", None, None
     editor, editor_task = None, None
     refresh_started = None
     detail_offset, detail_task = 0, None
-    general, info, show_help = False, True, False
+    general, info, utility_view = False, True, None
     controller_offset = None
     preview_role, preview_offset = None, None
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
@@ -968,7 +1238,7 @@ def display_loop(screen, args, executor, previews):
             previous_row = rows[min(selected, len(rows) - 1)] if rows else None
             selected_id = previous_row["id"] if previous_row else None
             try:
-                all_rows, warnings = pending.result()
+                all_rows, warnings, activity = pending.result()
                 returned = viewer.reconcile(all_rows)
                 if returned:
                     notice = " ".join(returned)
@@ -983,6 +1253,9 @@ def display_loop(screen, args, executor, previews):
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         screen.erase()
+        preview_palette.begin_frame()
+        args.send_while_working = viewer.settings["send_while_working"]
+        args.activity_label = activity_label(activity, args.interval, viewer.settings["animate_activity"])
 
         def put(y, text, color=0, bold=False, highlight=False, underline=False):
             if not 0 <= y < height - 1:
@@ -1036,7 +1309,7 @@ def display_loop(screen, args, executor, previews):
             preview_key = preview_request
             preview_refresh_at = time.monotonic() + args.interval
             preview_pending = None
-        wanted_preview = not show_help and (viewing_controller or (current is not None and not info))
+        wanted_preview = not utility_view and (viewing_controller or (current is not None and not info))
         request = (("controller",) if viewing_controller or current is None else
                    (current["id"], current["workspace_id"], preview_role, current.get("next"),
                     tuple(sorted(current.get("agent_names", {}).items()))))
@@ -1052,8 +1325,8 @@ def display_loop(screen, args, executor, previews):
             health = " · Updates delayed"
         put(0, "STAGEHAND" + health, bold=True)
         actions, _ = draw_actions(screen, 1, width,
-                                 [("task", "Tasks"), ("controller", "Orchestrator"), ("help", "?")],
-                                 "help" if show_help else "controller" if viewing_controller else "task", tabs=True)
+                                 [("task", "Tasks"), ("controller", "Orchestrator"), ("settings", "Settings"), ("help", "?")],
+                                 utility_view or ("controller" if viewing_controller else "task"), tabs=True)
         legend_x = 1
         for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
             text = f"● {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
@@ -1073,7 +1346,7 @@ def display_loop(screen, args, executor, previews):
         _, _, message_top, _, _ = message_layout(draft, height, width)
         visible = task_visible_rows(height, len(rows), requested_rows, message_top)
         offset = max(0, selected - visible + 1)
-        show_tasks = not (viewing_controller or show_help)
+        show_tasks = not (viewing_controller or utility_view)
         if show_tasks:
             header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
             table_rows = [row for row in rows if row is not None]
@@ -1111,13 +1384,18 @@ def display_loop(screen, args, executor, previews):
                         except curses.error:
                             pass
             draw_task_frame(screen, width, visible, selected, len(rows),
-                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
-            actions.append((6 + visible, width - 10, width - 4, "auto-size"))
+                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}",
+                            automatic=requested_rows is None)
+            auto_x = resize_controls(width)[2]
+            actions.append((6 + visible, auto_x, auto_x + 6, "auto-size"))
             detail_y = 7 + visible
         else:
             detail_y = 3
 
-        if show_help:
+        if utility_view == "settings":
+            context_actions = [("setting-send_while_working", "1 Send while working: " + ("On" if args.send_while_working else "Off")),
+                               ("setting-animate_activity", "2 Animation: " + ("On" if viewer.settings["animate_activity"] else "Off"))]
+        elif utility_view:
             context_actions = [("help", "Back")]
         elif viewing_controller:
             context_actions = ([] if controller_offset is None else [("latest", "Jump to latest")])
@@ -1133,12 +1411,19 @@ def display_loop(screen, args, executor, previews):
         conversation = preview_result if not viewing_controller and preview_key == request else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
-                                           tabs=not viewing_controller and not show_help)
-        if viewing_controller and not show_help and controller_offset is None:
+                                           tabs=not viewing_controller and not utility_view)
+        if viewing_controller and not utility_view and controller_offset is None:
             put(detail_y, "Following latest", 10)
         actions += context_hits
         detail_height = max(1, message_top - 1 - (title_y + 1))
-        if show_help:
+        if utility_view == "settings":
+            paragraphs = ["Click a setting or press 1 / 2 to toggle. Esc returns. Preferences are saved for this control workspace.",
+                          "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
+                          "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation."]
+            details = [(line, 0, []) for paragraph in paragraphs
+                       for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
+            title, color = "Board settings", 10
+        elif utility_view:
             details = help_lines(width, warnings)
             title, color = "Help · buttons and underlined PRs are clickable", 10
         elif viewing_controller:
@@ -1165,9 +1450,9 @@ def display_loop(screen, args, executor, previews):
             title = clipped(title, width - 3 - len(freshness)) + freshness
             color = 10
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
-        if viewing_controller and not show_help:
+        if viewing_controller and not utility_view:
             active_offset = max(0, len(details) - detail_height) if controller_offset is None else max(0, min(controller_offset, len(details) - detail_height))
-        elif not show_help and not info:
+        elif not utility_view and not info:
             active_offset = max(0, len(details) - detail_height) if preview_offset is None else max(0, min(preview_offset, len(details) - detail_height))
         else:
             active_offset = detail_offset
@@ -1175,7 +1460,10 @@ def display_loop(screen, args, executor, previews):
         put(title_y, title + scroll_hint, color, bold=True)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
             y = title_y + 1 + i
-            put(y, line, color, bold=bool(color))
+            if isinstance(line, StyledText):
+                draw_preview_line(screen, y, line, preview_palette, width)
+            else:
+                put(y, line, color, bold=bool(color))
             detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
             for left, right, _ in links:
                 try:
@@ -1185,7 +1473,7 @@ def display_loop(screen, args, executor, previews):
         try:
             path = draft_path(args, message_target)
             draft = path.read_text() if path.exists() else ""
-            draw_message_box(screen, message_target, draft)
+            draw_message_box(screen, message_target, draft, activity=args.activity_label)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
         if viewer.error:
@@ -1195,7 +1483,7 @@ def display_loop(screen, args, executor, previews):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · ? Help · q Close", width - 1, curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · s Settings · ? Help · q Close", width - 1, curses.A_DIM)
         except curses.error:
             pass
         if editor is not None:
@@ -1219,12 +1507,14 @@ def display_loop(screen, args, executor, previews):
             return
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
-        elif key in (ord("t"), ord("c"), ord("?")):
-            action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help"}[key]
+        elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
+            action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
+        elif utility_view == "settings" and key in (ord("1"), ord("2")):
+            action = "setting-" + ("send_while_working" if key == ord("1") else "animate_activity")
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:
-            show_help = False
+            utility_view = None
         elif key in (ord("o"), ord("O")):
             action = "open-controller" if key == ord("O") or viewing_controller else "workspace"
         elif key == ord("i") and not viewing_controller:
@@ -1235,12 +1525,12 @@ def display_loop(screen, args, executor, previews):
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
-                delta *= detail_height if viewing_controller or show_help else visible
-            if viewing_controller and not show_help:
+                delta *= detail_height if viewing_controller or utility_view else visible
+            if viewing_controller and not utility_view:
                 controller_offset = max(0, active_offset + delta)
-            elif not show_help and not info and key in (ord("["), ord("]")):
+            elif not utility_view and not info and key in (ord("["), ord("]")):
                 preview_offset = max(0, active_offset + delta)
-            elif show_help or key in (ord("["), ord("]")):
+            elif utility_view or key in (ord("["), ord("]")):
                 detail_offset = max(0, active_offset + delta)
             else:
                 selected = max(0, min(len(rows) - 1, selected + delta))
@@ -1252,7 +1542,7 @@ def display_loop(screen, args, executor, previews):
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1)
                              if rows[i % len(rows)] and rows[i % len(rows)]["id"] not in viewer.later and rows[i % len(rows)]["color"] == 1), selected)
-            general, show_help = False, False
+            general, utility_view = False, None
         elif key == curses.KEY_MOUSE:
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
@@ -1265,9 +1555,9 @@ def display_loop(screen, args, executor, previews):
                 if kind == "wheel":
                     if show_tasks and 3 <= y <= 6 + visible:
                         selected = max(0, min(len(rows) - 1, selected + delta))
-                    elif viewing_controller and not show_help:
+                    elif viewing_controller and not utility_view:
                         controller_offset = max(0, active_offset + delta)
-                    elif not show_help and not info:
+                    elif not utility_view and not info:
                         preview_offset = max(0, active_offset + delta)
                     else:
                         detail_offset = max(0, active_offset + delta)
@@ -1301,11 +1591,17 @@ def display_loop(screen, args, executor, previews):
         if action == "auto-size":
             requested_rows = None
         elif action == "task":
-            general, show_help, detail_offset = False, False, 0
+            general, utility_view, detail_offset = False, None, 0
         elif action == "controller":
-            general, show_help, controller_offset = True, False, None
-        elif action == "help":
-            show_help, detail_offset = not show_help, 0
+            general, utility_view, controller_offset = True, None, None
+        elif action in {"help", "settings"}:
+            utility_view, detail_offset = action if utility_view != action else None, 0
+        elif action and action.startswith("setting-"):
+            try:
+                viewer.toggle_setting(action[len("setting-"):])
+                notice = "Settings saved."
+            except (OSError, ValueError) as error:
+                notice = f"Setting not saved: {clean(error)}"
         elif action in {"aside", "later"}:
             try:
                 if action == "aside" and current:
