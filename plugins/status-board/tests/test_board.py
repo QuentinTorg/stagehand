@@ -27,6 +27,88 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def test_settings_persist_without_erasing_later(self):
+        with tempfile.TemporaryDirectory() as root:
+            tasks = Path(root) / "tasks"
+            viewer = board.ViewerState(tasks)
+            row = board.task_summary(self.task(), 0, None, None, 5)
+            viewer.toggle(row)
+            self.assertFalse(viewer.settings["send_while_working"])
+            viewer.toggle_setting("send_while_working")
+            viewer.toggle_setting("animate_activity")
+            restored = board.ViewerState(tasks)
+            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False})
+            self.assertIn(row["id"], restored.later)
+            restored.toggle(row)
+            self.assertEqual(board.ViewerState(tasks).settings, restored.settings)
+            self.assertFalse(tasks.exists())
+
+    def test_settings_menu_keyboard_persists_and_fits(self):
+        for size in ((24, 60), (38, 88), (60, 200)):
+            with tempfile.TemporaryDirectory() as root:
+                viewer = board.ViewerState(Path(root) / "tasks")
+                executor = Mock()
+                executor.submit.return_value = Future()
+                with patch.object(board, "ViewerState", return_value=viewer), patch.object(board, "send_message") as send:
+                    screen = self.run_display(executor, [ord("s"), ord("1"), ord("2"), 27, ord("q")], size)
+                send.assert_not_called()
+                self.assertTrue(board.ViewerState(Path(root) / "tasks").settings["send_while_working"])
+                text = " ".join(str(call) for call in screen.addnstr.call_args_list)
+                self.assertIn("Send while working: On", text)
+                self.assertIn("Animation: Off", text)
+                for call in screen.addnstr.call_args_list:
+                    y, x, value, count, *_ = call.args
+                    self.assertTrue(0 <= y < size[0] and 0 <= x < size[1], call)
+                    self.assertLessEqual(x + min(len(value), count), size[1], call)
+
+    def test_activity_uses_scoped_inventory_without_preview_reads(self):
+        agent = {"name": "workflow_orchestrator", "workspace_id": "control", "agent_status": "working"}
+        for agents, expected in (([agent], "working"), ([dict(agent, workspace_id="other")], "unavailable"),
+                                 ([agent, agent], "unavailable"), (None, "unavailable")):
+            with patch.object(board, "read_tasks", return_value=([], [])), patch.object(
+                board, "inventory", return_value=([], agents, [])
+            ), patch.dict(board.os.environ, {"HERDR_WORKSPACE_ID": "control"}), patch.object(board, "herdr_call") as call:
+                _, _, activity = board.board_snapshot(Path("/unused"))
+            call.assert_not_called()
+            self.assertEqual(activity["status"], expected)
+            self.assertIn("observed_at", activity)
+
+    def test_spinner_stops_for_stale_or_nonworking_states(self):
+        activity = {"status": "working", "observed_at": 100}
+        self.assertNotEqual(board.activity_label(activity, 5, now=100), board.activity_label(activity, 5, now=100.3))
+        self.assertEqual(board.activity_label(activity, 5, animate=False, now=100), "Working")
+        self.assertEqual(board.activity_label(activity, 5, now=111), "Status stale")
+        self.assertEqual(board.activity_label({"status": "done"}, 5), "Ready")
+        self.assertIn("Blocked", board.activity_label({"status": "blocked"}, 5))
+
+    def test_auto_is_adjacent_to_grip_and_highlights_only_automatic_sizing(self):
+        screen = Mock()
+        for width in (60, 88, 200):
+            screen.getmaxyx.return_value = (60, width)
+            left, grip, auto_x = board.resize_controls(width)
+            self.assertEqual(auto_x, left + len(grip) + 1)
+            self.assertLess(auto_x + 6, width - 1)
+            for automatic in (True, False):
+                with patch.object(board, "draw_button") as button:
+                    board.draw_task_frame(screen, width, 5, 0, 5, "Workspaces", automatic=automatic)
+                button.assert_called_once_with(screen, 11, auto_x, " Auto ", active=automatic)
+
+    def test_send_while_working_setting_never_overrides_block_or_identity(self):
+        for enabled in (False, True):
+            for status in ("working", "blocked", "unknown", "idle"):
+                for workspace in ("control", "other"):
+                    args = SimpleNamespace(offline=False, send_while_working=enabled)
+                    response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
+                        "workspace_id": workspace, "agent_status": status}}}))
+                    delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+                    with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
+                        board.subprocess, "run", side_effect=[response, delivered]
+                    ) as run:
+                        success, _ = board.send_message(args, None, "One note")
+                    expected = workspace == "control" and (status == "idle" or status == "working" and enabled)
+                    self.assertEqual(success, expected)
+                    self.assertEqual(run.call_count, 2 if expected else 1)
+
     def test_workspace_size_defaults_and_manual_bounds(self):
         self.assertEqual(board.task_visible_rows(60, 40, None, 52), 12)
         self.assertEqual(board.task_visible_rows(60, 5, None, 52), 5)
@@ -41,12 +123,12 @@ class BoardTests(unittest.TestCase):
     def test_workspace_drag_release_and_auto_restore(self):
         rows = [dict(board.task_summary(self.task(), 0, None, None, 5), id=str(i)) for i in range(40)]
         ready = Future()
-        ready.set_result((rows, []))
+        ready.set_result((rows, [], {"status": "unknown"}))
         executor = Mock()
         executor.submit.return_value = ready
         events = [("select", 30, 18, 0), ("motion", 30, 30, 0),
                   ("release", 30, 30, 0), ("motion", 30, 40, 0),
-                  ("select", 131, 30, 0)]
+                  ("select", board.resize_controls(140)[2] + 1, 30, 0)]
         with patch.object(board, "mouse_event", side_effect=events), patch.object(
             board, "draw_task_frame", wraps=board.draw_task_frame
         ) as frame, patch.object(board, "send_message") as send, patch.object(board, "open_pr") as navigate:
@@ -110,7 +192,7 @@ class BoardTests(unittest.TestCase):
             row = board.task_summary(self.task(), 0, None, None, 5)
             viewer.toggle(row)
             ready = Future()
-            ready.set_result(([row], []))
+            ready.set_result(([row], [], {"status": "unknown"}))
             executor = Mock()
             executor.submit.return_value = ready
             with patch.object(board, "ViewerState", return_value=viewer), patch.object(
@@ -133,7 +215,7 @@ class BoardTests(unittest.TestCase):
                 row["agent_names"]["author"] = "author"
                 viewer.toggle(row)
                 ready = Future()
-                ready.set_result(([row], []))
+                ready.set_result(([row], [], {"status": "unknown"}))
                 executor = Mock()
                 executor.submit.return_value = ready
                 with patch.object(board, "ViewerState", return_value=viewer):
@@ -215,7 +297,7 @@ board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 row = board.task_summary({"task_id": "preview-test", "state": {"name": "active"}}, 0, None, None, 5)
 row["agent_names"] = {"author": "author"}
-board.board_snapshot = lambda *args: ([row], [])
+board.board_snapshot = lambda *args: ([row], [], {"status": "unknown"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
 def worker(*args):
     time.sleep(0.5)
@@ -271,15 +353,15 @@ spec = importlib.util.spec_from_file_location("board", sys.argv[1])
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 rows = [board.task_summary({"task_id": str(i), "state": {"name": "active"}}, 0, None, None, 5) for i in range(40)]
-board.board_snapshot = lambda *args: (rows, [])
+board.board_snapshot = lambda *args: (rows, [], {"status": "unknown"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Controller"}
 original_mouse, original_frame = board.mouse_event, board.draw_task_frame
 def observed_mouse():
     event = original_mouse()
     os.write(int(sys.argv[3]), (repr(event) + "\\n").encode())
     return event
-def observed_frame(*args):
-    original_frame(*args)
+def observed_frame(*args, **kwargs):
+    original_frame(*args, **kwargs)
     os.write(int(sys.argv[3]), f"rows={args[2]}\\n".encode())
 board.mouse_event, board.draw_task_frame = observed_mouse, observed_frame
 curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=True, interval=5))
@@ -322,7 +404,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 wait_for(b"rows=24")
                 os.write(master, b"\x1b[<0;31;31m")
                 wait_for(b"('release', 30, 30, 0)")
-                os.write(master, b"\x1b[<0;92;31M")
+                auto_column = board.resize_controls(100)[2] + 1
+                os.write(master, f"\x1b[<0;{auto_column};31M".encode())
                 wait_for(b"rows=12")
                 os.write(master, b"q")
                 process.wait(timeout=5)
@@ -346,7 +429,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 row = board.task_summary(self.task(), 0, None, None, 5)
                 row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
                 row["conversation"] = {"role": "reviewer", "status": "done", "output": "A long worker response. " * 200}
-                pending.set_result(([row], []))
+                pending.set_result(([row], [], {"status": "unknown"}))
                 executor.submit.return_value = pending
                 screen = self.run_display(executor, [-1, ord(view), ord("q")], (height, width))
                 for call in screen.addnstr.call_args_list:
@@ -372,7 +455,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor = Mock()
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose, patch.object(board, "open_target") as navigate:
             self.run_display(executor, [-1, ord("c"), ord("m"), ord("t"), ord("m"), ord("q")])
@@ -554,7 +637,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor, previews = Mock(), Mock()
         first, blocked, response = Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        first.set_result(([row], []))
+        first.set_result(([row], [], {"status": "unknown"}))
         executor.submit.side_effect = [first, blocked]
         response.set_result({"role": "reviewer", "status": "done", "output": "Loaded independently"})
         previews.submit.return_value = response
@@ -569,7 +652,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_jump_to_latest_appears_only_after_scrolling_back(self):
         executor = Mock()
         first = Future()
-        first.set_result(([], []))
+        first.set_result(([], [], {"status": "unknown"}))
         executor.submit.return_value = first
         screen = self.run_display(executor, [-1, board.curses.KEY_UP, board.curses.KEY_END, ord("q")])
         output = " ".join(str(c) for c in screen.addnstr.call_args_list)
@@ -581,7 +664,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor, previews = Mock(), Mock()
         first, failure = Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
-        first.set_result(([row], []))
+        first.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = first
         failure.set_exception(RuntimeError("preview backend unavailable"))
         previews.submit.return_value = failure
@@ -596,7 +679,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         inventory, controller, author = Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["agent_names"] = {"author": "author"}
-        inventory.set_result(([row], []))
+        inventory.set_result(([row], [], {"status": "unknown"}))
         controller.set_result({"status": "idle", "output": "Controller"})
         executor.submit.return_value = inventory
         previews.submit.side_effect = [controller, author]
@@ -627,7 +710,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         inventory, controller, author, reviewer = Future(), Future(), Future(), Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["agent_names"] = {"author": "author", "reviewer": "reviewer"}
-        inventory.set_result(([row], []))
+        inventory.set_result(([row], [], {"status": "unknown"}))
         controller.set_result({"status": "idle", "output": "Controller"})
         executor.submit.return_value = inventory
         previews.submit.side_effect = [controller, author, reviewer, author, reviewer]
@@ -659,7 +742,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_empty_board_has_general_message_and_controller_actions(self):
         executor = Mock()
         pending = Future()
-        pending.set_result(([], []))
+        pending.set_result(([], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         with patch.object(board, "compose", side_effect=lambda *a, **kw: iter(())) as compose:
             screen = self.run_display(executor, [-1, ord("m"), ord("q")])
@@ -752,10 +835,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
 
     def test_inventory_does_not_read_conversations(self):
         rows = [board.task_summary(dict(self.task(), task_id=str(i)), 0, None, None, 5) for i in range(10)]
-        with patch.object(board, "snapshot", return_value=(rows, [])), patch.object(
+        with patch.object(board, "snapshot", return_value=(rows, [], {"status": "working"})), patch.object(
             board, "controller_snapshot"
         ) as controller, patch.object(board, "worker_snapshot") as read:
-            result, _ = board.board_snapshot(Path("/unused"), False)
+            result, _, _ = board.board_snapshot(Path("/unused"), False)
             self.assertEqual(result, rows)
             read.assert_not_called()
             controller.assert_not_called()
@@ -766,7 +849,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["objective"] = "Task purpose remains available."
         row["conversation"] = {"role": "reviewer", "status": "done", "output": "Please clarify the boundary case."}
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         previews = Mock()
         response = Future()
@@ -945,7 +1028,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         pending = Future()
         row = board.task_summary(self.task(), 0, None, None, 5)
         row["prs"] = [f"https://github.com/team/repo/pull/{n}" for n in (123456, 234567, 345678, 456789)]
-        pending.set_result(([row], []))
+        pending.set_result(([row], [], {"status": "unknown"}))
         executor.submit.return_value = pending
         width = 88
         pr_width = min(width // 3, len(", ".join(label for label, _ in board.pr_labels(row))))

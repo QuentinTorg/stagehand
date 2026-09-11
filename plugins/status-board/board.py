@@ -25,6 +25,7 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "implementation-ready", "resolving", "reviewing", "finalizing", "publishing-review",
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
+VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True}
 
 
 def mapping(value):
@@ -197,7 +198,7 @@ def task_summary(task, modified, workspaces, agents, now):
             "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
 
 
-def snapshot(directory, offline=False):
+def snapshot(directory, offline=False, include_controller=False):
     tasks, warnings = read_tasks(directory)
     workspaces, agents, live_warnings = (None, None, ["Saved records only; live state not queried"]) if offline else inventory()
     warnings.extend(live_warnings)
@@ -207,6 +208,14 @@ def snapshot(directory, offline=False):
                     for row in rows if row["status"] is None)
     # Surface decisions first without changing saved workflow state or task order on disk.
     rows.sort(key=lambda row: row["color"])
+    if include_controller:
+        # Reuse inventory; showing activity must not poll hidden conversations.
+        owners = [agent for agent in agents or [] if agent.get("name") == "workflow_orchestrator"]
+        owner = owners[0] if len(owners) == 1 else {}
+        status = "offline" if offline else "unavailable"
+        if os.environ.get("HERDR_WORKSPACE_ID") and owner.get("workspace_id") == os.environ["HERDR_WORKSPACE_ID"]:
+            status = clean(owner.get("agent_status")) or "unknown"
+        return rows, warnings, {"status": status, "observed_at": time.monotonic()}
     return rows, warnings
 
 
@@ -259,8 +268,19 @@ def worker_snapshot(row, role=None, offline=False):
 
 
 def board_snapshot(directory, offline=False):
-    rows, warnings = snapshot(directory, offline)
-    return rows, warnings
+    return snapshot(directory, offline, include_controller=True)
+
+
+def activity_label(activity, interval, animate=True, now=None):
+    now = time.monotonic() if now is None else now
+    status = activity.get("status", "unknown")
+    if "observed_at" in activity and now - activity["observed_at"] > max(10, 2 * interval):
+        return "Status stale"
+    if status == "working":
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        return (frames[int(now * 5) % len(frames)] + " " if animate else "") + "Working"
+    return {"idle": "Ready", "done": "Ready", "blocked": "Blocked · open orchestrator",
+            "offline": "Offline", "unavailable": "Unavailable"}.get(status, "Checking status")
 
 
 def stamp_preview(result, previous, now):
@@ -301,7 +321,7 @@ def open_target(args, row=None):
 def controller_lines(controller, width):
     status = controller["status"]
     hint = {"blocked": "Needs you — open orchestrator for its permission or question dialog.",
-            "working": "Working — messages can be sent when it is ready.",
+            "working": "Working — sending during work follows your board setting.",
             "idle": "Ready for a message, setup question, or new task.",
             "done": "Ready for a message, setup question, or new task."}.get(status, "Open orchestrator to check its state.")
     return [(line, 0, []) for line in textwrap.wrap(hint, max(1, min(width, 124) - 4))] + terminal_lines(controller["output"], width)
@@ -344,6 +364,7 @@ def help_lines(width, warnings):
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
             "Drag the Workspaces bottom border to resize; Auto restores automatic sizing. Sizing lasts for this board session.",
             "", "t / c: Tasks / Orchestrator. o: open the current workspace or orchestrator.",
+            "s: Settings. Enable sending while working only for agents that accept mid-turn input.",
             "Up/Down or wheel: select tasks or scroll output. [ / ]: scroll task details.",
             "Page Up/Down: page. End / Follow latest: follow orchestrator output.",
             "a: next task needing you. i: task details. End: follow latest conversation. r: refresh. q: close this board."]
@@ -528,6 +549,7 @@ class ViewerState:
     def __init__(self, tasks):
         self.path = tasks.parent / "board-state.json"
         self.later, self.error = {}, None
+        self.settings = dict(VIEWER_DEFAULTS)
         try:
             if self.path.exists():
                 saved = json.loads(self.path.read_text())
@@ -537,6 +559,11 @@ class ViewerState:
                         for value in later.values()):
                     raise ValueError("invalid Later entries")
                 self.later = later
+                settings = saved.get("settings", {})
+                if not isinstance(settings, dict) or any(type(settings[key]) is not bool
+                        for key in VIEWER_DEFAULTS if key in settings):
+                    raise ValueError("invalid viewer settings")
+                self.settings.update({key: settings[key] for key in VIEWER_DEFAULTS if key in settings})
         except (OSError, ValueError, KeyError, TypeError) as error:
             self.error = f"Cannot read viewer state; preserving file: {clean(error)}"
 
@@ -547,11 +574,18 @@ class ViewerState:
                  ("workspace_id", "status", "summary", "action", "next", "objective", "prs", "agent_names")}
         return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
 
-    def save(self, later):
+    def save(self, later, settings=None):
         if self.error:
             raise ValueError(self.error)
-        save_draft(self.path, json.dumps({"later": later}, indent=2) + "\n")
+        settings = self.settings if settings is None else settings
+        save_draft(self.path, json.dumps({"later": later, "settings": settings}, indent=2) + "\n")
         self.later = later
+        self.settings = settings
+
+    def toggle_setting(self, key):
+        if key not in VIEWER_DEFAULTS:
+            raise ValueError("Unknown viewer setting")
+        self.save(self.later, dict(self.settings, **{key: not self.settings[key]}))
 
     def toggle(self, row):
         later = dict(self.later)
@@ -603,8 +637,13 @@ def send_message(args, row, message):
         agent = json.loads(result.stdout)["result"]["agent"]
         if not os.environ.get("HERDR_WORKSPACE_ID") or agent.get("workspace_id") != os.environ["HERDR_WORKSPACE_ID"]:
             return False, "Orchestrator is not in this control workspace. Draft kept."
-        if agent.get("agent_status") not in {"idle", "done"}:
-            return False, "Orchestrator is busy or blocked. Draft kept; send when it is ready."
+        status = agent.get("agent_status")
+        if status == "blocked":
+            return False, "Orchestrator is blocked. Open its native session; draft kept."
+        if status == "working" and not getattr(args, "send_while_working", False):
+            return False, "Orchestrator is working. Enable Send while working in Settings, or wait. Draft kept."
+        if status not in {"idle", "done", "working"}:
+            return False, "Orchestrator status is uncertain. Nothing sent; draft kept."
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return False, "Cannot verify the orchestrator. Nothing sent; draft kept."
     try:
@@ -636,10 +675,13 @@ def message_layout(message, height, width):
     return lines, positions, max(0, height - visible - 5), visible, line_width
 
 
-def draw_message_box(screen, row, message, active=False, can_send=None):
+def draw_message_box(screen, row, message, active=False, can_send=None, activity=""):
     height, width = screen.getmaxyx()
     preview, _, top, visible, _ = message_layout(message, height, width)
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
+    if activity:
+        # Keep live state visible even when the workspace label must be shortened.
+        title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
              "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
@@ -689,7 +731,8 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         offset = max(0, cy - visible + 1)
         if inline:
             # The board redraws the background before each editor frame.
-            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()))
+            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()),
+                             activity=getattr(args, "activity_label", ""))
             content = []
         else:
             screen.erase()
@@ -816,7 +859,13 @@ def task_visible_rows(height, count, requested, message_top):
     return max(1, min(preferred, available))
 
 
-def draw_task_frame(screen, width, visible, selected, count, caption):
+def resize_controls(width):
+    grip = " ↕ Drag to resize "
+    left = max(1, (width - len(grip) - 8) // 2)
+    return left, grip, left + len(grip) + 1
+
+
+def draw_task_frame(screen, width, visible, selected, count, caption, automatic=True):
     # Reserve the outer columns for the frame, independent of table content.
     right, bottom = width - 2, 6 + visible
     if right < 3:
@@ -830,9 +879,9 @@ def draw_task_frame(screen, width, visible, selected, count, caption):
             screen.addnstr(y, 0, "│", 1)
             screen.addnstr(y, right, "█" if y == thumb else "│", 1)
         screen.addnstr(bottom, 0, "└" + "─" * (right - 1) + "┘", right + 1)
-        grip = " ↕ Drag to resize "
-        screen.addnstr(bottom, max(1, (width - len(grip)) // 2), grip, len(grip), curses.A_DIM)
-        draw_button(screen, bottom, width - 10, " Auto ")
+        left, grip, auto_x = resize_controls(width)
+        screen.addnstr(bottom, left, grip, len(grip), curses.A_DIM)
+        draw_button(screen, bottom, auto_x, " Auto ", active=automatic)
     except curses.error:
         pass  # A resize may invalidate the frame dimensions mid-draw.
 
@@ -951,11 +1000,12 @@ def display_loop(screen, args, executor, previews):
     all_rows, later_open = [], False
     requested_rows, dragging = None, False
     viewer = ViewerState(args.tasks)
+    activity = {"status": "unknown"}
     notice, pending, queued_mouse = "", None, None
     editor, editor_task = None, None
     refresh_started = None
     detail_offset, detail_task = 0, None
-    general, info, show_help = False, True, False
+    general, info, utility_view = False, True, None
     controller_offset = None
     preview_role, preview_offset = None, None
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
@@ -968,7 +1018,7 @@ def display_loop(screen, args, executor, previews):
             previous_row = rows[min(selected, len(rows) - 1)] if rows else None
             selected_id = previous_row["id"] if previous_row else None
             try:
-                all_rows, warnings = pending.result()
+                all_rows, warnings, activity = pending.result()
                 returned = viewer.reconcile(all_rows)
                 if returned:
                     notice = " ".join(returned)
@@ -983,6 +1033,8 @@ def display_loop(screen, args, executor, previews):
             refresh_started = time.monotonic()
         height, width = screen.getmaxyx()
         screen.erase()
+        args.send_while_working = viewer.settings["send_while_working"]
+        args.activity_label = activity_label(activity, args.interval, viewer.settings["animate_activity"])
 
         def put(y, text, color=0, bold=False, highlight=False, underline=False):
             if not 0 <= y < height - 1:
@@ -1036,7 +1088,7 @@ def display_loop(screen, args, executor, previews):
             preview_key = preview_request
             preview_refresh_at = time.monotonic() + args.interval
             preview_pending = None
-        wanted_preview = not show_help and (viewing_controller or (current is not None and not info))
+        wanted_preview = not utility_view and (viewing_controller or (current is not None and not info))
         request = (("controller",) if viewing_controller or current is None else
                    (current["id"], current["workspace_id"], preview_role, current.get("next"),
                     tuple(sorted(current.get("agent_names", {}).items()))))
@@ -1052,8 +1104,8 @@ def display_loop(screen, args, executor, previews):
             health = " · Updates delayed"
         put(0, "STAGEHAND" + health, bold=True)
         actions, _ = draw_actions(screen, 1, width,
-                                 [("task", "Tasks"), ("controller", "Orchestrator"), ("help", "?")],
-                                 "help" if show_help else "controller" if viewing_controller else "task", tabs=True)
+                                 [("task", "Tasks"), ("controller", "Orchestrator"), ("settings", "Settings"), ("help", "?")],
+                                 utility_view or ("controller" if viewing_controller else "task"), tabs=True)
         legend_x = 1
         for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
             text = f"● {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
@@ -1073,7 +1125,7 @@ def display_loop(screen, args, executor, previews):
         _, _, message_top, _, _ = message_layout(draft, height, width)
         visible = task_visible_rows(height, len(rows), requested_rows, message_top)
         offset = max(0, selected - visible + 1)
-        show_tasks = not (viewing_controller or show_help)
+        show_tasks = not (viewing_controller or utility_view)
         if show_tasks:
             header = {"label": "WORKSPACE", "stage": "STATUS", "roles": "NEXT", "pr": "PR"}
             table_rows = [row for row in rows if row is not None]
@@ -1111,13 +1163,18 @@ def display_loop(screen, args, executor, previews):
                         except curses.error:
                             pass
             draw_task_frame(screen, width, visible, selected, len(rows),
-                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}")
-            actions.append((6 + visible, width - 10, width - 4, "auto-size"))
+                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}",
+                            automatic=requested_rows is None)
+            auto_x = resize_controls(width)[2]
+            actions.append((6 + visible, auto_x, auto_x + 6, "auto-size"))
             detail_y = 7 + visible
         else:
             detail_y = 3
 
-        if show_help:
+        if utility_view == "settings":
+            context_actions = [("setting-send_while_working", "1 Send while working: " + ("On" if args.send_while_working else "Off")),
+                               ("setting-animate_activity", "2 Animation: " + ("On" if viewer.settings["animate_activity"] else "Off"))]
+        elif utility_view:
             context_actions = [("help", "Back")]
         elif viewing_controller:
             context_actions = ([] if controller_offset is None else [("latest", "Jump to latest")])
@@ -1133,12 +1190,19 @@ def display_loop(screen, args, executor, previews):
         conversation = preview_result if not viewing_controller and preview_key == request else {}
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
-                                           tabs=not viewing_controller and not show_help)
-        if viewing_controller and not show_help and controller_offset is None:
+                                           tabs=not viewing_controller and not utility_view)
+        if viewing_controller and not utility_view and controller_offset is None:
             put(detail_y, "Following latest", 10)
         actions += context_hits
         detail_height = max(1, message_top - 1 - (title_y + 1))
-        if show_help:
+        if utility_view == "settings":
+            paragraphs = ["Click a setting or press 1 / 2 to toggle. Esc returns. Preferences are saved for this control workspace.",
+                          "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
+                          "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation."]
+            details = [(line, 0, []) for paragraph in paragraphs
+                       for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
+            title, color = "Board settings", 10
+        elif utility_view:
             details = help_lines(width, warnings)
             title, color = "Help · buttons and underlined PRs are clickable", 10
         elif viewing_controller:
@@ -1165,9 +1229,9 @@ def display_loop(screen, args, executor, previews):
             title = clipped(title, width - 3 - len(freshness)) + freshness
             color = 10
         detail_offset = max(0, min(detail_offset, len(details) - detail_height))
-        if viewing_controller and not show_help:
+        if viewing_controller and not utility_view:
             active_offset = max(0, len(details) - detail_height) if controller_offset is None else max(0, min(controller_offset, len(details) - detail_height))
-        elif not show_help and not info:
+        elif not utility_view and not info:
             active_offset = max(0, len(details) - detail_height) if preview_offset is None else max(0, min(preview_offset, len(details) - detail_height))
         else:
             active_offset = detail_offset
@@ -1185,7 +1249,7 @@ def display_loop(screen, args, executor, previews):
         try:
             path = draft_path(args, message_target)
             draft = path.read_text() if path.exists() else ""
-            draw_message_box(screen, message_target, draft)
+            draw_message_box(screen, message_target, draft, activity=args.activity_label)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
         if viewer.error:
@@ -1195,7 +1259,7 @@ def display_loop(screen, args, executor, previews):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · ? Help · q Close", width - 1, curses.A_DIM)
+            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · s Settings · ? Help · q Close", width - 1, curses.A_DIM)
         except curses.error:
             pass
         if editor is not None:
@@ -1219,12 +1283,14 @@ def display_loop(screen, args, executor, previews):
             return
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
-        elif key in (ord("t"), ord("c"), ord("?")):
-            action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help"}[key]
+        elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
+            action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
+        elif utility_view == "settings" and key in (ord("1"), ord("2")):
+            action = "setting-" + ("send_while_working" if key == ord("1") else "animate_activity")
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:
-            show_help = False
+            utility_view = None
         elif key in (ord("o"), ord("O")):
             action = "open-controller" if key == ord("O") or viewing_controller else "workspace"
         elif key == ord("i") and not viewing_controller:
@@ -1235,12 +1301,12 @@ def display_loop(screen, args, executor, previews):
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
-                delta *= detail_height if viewing_controller or show_help else visible
-            if viewing_controller and not show_help:
+                delta *= detail_height if viewing_controller or utility_view else visible
+            if viewing_controller and not utility_view:
                 controller_offset = max(0, active_offset + delta)
-            elif not show_help and not info and key in (ord("["), ord("]")):
+            elif not utility_view and not info and key in (ord("["), ord("]")):
                 preview_offset = max(0, active_offset + delta)
-            elif show_help or key in (ord("["), ord("]")):
+            elif utility_view or key in (ord("["), ord("]")):
                 detail_offset = max(0, active_offset + delta)
             else:
                 selected = max(0, min(len(rows) - 1, selected + delta))
@@ -1252,7 +1318,7 @@ def display_loop(screen, args, executor, previews):
         elif key == ord("a") and rows:
             selected = next((i % len(rows) for i in range(selected + 1, selected + len(rows) + 1)
                              if rows[i % len(rows)] and rows[i % len(rows)]["id"] not in viewer.later and rows[i % len(rows)]["color"] == 1), selected)
-            general, show_help = False, False
+            general, utility_view = False, None
         elif key == curses.KEY_MOUSE:
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
@@ -1265,9 +1331,9 @@ def display_loop(screen, args, executor, previews):
                 if kind == "wheel":
                     if show_tasks and 3 <= y <= 6 + visible:
                         selected = max(0, min(len(rows) - 1, selected + delta))
-                    elif viewing_controller and not show_help:
+                    elif viewing_controller and not utility_view:
                         controller_offset = max(0, active_offset + delta)
-                    elif not show_help and not info:
+                    elif not utility_view and not info:
                         preview_offset = max(0, active_offset + delta)
                     else:
                         detail_offset = max(0, active_offset + delta)
@@ -1301,11 +1367,17 @@ def display_loop(screen, args, executor, previews):
         if action == "auto-size":
             requested_rows = None
         elif action == "task":
-            general, show_help, detail_offset = False, False, 0
+            general, utility_view, detail_offset = False, None, 0
         elif action == "controller":
-            general, show_help, controller_offset = True, False, None
-        elif action == "help":
-            show_help, detail_offset = not show_help, 0
+            general, utility_view, controller_offset = True, None, None
+        elif action in {"help", "settings"}:
+            utility_view, detail_offset = action if utility_view != action else None, 0
+        elif action and action.startswith("setting-"):
+            try:
+                viewer.toggle_setting(action[len("setting-"):])
+                notice = "Settings saved."
+            except (OSError, ValueError) as error:
+                notice = f"Setting not saved: {clean(error)}"
         elif action in {"aside", "later"}:
             try:
                 if action == "aside" and current:
