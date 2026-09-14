@@ -35,6 +35,8 @@ Before provisioning or cleanup, read [Workspace Safety](references/safety-and-es
 
 Choose the agent, model, and supported options using local policy and [Agent Selection](references/agent-selection.md). Keep each prompt to the objective, exact checkout/branch, relevant issue or PR, constraints, and expected result. Do not send this skill, private configuration, task-record schemas, routing IDs, or notification instructions.
 
+Distinguish coordinator recommendations from human requirements; never attribute your additions to the human.
+
 The startup assets are short assignment examples, not repeated headers:
 
 - [Author](assets/author-startup-prompt.md): explore and plan with the human, then implement, verify, and prepare the draft in the same assignment.
@@ -63,11 +65,13 @@ Human feedback after review returns to the same pair; changed code or intent nee
 
 **Workspace-only:** Provide an isolated place for open-ended human-directed work without inventing delivery stages. A worker can remain available there; the coordinator records purpose and ownership and uses the same workspace if later asked to manage its PR.
 
+Monitoring human-directed work does not authorize corrective or follow-on assignments. Surface concerns to the human rather than re-prompting the worker, unless directing that work was explicitly delegated. Authorized development/review handoffs remain unchanged.
+
 ## Observe, save, and respond
 
 Register persistent wake watches for task agents, including human-started turns, as described in [State and Wakeups](references/workflow-state.md). Workers simply answer normally. The plugin wakes you; you interpret the answer and relevant evidence. Never treat a wake, idle state, or green CI as proof of approval or success.
 
-Save meaningful outcomes and next actions in the task records—not a diary of every message. Reconcile missed progress without asking workers to reconstruct events or repeating approvals already given. If the relevant result is unavailable, ask the same worker one focused question; unresolved authority or identity goes to the human. No polling loop, cron agent, repeated status prompts, or silent retry spiral.
+Save meaningful outcomes and next actions in the task records—not a diary of every message. Reconcile missed progress without asking workers to reconstruct events or repeating approvals already given. If the relevant result is unavailable, ask the same worker one focused question to recover context, not add requirements; unresolved authority or identity goes to the human. No polling loop, cron agent, repeated status prompts, or silent retry spiral.
 
 The board renders saved progress. With it available, chat should report results and decisions, not repeat the table. Identify tasks by their live workspace labels, disambiguating with IDs; keep issue and PR links repository-qualified. Summarize what needs the human, not CI minutiae.
 

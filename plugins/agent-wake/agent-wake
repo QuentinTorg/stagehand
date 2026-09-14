@@ -289,16 +289,17 @@ def _same_source(watch: dict, agent: dict) -> bool:
     return True
 
 
-def _confirm_settled(watch: dict) -> str | None:
+def _confirm_source(watch: dict) -> dict | None:
+    """Use live identity and state so delayed hooks cannot report obsolete activity."""
     time.sleep(0.2)
     payload, error = _herdr("agent", "get", watch["pane_id"])
     if error:
         return None
     agent = _agent(payload)
-    if _status(agent) not in SETTLED:
+    if _status(agent) not in ({"working"} | SETTLED):
         return None
     if watch.get("persistent"):
-        return _status(agent) if _same_source(watch, agent) else None
+        return agent if _same_source(watch, agent) else None
     pane = agent.get("pane_id") or agent.get("id")
     workspace = agent.get("workspace_id")
     name = agent.get("name") or agent.get("agent_name")
@@ -307,7 +308,7 @@ def _confirm_settled(watch: dict) -> str | None:
         and (not workspace or workspace == watch["workspace_id"])
         and (not name or name == watch["agent_name"])
     )
-    return _status(agent) if matches else None
+    return agent if matches else None
 
 
 def _record_event_for(state_root: Path, event: dict) -> None:
@@ -322,25 +323,45 @@ def _record_event_for(state_root: Path, event: dict) -> None:
             if watch and watch.get("state") == "armed" and watch.get("pane_id") == pane_id
         ]
         for path, watch in matches:
-            if status == "working":
-                watch["observed_working"] = True
-                watch["updated_at"] = time.time()
-                _atomic_json(path, watch)
-                if not watch.get("persistent"):
-                    continue
-                # Hooks run in separate processes: a fast turn's stop hook can
-                # beat its working hook. Inspect once here to recover that stop.
-            # A fresh working transition distinguishes the dispatched turn from
-            # a pane that was already idle when its watch was armed.
-            if not watch.get("observed_working"):
-                continue
-            settled_status = _confirm_settled(watch)
-            if not settled_status:
-                continue
-            now = time.time()
             persistent = watch.get("persistent", False)
+            if not persistent:
+                # One-shot callers still request only a completed turn.
+                if status == "working":
+                    watch["observed_working"] = True
+                    watch["updated_at"] = time.time()
+                    _atomic_json(path, watch)
+                    continue
+                if not watch.get("observed_working"):
+                    continue
+            source = _confirm_source(watch)
+            if not source:
+                continue
+            current = _status(source)
+            if not persistent and current not in SETTLED:
+                continue
+            if persistent:
+                # An already idle pane is not a result. A working hook can arrive
+                # after its stop hook, so it also supplies evidence of a fast turn.
+                if current != "working" and status != "working" and not watch.get("observed_working"):
+                    continue
+                normalized = "idle" if current in TARGET_READY else current
+                sequence = source.get("state_change_seq")
+                if normalized == watch.get("last_status"):
+                    # A newer settled snapshot after a delayed working hook can
+                    # represent another complete turn. Focus-only idle/done
+                    # changes and duplicate working snapshots are not new work.
+                    missed_turn = (current in SETTLED and status == "working"
+                                   and isinstance(sequence, int)
+                                   and sequence > watch.get("last_state_change_seq", sequence))
+                    if not missed_turn:
+                        _atomic_json(path, watch)
+                        continue
+                watch["last_status"] = normalized
+                if isinstance(sequence, int):
+                    watch["last_state_change_seq"] = sequence
+            now = time.time()
             watch["state"] = "armed" if persistent else "fired"
-            watch["observed_working"] = False
+            watch["observed_working"] = current == "working"
             watch["updated_at"] = now
             # Coalesce only undelivered wakes. An in-flight notice keeps its own
             # ID, so acknowledging it cannot erase a newer human-started turn.
@@ -357,12 +378,14 @@ def _record_event_for(state_root: Path, event: dict) -> None:
                 "workspace_label": watch["workspace_label"],
                 "pane_id": watch["pane_id"],
                 "agent_name": watch["agent_name"],
-                "status": settled_status,
-                "settled_at": now,
+                "status": current,
+                "observed_at": now,
                 "notified": False,
                 "attempts": pending.get("attempts", 0) if pending else 0,
                 "last_error": pending.get("last_error") if pending else None,
             }
+            if current in SETTLED:
+                wake["settled_at"] = now
             # Persist the notice before consuming the observed transition. A
             # crash may repeat a hint, but must not silently lose the result.
             _atomic_json(root / "inbox" / f"{wake['id']}.json", wake)
