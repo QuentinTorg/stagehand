@@ -1,6 +1,6 @@
 # Agent Wake Relay
 
-Wake a controller when a registered Herdr agent stops working—without polling agents or asking workers to send callbacks. Useful for coding, review, research, or human-led conversations that a coordinator should follow.
+Wake a controller when a registered Herdr agent starts/resumes or stops working—without polling agents or asking workers to send callbacks. Useful for coding, review, research, or human-led conversations that a coordinator should follow.
 
 The relay matches the source workspace, pane, agent name, and available native session identity. It queues a durable notice, defers delivery while the controller is busy, coalesces pending turns, and bounds notification retries. It never interprets output, approves commands, or decides that a task succeeded.
 
@@ -27,11 +27,11 @@ After the source agent is running, register it before sending work:
   --pane w2:p1 --agent worker_agent --metadata '{"role":"worker"}'
 ```
 
-A persistent watch covers successive working-to-idle/done/blocked transitions, including turns started directly by a human. It remains active until cancelled. Omit `--persistent` for a backward-compatible one-shot watch.
+A persistent watch reports `working` and subsequent idle/done/blocked transitions, including turns started directly by a human. It remains active until cancelled. Omit `--persistent` for a backward-compatible, stop-only one-shot watch.
 
 The controller receives `HERDR_AGENT_WAKE` followed by a JSON array containing the wake ID, key, metadata, workspace, pane, and observed status. The worker does not generate this message.
 
-- Inspect the source and current evidence; a stop may mean a question, permission request, findings, or success.
+- A `working` notice is activity, not a request to dispatch, evidence of approval, or proof of who submitted input. Reconcile already-known activity without interrupting the worker. A stop may mean a question, permission request, findings, or success; inspect current evidence.
 - `ack --state-root <root> --wake <id>` consumes that notice, not the persistent subscription.
 - `cancel --state-root <root> --watch <id>` removes the subscription and its queued notices.
 - `status --state-root <root>` lists registrations and the durable inbox.
@@ -43,7 +43,7 @@ On startup, a watch can anchor to the foreground agent process until Herdr expos
 
 ## Delivery limits
 
-Each watch retains at most one notified-but-unacknowledged wake plus one coalesced pending wake. Acknowledging an older wake cannot erase a later turn. Undelivered notifications stop retrying after three failed prompt attempts; inspect the retained error, reconcile the source, and acknowledge after handling it. Busy-controller deferral does not spend retries.
+Each watch retains at most one notified-but-unacknowledged wake plus one coalesced pending wake. Pending updates reflect the latest observed state, not a complete event history; a rapid stop can replace an undelivered start. Duplicate working snapshots and idle/done focus changes do not create new notices. Acknowledging an older wake cannot erase a later transition. Undelivered notifications stop retrying after three failed prompt attempts; inspect the retained error, reconcile the source, and acknowledge after handling it. Busy-controller deferral does not spend retries.
 
 Herdr startup runs a bounded recovery flush. A turn entirely missed while hooks were disabled cannot be reconstructed from lifecycle alone; consumers should reconcile on restart and requested status. Session identity is checked when Herdr exposes it. Human typing can still race with terminal prompt delivery; the consumer must preserve human text separately from an appended wake.
 
