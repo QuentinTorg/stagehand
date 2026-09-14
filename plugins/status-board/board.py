@@ -2,6 +2,7 @@
 """Show saved task progress and route human messages to the orchestrator."""
 
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor
 import curses
 from dataclasses import dataclass, replace
@@ -250,10 +251,11 @@ def terminal_color(value):
     return -1
 
 
-def draw_live_grid(screen, top, cells, palette, columns, rows):
+def live_grid_lines(cells, columns, rows):
     # Coordinates belong to this rectangle, not the host terminal. Terminal
     # erase/cursor/OSC operations were consumed by the in-memory emulator.
-    for y, line in enumerate(cells[:rows]):
+    result = []
+    for line in cells[:rows]:
         pieces, styles = [], []
         for x, cell in enumerate(line[:columns]):
             if not cell.data or not all(c.isprintable() for c in cell.data):
@@ -265,7 +267,72 @@ def draw_live_grid(screen, top, cells, palette, columns, rows):
                                   underline=cell.underscore, reverse=cell.reverse)
             pieces.append(cell.data)
             styles.extend([style] * len(cell.data))
-        draw_preview_line(screen, top + y, StyledText("".join(pieces), styles), palette, columns + 2)
+        result.append(StyledText("".join(pieces), styles))
+    return result
+
+
+def draw_live_grid(screen, top, cells, palette, columns, rows):
+    for y, line in enumerate(live_grid_lines(cells, columns, rows)):
+        draw_preview_line(screen, top + y, line, palette, columns + 2)
+
+
+class PreviewSelection:
+    """Freeze only the visible preview, not the source agent or its size lease."""
+
+    def __init__(self, lines, context, column, row):
+        self.lines, self.context = tuple(lines), context
+        self.anchor = self.cursor = (row, column)
+        self.dragging = True
+
+    def move(self, column, row, columns):
+        self.cursor = (max(0, min(len(self.lines) - 1, row)),
+                       max(0, min(columns - 1, column)))
+
+    def span(self, row, columns):
+        start, end = sorted((self.anchor, self.cursor))
+        if not start[0] <= row <= end[0]:
+            return 0, 0
+        return (start[1] if row == start[0] else 0,
+                end[1] + 1 if row == end[0] else columns)
+
+    def characters(self, row, columns):
+        left, right = self.span(row, columns)
+        position, selected = 0, []
+        for i, character in enumerate(self.lines[row]):
+            width = cell_width(character)
+            if (width and position < right and position + width > left) or (
+                    not width and selected and selected[-1] == i - 1):
+                selected.append(i)
+            position += width
+        return selected
+
+    def text(self, columns):
+        start, end = sorted((self.anchor, self.cursor))
+        return "\n".join("".join(self.lines[row][i] for i in self.characters(row, columns)).rstrip()
+                         for row in range(start[0], end[0] + 1))
+
+    def draw(self, screen, top, palette, columns):
+        for row, line in enumerate(self.lines):
+            styles = list(line.styles)
+            for i in self.characters(row, columns):
+                styles[i] = replace(styles[i], reverse=not styles[i].reverse)
+            draw_preview_line(screen, top + row, StyledText(line, styles), palette, columns + 2)
+
+
+def copy_preview_text(text):
+    # OSC 52 carries only an explicit human selection. Source terminal escape
+    # sequences never pass through this path, and clipboard reads are forbidden.
+    if not text:
+        return "Selection is empty; nothing copied."
+    payload = text.encode("utf-8")
+    if len(payload) > 100000:
+        return "Selection too large to copy; select a smaller range."
+    try:
+        sys.stdout.write("\x1b]52;c;" + base64.b64encode(payload).decode("ascii") + "\x07")
+        sys.stdout.flush()
+    except OSError:
+        return "Clipboard request failed; try Shift-drag."
+    return "Copy requested · Esc or click to resume · Shift-drag if clipboard is unavailable"
 
 
 def live_target(current, role, controller=False):
@@ -1270,6 +1337,7 @@ def display_loop(screen, args, executor, previews, live=None):
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
     requested_rows, dragging = None, False
+    selection = None
     viewer = ViewerState(args.tasks)
     activity = {"status": "unknown"}
     notice, pending, queued_mouse = "", None, None
@@ -1326,6 +1394,7 @@ def display_loop(screen, args, executor, previews, live=None):
 
         # Avoid overlapping controls on a transient tiny resize. No input is sent.
         if width < 60 or height < 24:
+            selection = None
             if live:
                 live.update(None, (1, 1))
             dragging = False
@@ -1528,8 +1597,14 @@ def display_loop(screen, args, executor, previews, live=None):
             active_offset = detail_offset
         scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)}" if len(details) > detail_height else ""
         put(title_y, title + scroll_hint, color, bold=True)
+        selection_context = (request, wanted_preview, use_live, width, height, title_y, detail_height)
+        if selection and (selection.context != selection_context or not wanted_preview):
+            selection = None
+        preview_lines = []
         if live_state and live_state.get("cells"):
-            draw_live_grid(screen, title_y + 1, live_state["cells"], preview_palette, width - 3, detail_height)
+            preview_lines = live_grid_lines(live_state["cells"], width - 3, detail_height)
+            for i, line in enumerate(preview_lines):
+                draw_preview_line(screen, title_y + 1 + i, line, preview_palette, width - 1)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
             y = title_y + 1 + i
             if isinstance(line, StyledText):
@@ -1542,6 +1617,17 @@ def display_loop(screen, args, executor, previews, live=None):
                     screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
                 except curses.error:
                     pass
+            if wanted_preview:
+                preview_lines.append(line if isinstance(line, StyledText) else
+                                     StyledText(line, [TerminalStyle()] * len(line)))
+        if selection:
+            # Clear new frames beneath the frozen selection, including newly
+            # occupied rows. Inventory and message controls remain live.
+            for i in range(detail_height):
+                put(title_y + 1 + i, " " * (width - 3))
+            selection.draw(screen, title_y + 1, preview_palette, width - 3)
+            hint = "release to copy" if selection.dragging else "preview frozen"
+            put(title_y, f"Selection · {hint} · Esc or click to resume", 10, bold=True)
         try:
             path = draft_path(args, message_target)
             draft = path.read_text() if path.exists() else ""
@@ -1572,6 +1658,11 @@ def display_loop(screen, args, executor, previews, live=None):
             continue
         screen.refresh()
         key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        if selection and key not in (-1, curses.KEY_MOUSE):
+            selection = None
+            if key == 27:
+                notice = "Live updates resumed."
+                continue
         if key != curses.KEY_MOUSE and key != -1:
             dragging = False
         action = None
@@ -1625,6 +1716,22 @@ def display_loop(screen, args, executor, previews, live=None):
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
+                if selection and selection.dragging and kind in {"select", "motion", "release"}:
+                    selection.move(x - 1, y - title_y - 1, width - 3)
+                    if kind == "release":
+                        selection.dragging = False
+                        if selection.anchor != selection.cursor:
+                            notice = copy_preview_text(selection.text(width - 3))
+                        else:
+                            selection = None
+                    continue
+                if kind in {"select", "wheel"}:
+                    selection = None
+                if (kind == "select" and wanted_preview and preview_lines
+                        and 1 <= x < width - 2
+                        and title_y < y <= title_y + len(preview_lines)):
+                    selection = PreviewSelection(preview_lines, selection_context, x - 1, y - title_y - 1)
+                    continue
                 if dragging and kind in {"select", "motion", "release"}:
                     requested_rows = task_visible_rows(height, len(rows), y - 6, message_top)
                     dragging = kind != "release"

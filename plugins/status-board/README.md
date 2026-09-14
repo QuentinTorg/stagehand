@@ -54,6 +54,8 @@ Switching conversations, opening Details/Settings/Help, or shrinking below minim
 
 The live heading distinguishes Live, Paused, Connecting, and stopped/error states. Only dimensions and deliberate scroll actions reach the source; typing, clicks, terminal responses, and approvals never do. Scroll availability depends on the source application; End scrolls toward the latest output. Messages still go through the orchestrator. Purpose and task records are unchanged.
 
+Drag across conversation text to select it; release requests a clipboard copy through Herdr using OSC 52. The visible preview freezes during selection, while the agent continues running. Esc, a new click, scrolling, or changing views clears selection and resumes updates; resizing cancels selection. Copy preserves visible line breaks and omits trailing spaces. Clipboard delivery depends on the host terminal; Shift-drag remains available as a fallback. Buttons, task rows, and divider dragging are unchanged.
+
 Choose **Settings → Preview: Snapshots** to leave source dimensions untouched. This also serves as the fallback when pyte is absent. Snapshot mode uses the bounded reads described above (120 lines/32 KB), only for visible conversations. `recent-unwrapped` removes soft wrapping but retains source hard breaks. Snapshot headings show last successful read age and stale/errors; live mode streams frames instead of polling conversation snapshots. Switching modes preserves drafts.
 
 ## Set tasks aside
