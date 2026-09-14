@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 
+sys.path.insert(0, str(Path(__file__).parents[1]))
 spec = importlib.util.spec_from_file_location("board", Path(__file__).parents[1] / "board.py")
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
@@ -135,7 +136,7 @@ class BoardTests(unittest.TestCase):
             viewer.toggle_setting("send_while_working")
             viewer.toggle_setting("animate_activity")
             restored = board.ViewerState(tasks)
-            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False})
+            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False, "live_preview": True})
             self.assertIn(row["id"], restored.later)
             restored.toggle(row)
             self.assertEqual(board.ViewerState(tasks).settings, restored.settings)
@@ -390,6 +391,7 @@ class BoardTests(unittest.TestCase):
 import curses, importlib.util, sys, time
 from pathlib import Path
 from types import SimpleNamespace
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
 spec = importlib.util.spec_from_file_location("board", sys.argv[1])
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
@@ -447,6 +449,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
 import curses, importlib.util, os, sys
 from pathlib import Path
 from types import SimpleNamespace
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
 spec = importlib.util.spec_from_file_location("board", sys.argv[1])
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
@@ -698,12 +701,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                     self.assertEqual(finish_editor(screen, args, row, inline=True), "Delivered")
                 send.assert_called_once_with(args, row, "First\nSecond")
 
-    def run_display(self, executor, keys, size=(38, 140), previews=None, editor_keys=None):
+    def run_display(self, executor, keys, size=(38, 140), previews=None, editor_keys=None, live=None):
         screen = Mock()
         screen.getmaxyx.return_value = size
         screen.getch.side_effect = keys
         screen.get_wch.side_effect = editor_keys
-        args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=True, interval=5)
+        args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=live is None, interval=5)
         if previews is None:
             previews = Mock()
             response = Future()
@@ -712,9 +715,47 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         with patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
             board.curses, "mouseinterval"
         ) as interval, patch.object(board.curses, "has_colors", return_value=False):
-            board.display_loop(screen, args, executor, previews)
+            board.display_loop(screen, args, executor, previews, live)
         interval.assert_called_once_with(0)
         return screen
+
+    def test_live_views_release_on_details_and_do_not_poll_snapshots(self):
+        executor, previews, live = Mock(), Mock(), Mock()
+        pending = Future()
+        pending.set_result(([board.task_summary(self.task(), 0, None, None, 5)], [], {"status": "idle"}))
+        executor.submit.return_value = pending
+        live.available = True
+        live.update.return_value = {"status": "live", "message": "Live", "cells": ()}
+        with patch.dict(os.environ, HERDR_WORKSPACE_ID="control"):
+            self.run_display(executor, [-1, ord("c"), -1, ord("t"), -1, ord("q")],
+                             previews=previews, live=live)
+        previews.submit.assert_not_called()
+        targets = [call.args[0] for call in live.update.call_args_list]
+        self.assertIn(("workflow_orchestrator", "control"), targets)
+        self.assertIsNone(targets[-1])
+
+    def test_live_target_never_guesses_unassigned_role_or_workspace(self):
+        row = {"agent_names": {"author": "a", "reviewer": "r"}, "workspace_id": "work", "next": "reviewer"}
+        self.assertEqual(board.live_target(row, None), ("r", "work"))
+        self.assertEqual(board.live_target(row, "author"), ("a", "work"))
+        self.assertIsNone(board.live_target(row, "worker"))
+        self.assertIsNone(board.live_target(dict(row, workspace_id=None), None))
+
+    def test_live_grid_clips_without_overwriting_controls(self):
+        from collections import namedtuple
+        Cell = namedtuple("Cell", "data fg bg bold italics underscore reverse")
+        cell = Cell("x", "f9e2af", "default", True, False, False, False)
+        screen, palette = Mock(), Mock()
+        palette.attributes.return_value = 0
+        board.draw_live_grid(screen, 8, ((cell,) * 100,) * 50, palette, 30, 6)
+        self.assertEqual(len(screen.addnstr.call_args_list), 6)
+        for call in screen.addnstr.call_args_list:
+            y, x, text, length, *_ = call.args
+            self.assertTrue(8 <= y < 14)
+            self.assertEqual(x, 1)
+            self.assertLessEqual(length, 30)
+            self.assertNotIn("\x1b", text)
+        self.assertEqual(palette.attributes.call_args.args[0].foreground, (249, 226, 175))
 
     def test_slow_refresh_does_not_block_input_or_queue_more_work(self):
         executor = Mock()

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 import webbrowser
 
 import yaml
+from live_terminal import LivePreview
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -29,7 +30,7 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "implementation-ready", "resolving", "reviewing", "finalizing", "publishing-review",
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
-VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True}
+VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,48 @@ def draw_preview_line(screen, y, line, palette, width):
             pass
         x += cells
         start = end
+
+
+@lru_cache(maxsize=512)
+def terminal_color(value):
+    names = ("black", "red", "green", "brown", "blue", "magenta", "cyan", "white")
+    if value in names:
+        return names.index(value)
+    if value.startswith("bright") and value[6:] in names:
+        return names.index(value[6:]) + 8
+    if re.fullmatch(r"[0-9a-fA-F]{6}", value):
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return -1
+
+
+def draw_live_grid(screen, top, cells, palette, columns, rows):
+    # Coordinates belong to this rectangle, not the host terminal. Terminal
+    # erase/cursor/OSC operations were consumed by the in-memory emulator.
+    for y, line in enumerate(cells[:rows]):
+        pieces, styles = [], []
+        for x, cell in enumerate(line[:columns]):
+            if not cell.data or not all(c.isprintable() for c in cell.data):
+                continue
+            if x + sum(cell_width(c) for c in cell.data) > columns:
+                break
+            style = TerminalStyle(terminal_color(cell.fg), terminal_color(cell.bg),
+                                  bold=cell.bold, italic=cell.italics,
+                                  underline=cell.underscore, reverse=cell.reverse)
+            pieces.append(cell.data)
+            styles.extend([style] * len(cell.data))
+        draw_preview_line(screen, top + y, StyledText("".join(pieces), styles), palette, columns + 2)
+
+
+def live_target(current, role, controller=False):
+    if controller:
+        workspace = os.environ.get("HERDR_WORKSPACE_ID")
+        return ("workflow_orchestrator", workspace) if workspace else None
+    names = current.get("agent_names", {}) if current else {}
+    roles = [name for name in ROLES if names.get(name)]
+    role = role or (current.get("next") if current and current.get("next") in roles else next(iter(roles), None))
+    if role not in roles or not current.get("workspace_id"):
+        return None
+    return names[role], current["workspace_id"]
 
 
 def mapping(value):
@@ -1184,15 +1227,17 @@ def drag_tracking(enabled):
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
+    live = LivePreview()
     try:
-        return display_loop(screen, args, executor, previews)
+        return display_loop(screen, args, executor, previews, live)
     finally:
+        live.close()
         drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
         previews.shutdown(wait=False, cancel_futures=True)
 
 
-def display_loop(screen, args, executor, previews):
+def display_loop(screen, args, executor, previews, live=None):
     # Preserve Enter (CR) separately from Ctrl-J (LF) for send versus newline.
     curses.nonl()
     try:
@@ -1262,6 +1307,7 @@ def display_loop(screen, args, executor, previews):
         preview_palette.begin_frame()
         args.send_while_working = viewer.settings["send_while_working"]
         args.activity_label = activity_label(activity, args.interval, viewer.settings["animate_activity"])
+        use_live = bool(live and live.available and not args.offline and viewer.settings["live_preview"])
 
         def put(y, text, color=0, bold=False, highlight=False, underline=False):
             if not 0 <= y < height - 1:
@@ -1280,6 +1326,8 @@ def display_loop(screen, args, executor, previews):
 
         # Avoid overlapping controls on a transient tiny resize. No input is sent.
         if width < 60 or height < 24:
+            if live:
+                live.update(None, (1, 1))
             dragging = False
             put(0, "STAGEHAND — enlarge this pane to at least 60 × 24.")
             put(2, "Your drafts are saved. q closes the board.")
@@ -1319,7 +1367,7 @@ def display_loop(screen, args, executor, previews):
         request = (("controller",) if viewing_controller or current is None else
                    (current["id"], current["workspace_id"], preview_role, current.get("next"),
                     tuple(sorted(current.get("agent_names", {}).items()))))
-        if wanted_preview and preview_pending is None and (request != preview_key or time.monotonic() >= preview_refresh_at):
+        if wanted_preview and not use_live and preview_pending is None and (request != preview_key or time.monotonic() >= preview_refresh_at):
             preview_request = request
             preview_pending = (previews.submit(controller_snapshot, args.offline) if viewing_controller else
                                previews.submit(worker_snapshot, current, preview_role, args.offline))
@@ -1400,7 +1448,8 @@ def display_loop(screen, args, executor, previews):
 
         if utility_view == "settings":
             context_actions = [("setting-send_while_working", "1 Send while working: " + ("On" if args.send_while_working else "Off")),
-                               ("setting-animate_activity", "2 Animation: " + ("On" if viewer.settings["animate_activity"] else "Off"))]
+                               ("setting-animate_activity", "2 Animation: " + ("On" if viewer.settings["animate_activity"] else "Off")),
+                               ("setting-live_preview", "3 Preview: " + ("Live" if viewer.settings["live_preview"] else "Snapshots"))]
         elif utility_view:
             context_actions = [("help", "Back")]
         elif viewing_controller:
@@ -1418,20 +1467,35 @@ def display_loop(screen, args, executor, previews):
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
                                            tabs=not viewing_controller and not utility_view)
-        if viewing_controller and not utility_view and controller_offset is None:
+        if viewing_controller and not utility_view and controller_offset is None and not use_live:
             put(detail_y, "Following latest", 10)
         actions += context_hits
         detail_height = max(1, message_top - 1 - (title_y + 1))
+        live_state = None
+        if live:
+            target = live_target(current, preview_role, viewing_controller) if use_live and wanted_preview else None
+            state = live.update(target, (width - 3, detail_height))
+            if use_live and wanted_preview:
+                live_state = state if target else {"status": "unavailable", "message": "No agent is assigned to this conversation", "cells": ()}
         if utility_view == "settings":
-            paragraphs = ["Click a setting or press 1 / 2 to toggle. Esc returns. Preferences are saved for this control workspace.",
+            paragraphs = ["Click a setting or press 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
                           "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
-                          "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation."]
+                          "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation.",
+                          "", "Live preview: resize the selected agent to this panel while the board is focused. Leaving releases it. No typing or approvals reach the previewed agent. Snapshots keep the source untouched.",
+                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press r to retry a stopped attachment; it never takes over another viewer."]
             details = [(line, 0, []) for paragraph in paragraphs
                        for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
             title, color = "Board settings", 10
         elif utility_view:
             details = help_lines(width, warnings)
             title, color = "Help · buttons and underlined PRs are clickable", 10
+        elif live_state is not None:
+            role_label = "Orchestrator" if viewing_controller else (preview_role or "Agent").replace("_", " ").title()
+            title = f"{role_label} · {live_state['message']}"
+            color = 1 if live_state["status"] == "unavailable" else 10
+            details = []
+            if not live_state.get("cells"):
+                details = [(line, color, []) for line in textwrap.wrap(live_state["message"], width - 3)]
         elif viewing_controller:
             details = controller_lines(controller, width)
             status = {"idle": "Ready for you", "done": "Ready for you", "blocked": "Needs you — open native session",
@@ -1464,6 +1528,8 @@ def display_loop(screen, args, executor, previews):
             active_offset = detail_offset
         scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)}" if len(details) > detail_height else ""
         put(title_y, title + scroll_hint, color, bold=True)
+        if live_state and live_state.get("cells"):
+            draw_live_grid(screen, title_y + 1, live_state["cells"], preview_palette, width - 3, detail_height)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
             y = title_y + 1 + i
             if isinstance(line, StyledText):
@@ -1513,10 +1579,12 @@ def display_loop(screen, args, executor, previews):
             return
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
+            if live and key == ord("r"):
+                live.retry()
         elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
             action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
-        elif utility_view == "settings" and key in (ord("1"), ord("2")):
-            action = "setting-" + ("send_while_working" if key == ord("1") else "animate_activity")
+        elif utility_view == "settings" and key in (ord("1"), ord("2"), ord("3")):
+            action = "setting-" + {ord("1"): "send_while_working", ord("2"): "animate_activity", ord("3"): "live_preview"}[key]
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:
@@ -1532,7 +1600,9 @@ def display_loop(screen, args, executor, previews):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
                 delta *= detail_height if viewing_controller or utility_view else visible
-            if viewing_controller and not utility_view:
+            if live_state is not None and (viewing_controller or key in (ord("["), ord("]"))):
+                live.scroll(delta)
+            elif viewing_controller and not utility_view:
                 controller_offset = max(0, active_offset + delta)
             elif not utility_view and not info and key in (ord("["), ord("]")):
                 preview_offset = max(0, active_offset + delta)
@@ -1541,6 +1611,8 @@ def display_loop(screen, args, executor, previews):
             else:
                 selected = max(0, min(len(rows) - 1, selected + delta))
         elif key == curses.KEY_END:
+            if live_state is not None:
+                live.scroll(1000)
             if viewing_controller:
                 controller_offset = None
             else:
@@ -1561,6 +1633,8 @@ def display_loop(screen, args, executor, previews):
                 if kind == "wheel":
                     if show_tasks and 3 <= y <= 6 + visible:
                         selected = max(0, min(len(rows) - 1, selected + delta))
+                    elif live_state is not None and title_y < y < message_top:
+                        live.scroll(delta)
                     elif viewing_controller and not utility_view:
                         controller_offset = max(0, active_offset + delta)
                     elif not utility_view and not info:
@@ -1632,6 +1706,8 @@ def display_loop(screen, args, executor, previews):
             preview_role, preview_offset, info = action[5:], None, False
         elif action == "latest":
             controller_offset = None
+            if live_state is not None:
+                live.scroll(1000)
         elif action == "workspace":
             notice = open_target(args, current) if current else "Select a task workspace first."
         elif action == "open-controller":
