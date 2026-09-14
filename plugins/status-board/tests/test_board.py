@@ -996,6 +996,37 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertEqual("".join(lines), message.replace("\n", ""))
         self.assertEqual(board.message_layout(message, 60, 320)[0], ["x" * 150, "y" * 230])
 
+    def test_composer_vertical_arrows_follow_visual_lines_and_finish_at_edges(self):
+        up, down, left = board.curses.KEY_UP, board.curses.KEY_DOWN, board.curses.KEY_LEFT
+        cases = [
+            ("", [up, down], 0),
+            ("hello", [up], 0),
+            ("hello", [left, left, down], 5),
+            ("abcde\nxyz", [up], 3),
+            ("abcde\nxyz", [up, up], 0),
+            ("abcde\nxyz", [up, up, down], 6),
+            ("abcde\nxyz", [up, up, down, down], 9),
+            ("abcde\n", [up, up, down, down], 6),
+            ("abcde\n\nxyz", [up], 6),
+            # Width 20 leaves 13 text cells; soft wraps behave like explicit lines.
+            ("abcdefghijklmnop", [up], 3),
+            ("abcdefghijklmnop", [up, up, down], 13),
+            ("abcdefghijklmnop", [up, up, down, down], 16),
+            ("abcdefghijklm", [up, up, down], 13),
+        ]
+        for message, keys, expected in cases:
+            with self.subTest(message=message, keys=keys), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=True)
+                screen = Mock()
+                screen.getmaxyx.return_value = (38, 20)
+                board.save_draft(board.draft_path(args, None), message)
+                screen.get_wch.side_effect = keys + ["|", "\x1b"]
+                with patch.object(board.curses, "curs_set"), patch.object(board, "send_message") as send:
+                    finish_editor(screen, args, None, inline=True)
+                send.assert_not_called()
+                self.assertEqual(board.draft_path(args, None).read_text(),
+                                 message[:expected] + "|" + message[expected:])
+
     def test_message_box_grows_then_caps_without_losing_text(self):
         for height, width in ((24, 60), (38, 88), (60, 200)):
             short = board.message_layout("Hi", height, width)

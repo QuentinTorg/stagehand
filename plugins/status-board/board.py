@@ -1052,8 +1052,14 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         elif key == curses.KEY_RIGHT:
             cursor = min(len(message), cursor + 1)
         elif key in (curses.KEY_UP, curses.KEY_DOWN):
-            target_y = max(0, cy + (-1 if key == curses.KEY_UP else 1))
-            cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - cx)))
+            target_y = cy + (-1 if key == curses.KEY_UP else 1)
+            # At the visual edges, finish traversing the text instead of stalling.
+            if target_y < 0:
+                cursor = 0
+            elif target_y > positions[-1][0]:
+                cursor = len(message)
+            else:
+                cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - cx)))
         elif key == curses.KEY_HOME:
             cursor = message.rfind("\n", 0, cursor) + 1
         elif key == curses.KEY_END:
