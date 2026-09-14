@@ -6,7 +6,7 @@ Two views separate task work from the orchestrator conversation. **Tasks** shows
 
 ## Setup
 
-Requires Herdr 0.8.2+, Python 3.10+ with curses, and PyYAML. Use your existing Python environment or an isolated environment in the control workspace:
+Requires Herdr 0.9.0+, Python 3.10+ with curses, PyYAML, and pyte. Use your existing Python environment or an isolated environment in the control workspace:
 
 ```sh
 python3 -m venv /absolute/stagehand/.local/board-venv
@@ -26,7 +26,7 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
-Click a task row to select it. Recent output follows the latest lines; scroll back with the mouse wheel or **[ / ]**, and press End to follow again. Next sizes to its labels; Status hides only when the remaining width is too small. Whole PR numbers stay visible. A clickable `+N` opens the remaining PR links in **Details** (**i**), which also preserves full workspace names and status text. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
+Click a task row to select it. Scroll conversation output with the mouse wheel or **[ / ]**; End scrolls toward the latest output. Next sizes to its labels; Status hides only when the remaining width is too small. Whole PR numbers stay visible. A clickable `+N` opens the remaining PR links in **Details** (**i**), which also preserves full workspace names and status text. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
@@ -43,16 +43,18 @@ The [common task record](../../skills/orchestrating-development/assets/task-reco
 ## Navigation and orchestrator view
 
 - **Tasks** (**t**): select a workspace; **Open workspace** (**o**) opens its existing Herdr session for direct agent work. Selecting a row alone never navigates away.
-- **Orchestrator** (**c**): read recent output and discuss setup or new work. Arrows, **[ / ]**, Page Up/Down, and the wheel scroll. “Following latest” means automatic scrolling is on. After scrolling back, **Jump to latest** or End returns to the newest output and resumes following it.
+- **Orchestrator** (**c**): view terminal output and discuss setup or new work. Arrows, **[ / ]**, Page Up/Down, and the wheel scroll. Snapshot mode additionally shows “Following latest” and a **Jump to latest** button after scrolling back.
 - **Open orchestrator** (**o** in that view, or **Shift-O** anywhere) opens its native agent pane for full conversations, permissions, or setup problems. It does not approve prompts or start agents.
 
-With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. The preview reads at most 120 terminal lines per background refresh, not a guaranteed complete or final assistant response; it may contain tool output. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
+With no tasks, the orchestrator view and general message box remain available. General messages go unchanged to the orchestrator, without a task header, and have their own saved draft. Use them to discuss new work or finish setup. Previews show terminal content, including tool output and prompts, not a guaranteed complete or final assistant response. Keep the native session accessible. The board must already be installed; initial installation still happens outside it.
 
-Workspace previews use the same agent-neutral terminal formatting, reading only the selected agent while its conversation tab is open (up to 120 lines/32 KB), not every task. They preserve source colors, bold, dim, italic, and underline where the terminal supports them; RGB colors map to the nearest available palette color. Only styling is interpreted—cursor, clipboard, and other terminal commands are discarded. They are recent context, not a generated summary or proof of completion. Purpose remains saved separately under Details. Reads do not focus agents or mark them seen. Messages from either workspace view still go through the orchestrator, never directly to the previewed worker.
+**Live preview** is the default for Author, Reviewer, worker, and Orchestrator views. While the board pane is focused, one Herdr attachment sizes the selected source terminal to the conversation panel. The source redraws and wraps naturally; pyte interprets its frames in a confined grid so cursor/erase/clipboard commands cannot affect the board's controls. Curses preserves colors, bold, italic, and underline where supported; RGB maps to the hosting palette. Images and advanced terminal-specific styling are not rendered. This is terminal context, not a summary or proof of completion.
 
-Conversation loading runs separately from task inventory, with at most one read in flight per channel. Opening a conversation requests it immediately; hidden conversations are not polled. Previews use the available pane width, preserving styles across wrapping. Herdr's `recent-unwrapped` removes terminal soft wraps, but cannot undo hard line breaks already rendered by an agent. The board preserves those breaks rather than guessing and damaging code or lists; it does not currently use a provider-specific raw-transcript service.
+Switching conversations, opening Details/Settings/Help, or shrinking below minimum dimensions releases the old attachment. Leaving the board pane pauses it and restores desktop sizing; returning reconnects. Focus checks run in a background worker every 500 ms with a 1.5-second query timeout. This follows Herdr session focus, not OS-level application focus. A source replacement, attachment error, or another viewer taking over stops reconnect attempts: **r** explicitly retries. The board never requests takeover, so it does not displace Heeler. The original desktop pane can render differently while attached.
 
-Conversation headings show the age of the last successful read, not the last agent message. Failed refreshes or reads older than two refresh intervals (at least ten seconds) are marked stale; errors remain visible rather than implying the agent is still loading.
+The live heading distinguishes Live, Paused, Connecting, and stopped/error states. Only dimensions and deliberate scroll actions reach the source; typing, clicks, terminal responses, and approvals never do. Scroll availability depends on the source application; End scrolls toward the latest output. Messages still go through the orchestrator. Purpose and task records are unchanged.
+
+Choose **Settings → Preview: Snapshots** to leave source dimensions untouched. This also serves as the fallback when pyte is absent. Snapshot mode uses the bounded reads described above (120 lines/32 KB), only for visible conversations. `recent-unwrapped` removes soft wrapping but retains source hard breaks. Snapshot headings show last successful read age and stale/errors; live mode streams frames instead of polling conversation snapshots. Switching modes preserves drafts.
 
 ## Set tasks aside
 
@@ -68,10 +70,12 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Settings and activity
 
-Open **Settings** at the top, or press **s**. Click either setting or press **1 / 2** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
+Open **Settings** at the top, or press **s**. Click a setting or press **1 / 2 / 3** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
 - **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the orchestrator working. Turn it off for a static Working label. The indicator is visible in both task and orchestrator views, including while typing. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
+
+- **Preview** (default Live): use a focus-scoped live attachment, or Snapshots to avoid resizing the source. This never changes messaging permissions.
 
 Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; Shift+Enter is not used as a busy-send override because terminals do not consistently distinguish it from Enter.
 
@@ -81,7 +85,7 @@ White baselines join view tabs on their existing rows; navigation buttons remain
 
 The message box uses the pane's full interior width and grows from three to at most twelve text rows, using less height in short panes. Longer messages scroll around the cursor; Enter still sends and Ctrl-J inserts a newline. Send/Clear stay at the bottom as the editor grows upward.
 
-Filled buttons and board PR links are clickable; source-colored or underlined text in terminal previews is not a board navigation control. Cyan marks the active view and Send when a draft has text. Magenta marks navigation away from the board; **Open workspace ↗** and **Open orchestrator ↗** sit at the right edge of their menus. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. The preview preserves source styling and collapses decorative terminal rules and repeated blank lines; it does not generate summaries or hide response text.
+Filled buttons and board PR links are clickable; source-colored or underlined text in terminal previews is not a board navigation control. Cyan marks the active view and Send when a draft has text. Magenta marks navigation away from the board; **Open workspace ↗** and **Open orchestrator ↗** sit at the right edge of their menus. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. Live mode preserves terminal layout; snapshot mode collapses decorative rules and repeated blank lines. Neither generates summaries.
 
 The layout adapts to terminal cells, not physical pixels. It supports compact panes from 60 columns × 24 rows through ultrawide layouts; narrower tables hide secondary columns, and task details retain a readability width limit. Conversation previews and message input use the available width. Tiny panes show a resize hint without discarding drafts. No per-widget font-size changes are required.
 
