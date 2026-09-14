@@ -233,7 +233,7 @@ class BoardTests(unittest.TestCase):
         ) as frame, patch.object(board, "send_message") as send, patch.object(board, "open_pr") as navigate:
             self.run_display(executor, [-1] + [board.curses.KEY_MOUSE] * len(events) + [ord("q")], (60, 140))
         sizes = [call.args[2] for call in frame.call_args_list]
-        self.assertEqual(sizes, [12, 12, 24, 24, 24, 12])
+        self.assertEqual(sizes, [12, 12, 24, 24, 24, 12, 12])
         send.assert_not_called()
         navigate.assert_not_called()
 
@@ -372,8 +372,8 @@ class BoardTests(unittest.TestCase):
                     finish_editor(screen, args, row, inline=True)
                 send.assert_not_called()
                 # A fresh editor restores the first workspace's saved draft.
-                screen.get_wch.side_effect = ["\r"]
-                self.assertEqual(finish_editor(screen, args, rows[0], inline=True), "Delivered")
+                screen.get_wch.side_effect = ["\r", "\x1b"]
+                finish_editor(screen, args, rows[0], inline=True)
                 send.assert_called_once_with(args, rows[0], "First draft")
                 self.assertFalse(board.draft_path(args, rows[0]).exists())
                 self.assertEqual(board.draft_path(args, rows[1]).read_text(), "Second draft")
@@ -454,6 +454,11 @@ sys.path.insert(0, str(Path(sys.argv[1]).parent))
 import board
 board.board_snapshot = lambda *args: ([], [], {"status": "idle"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "hello world"}
+def send(*args):
+    sys.stdout.write("SENT:" + args[2] + ":END")
+    sys.stdout.flush()
+    return True, "Delivered"
+board.send_message = send
 curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=True, interval=5))
 '''
         with tempfile.TemporaryDirectory() as root:
@@ -474,7 +479,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 self.fail(f"Missing {marker!r}: {output[-2000:]!r}")
             try:
                 wait_for(b"STAGEHAND")
-                os.write(master, b"c")
+                os.write(master, b"\x10c")
                 wait_for(b"hello world")
                 os.write(master, b"\x1b[<0;2;9M")
                 wait_for(b"release to copy")
@@ -482,7 +487,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 self.assertNotIn(b"\x1b]52;", output)
                 os.write(master, b"\x1b[<0;6;9m")
                 wait_for(b"\x1b]52;c;aGVsbG8=\x07")
-                os.write(master, b"q")
+                # Leaving selection never exposes bare-letter shortcuts, and
+                # sending keeps the actual curses composer ready for a follow-up.
+                os.write(master, b"\x1bqfirst\rsecond\r")
+                wait_for(b"SENT:qfirst:END")
+                wait_for(b"SENT:second:END")
+                os.write(master, b"\x10q")
                 process.wait(timeout=4)
                 self.assertEqual(process.returncode, 0)
             finally:
@@ -561,7 +571,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 auto_column = board.resize_controls(100)[2] + 1
                 os.write(master, f"\x1b[<0;{auto_column};31M".encode())
                 wait_for(b"rows=12")
-                os.write(master, b"q")
+                os.write(master, b"\x10q")
                 process.wait(timeout=5)
                 while select.select([master], [], [], 0)[0]:
                     try:
@@ -747,27 +757,93 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 row = board.task_summary(self.task(), 0, None, None, 5)
                 screen = Mock()
                 screen.getmaxyx.return_value = (38, 140)
-                screen.get_wch.side_effect = [*"First", "\n", *"Second", enter]
+                screen.get_wch.side_effect = [*"First", "\n", *"Second", enter, "\x1b"]
                 with patch.object(board.curses, "curs_set"), patch.object(
                     board, "send_message", return_value=(True, "Delivered")
                 ) as send:
-                    self.assertEqual(finish_editor(screen, args, row, inline=True), "Delivered")
+                    finish_editor(screen, args, row, inline=True)
                 send.assert_called_once_with(args, row, "First\nSecond")
 
-    def run_display(self, executor, keys, size=(38, 140), previews=None, editor_keys=None, live=None):
+    def test_typing_defaults_to_messages_and_stays_ready_after_sending(self):
+        executor = Mock()
+        executor.submit.return_value = Future()
+        with patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
+            self.run_display(executor, ["q", board.SHORTCUT_PREFIX, "q"], commands=False,
+                             editor_keys=[*"tcsiomjk[]? 漢字", "\r", *"follow-up", "\r", "\x1b"])
+        self.assertEqual([call.args[2] for call in send.call_args_list], ["qtcsiomjk[]? 漢字", "follow-up"])
+
+    def test_plain_preview_click_focuses_composer_without_copying(self):
+        executor = Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "idle"}))
+        executor.submit.return_value = ready
+        events = [("select", 2, 8, 0), ("release", 2, 8, 0)]
+        with patch.object(board, "mouse_event", side_effect=events), patch.object(
+            board, "copy_preview_text"
+        ) as copy, patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
+            self.run_display(executor, [ord("c"), -1] + [board.curses.KEY_MOUSE] * 2 + [ord("q")],
+                             editor_keys=[*"Please continue", "\r", "\x1b"])
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[2], "Please continue")
+        copy.assert_not_called()
+
+    def test_command_prefix_preserves_draft_and_never_sends(self):
+        executor = Mock()
+        executor.submit.return_value = Future()
+        saved = []
+        original_save = board.save_draft
+        def save(path, message):
+            saved.append(message)
+            original_save(path, message)
+        with patch.object(board, "save_draft", side_effect=save), patch.object(board, "send_message") as send:
+            screen = self.run_display(executor, ["a", "c", board.SHORTCUT_PREFIX, "q"], commands=False,
+                                      editor_keys=[*" draft", board.SHORTCUT_PREFIX])
+        self.assertEqual(saved[-1], "a draft")
+        send.assert_not_called()
+        self.assertIn("Orchestrator", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
+    def run_display(self, executor, keys, size=(38, 140), previews=None, editor_keys=None, live=None, commands=True):
         screen = Mock()
         screen.getmaxyx.return_value = size
-        screen.getch.side_effect = keys
-        screen.get_wch.side_effect = editor_keys
+        def board_keys():
+            # Existing UI tests describe navigation actions; exercise their new
+            # prefix too. Typing tests supply literal input with commands=False.
+            for key in keys:
+                if commands and key not in (-1, 27, board.curses.KEY_MOUSE, board.curses.KEY_RESIZE):
+                    yield board.SHORTCUT_PREFIX
+                if key == -1:
+                    yield board.curses.error()
+                else:
+                    yield chr(key) if isinstance(key, int) and 0 <= key < 256 else key
+        inputs = iter(board_keys())
+        def read():
+            key = next(inputs)
+            if isinstance(key, Exception):
+                raise key
+            return key
+        screen.get_wch.side_effect = read
+        original_compose = board.compose
+        edit_inputs = (editor_keys if callable(editor_keys) else
+                       iter(editor_keys) if editor_keys is not None else iter(["\x1b"] * 100))
+        def editor(*args, **kwargs):
+            generator = original_compose(*args, **kwargs)
+            while True:
+                with patch.object(screen, "get_wch", side_effect=edit_inputs):
+                    try:
+                        next(generator)
+                    except StopIteration as result:
+                        return result.value
+                yield
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=live is None, interval=5)
         if previews is None:
             previews = Mock()
             response = Future()
             response.set_result({"role": "reviewer", "status": "idle", "output": "What would you like to work on?"})
             previews.submit.return_value = response
-        with patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
+        with tempfile.TemporaryDirectory() as root, patch.object(board, "compose", side_effect=editor), patch.object(board.curses, "nonl"), patch.object(board.curses, "curs_set"), patch.object(board.curses, "mousemask"), patch.object(
             board.curses, "mouseinterval"
         ) as interval, patch.object(board.curses, "has_colors", return_value=False):
+            args.tasks = Path(root) / "tasks"
             board.display_loop(screen, args, executor, previews, live)
         interval.assert_called_once_with(0)
         return screen
@@ -843,15 +919,17 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         pending.set_result(([], [], {"status": "idle"}))
         executor.submit.return_value = pending
         live.available = True
-        count = 0
+        pressed = False
         def update(*args):
-            nonlocal count
-            count += 1
-            return frame("hello" if count <= 3 else "CHANGED")
+            return frame("CHANGED" if pressed else "hello")
         live.update.side_effect = update
-        events = [("select", 1, 5, 0), ("motion", 5, 5, 0), ("release", 5, 5, 0)]
+        events = iter([("select", 1, 5, 0), ("motion", 5, 5, 0), ("release", 5, 5, 0)])
+        def mouse():
+            nonlocal pressed
+            pressed = True
+            return next(events)
         with patch.dict(os.environ, HERDR_WORKSPACE_ID="control"), patch.object(
-            board, "mouse_event", side_effect=events
+            board, "mouse_event", side_effect=mouse
         ), patch.object(board, "copy_preview_text", return_value="Copy requested") as copy, patch.object(
             board, "send_message"
         ) as send:
@@ -899,8 +977,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor.submit.return_value = pending
         screen = self.run_display(executor, [ord("r"), board.curses.KEY_DOWN, ord("r"), ord("q")])
         self.assertFalse(pending.done())
-        executor.submit.assert_called_once_with(board.board_snapshot, Path("/unused/tasks"), True)
-        self.assertEqual(screen.getch.call_count, 4)
+        executor.submit.assert_called_once()
+        self.assertEqual(executor.submit.call_args.args[0], board.board_snapshot)
+        self.assertTrue(executor.submit.call_args.args[2])
+        self.assertEqual(screen.get_wch.call_count, 8)
 
     def test_failed_background_refresh_is_visible_without_crashing(self):
         executor = Mock()
@@ -1232,12 +1312,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             screen.getmaxyx.return_value = (60, 88)
             message = "first\n" * 20
             board.save_draft(board.draft_path(args, None), message)
-            screen.get_wch.side_effect = [board.curses.KEY_MOUSE, "\r"]
+            screen.get_wch.side_effect = [board.curses.KEY_MOUSE, "\r", "\x1b"]
             top = board.message_layout(message, 60, 88)[2]
             with patch.object(board.curses, "curs_set"), patch.object(
                 board, "mouse_event", return_value=("select", 4, top + 1, 0)
             ), patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
-                self.assertEqual(finish_editor(screen, args, None, inline=True), "Delivered")
+                finish_editor(screen, args, None, inline=True)
             send.assert_called_once_with(args, None, message)
             screen.dupwin.assert_not_called()
 
@@ -1420,11 +1500,11 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                 finish_editor(screen, args, row)
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertEqual(board.draft_path(args, row).read_text(), "Please investigate\nfirst")
-            screen.get_wch.side_effect = ["\x07"]
+            screen.get_wch.side_effect = ["\x07", "\x1b"]
             with patch.object(board.curses, "curs_set"), patch.object(
                 board, "send_message", return_value=(True, "Delivered")
             ) as send:
-                self.assertEqual(finish_editor(screen, args, row), "Delivered")
+                finish_editor(screen, args, row)
                 self.assertEqual(send.call_args.args[2], "Please investigate\nfirst")
             self.assertFalse(board.draft_path(args, row).exists())
 
@@ -1461,7 +1541,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor = Mock()
         executor.submit.return_value = Future()
         screen = self.run_display(executor, [27, ord("q")])
-        self.assertEqual(screen.getch.call_count, 2)
+        self.assertEqual(screen.get_wch.call_count, 3)
 
     def test_selected_objective_and_rows_below_it_are_clickable(self):
         task = self.task()

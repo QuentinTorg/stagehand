@@ -32,6 +32,8 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
 VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
+SHORTCUT_PREFIX = "\x10"  # Ctrl-P leaves Herdr's own Ctrl-B prefix untouched.
+SHORTCUT_REQUEST = object()
 
 
 @dataclass(frozen=True)
@@ -680,12 +682,15 @@ def terminal_lines(output, width):
 
 
 def help_lines(width, warnings):
-    text = ["Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
+    text = ["Typing always goes to the message box, including after sending. Messages go only to the orchestrator.",
+            "Ctrl-P, then a key: run a board command. All navigation keys listed below require this prefix; mouse controls do not.",
+            "Esc cancels a pending command or saves and unfocuses the composer. It does not enable bare-letter shortcuts.",
+            "", "Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
             "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
-            "", "m or click the box: write a message. All messages go to the orchestrator.",
+            "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
             "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Task and general drafts stay separate.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
@@ -1013,7 +1018,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
         title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
-             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
+             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
@@ -1034,7 +1039,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
     draw_button(screen, height - 4, 12, "  x Clear  ")
 
 
-def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
+def compose(screen, args, row, inline=False, send_now=False, clear_now=False, initial_key=None):
     path = draft_path(args, row)
     try:
         message = path.read_text() if path.exists() else ""
@@ -1046,7 +1051,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             return "Draft cleared; nothing sent."
         except OSError:
             return "Cannot clear saved draft; nothing sent."
-    cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
+    cursor, note = len(message), "Enter sends · Ctrl-J newline · Ctrl-P shortcuts · Esc saves"
     while True:
         # Yield to the board between keystrokes so preview completions and live
         # inventory still render while the human writes a reply.
@@ -1067,7 +1072,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             screen.erase()
             content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + (row["label"] if row else "General / new task")),
                        (2, "Repository: " + (row["repository"] if row else "Not task-specific"))]
-        content += [(height - 2, note), (height - 1, " Click outside / Esc to return" if inline else " [ Send ]  [ Back ]")]
+        content += [(height - 2, note), (height - 1, " Type to message · Ctrl-P then a key for board commands" if inline else " [ Send ]  [ Back ]")]
         for y, text in content:
             try:
                 screen.move(y, 0)
@@ -1086,7 +1091,9 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         except curses.error:
             pass
         screen.refresh()
-        if send_now:
+        if initial_key is not None:
+            key, initial_key = initial_key, None
+        elif send_now:
             key, send_now = "\x07", False
         else:
             try:
@@ -1120,14 +1127,15 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                     return ("Draft saved; nothing sent.", event)
             elif event and event[0] == "select" and event[2] == height - 1:
                 key = "\x07" if 2 <= event[1] <= 9 else "\x1b" if 12 <= event[1] <= 19 else key
-        if key == "\x1b":
+        if key in ("\x1b", SHORTCUT_PREFIX):
             try:
-                save_draft(path, message)
+                if message or path.exists():
+                    save_draft(path, message)
             except OSError:
                 note = "Cannot save draft. Copy your text before closing."
                 continue
             curses.curs_set(0)
-            return "Draft saved. Click the message box to continue."
+            return SHORTCUT_REQUEST if key == SHORTCUT_PREFIX else "Draft saved. Type to continue."
         if key in ("\r", curses.KEY_ENTER, "\x07"):
             if not message.strip():
                 note = "Write a message before sending."
@@ -1150,8 +1158,9 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                     path.unlink()
                 except OSError:
                     note += " Saved copy remains; do not resend."
-                curses.curs_set(0)
-                return note
+                # Keep focus and clear the delivered text in memory even if
+                # deleting its recovery file failed. Enter must never resend it.
+                message, cursor = "", 0
             continue
         if key in (curses.KEY_BACKSPACE, "\x7f", "\b") and cursor:
             message, cursor = message[:cursor - 1] + message[cursor:], cursor - 1
@@ -1338,6 +1347,7 @@ def display_loop(screen, args, executor, previews, live=None):
     all_rows, later_open = [], False
     requested_rows, dragging = None, False
     selection = None
+    shortcut_pending = False
     viewer = ViewerState(args.tasks)
     activity = {"status": "unknown"}
     notice, pending, queued_mouse = "", None, None
@@ -1399,10 +1409,19 @@ def display_loop(screen, args, executor, previews, live=None):
                 live.update(None, (1, 1))
             dragging = False
             put(0, "STAGEHAND — enlarge this pane to at least 60 × 24.")
-            put(2, "Your drafts are saved. q closes the board.")
+            put(2, "Your drafts are saved. Ctrl-P then q closes the board.")
             screen.refresh()
-            if screen.getch() == ord("q"):
-                return
+            try:
+                key = screen.get_wch()
+            except curses.error:
+                continue
+            if key == SHORTCUT_PREFIX:
+                shortcut_pending = not shortcut_pending
+            else:
+                if shortcut_pending and key == "q":
+                    return
+                if key != curses.KEY_RESIZE:
+                    shortcut_pending = False
             continue
 
         selected = min(selected, max(0, len(rows) - 1))
@@ -1547,11 +1566,11 @@ def display_loop(screen, args, executor, previews, live=None):
             if use_live and wanted_preview:
                 live_state = state if target else {"status": "unavailable", "message": "No agent is assigned to this conversation", "cells": ()}
         if utility_view == "settings":
-            paragraphs = ["Click a setting or press 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
+            paragraphs = ["Click a setting or press Ctrl-P then 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
                           "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
                           "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation.",
                           "", "Live preview: resize the selected agent to this panel while the board is focused. Leaving releases it. No typing or approvals reach the previewed agent. Snapshots keep the source untouched.",
-                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press r to retry a stopped attachment; it never takes over another viewer."]
+                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press Ctrl-P then r to retry a stopped attachment; it never takes over another viewer."]
             details = [(line, 0, []) for paragraph in paragraphs
                        for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
             title, color = "Board settings", 10
@@ -1641,14 +1660,21 @@ def display_loop(screen, args, executor, previews, live=None):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · s Settings · ? Help · q Close", width - 1, curses.A_DIM)
+            footer = ("Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
+                      if shortcut_pending else "Type to message · Enter sends · Ctrl-P shortcuts · Drag preview to copy")
+            screen.addnstr(height - 1, 0, footer, width - 1, curses.A_DIM)
         except curses.error:
             pass
         if editor is not None:
             try:
                 next(editor)
             except StopIteration as result:
-                notice, editor = result.value, None
+                editor = None
+                if result.value is SHORTCUT_REQUEST:
+                    shortcut_pending = True
+                    notice = "Choose a board shortcut; Esc cancels."
+                else:
+                    notice = result.value
                 if isinstance(notice, tuple):
                     notice, queued_mouse = notice
                 try:
@@ -1657,7 +1683,22 @@ def display_loop(screen, args, executor, previews, live=None):
                     pass
             continue
         screen.refresh()
-        key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        try:
+            key = curses.KEY_MOUSE if queued_mouse else screen.get_wch()
+        except curses.error:
+            key = -1
+        if key == SHORTCUT_PREFIX:
+            selection, shortcut_pending = None, not shortcut_pending
+            continue
+        if key not in (-1, curses.KEY_MOUSE, curses.KEY_RESIZE):
+            command, shortcut_pending = shortcut_pending, False
+            if not command and key not in ("\x1b", 27):
+                selection = None
+                editor = compose(screen, args, message_target, inline=True, initial_key=key)
+                editor_task = selected_id
+                continue
+            # Existing navigation is reachable only after an explicit prefix.
+            key = ord(key) if isinstance(key, str) else key
         if selection and key not in (-1, curses.KEY_MOUSE):
             selection = None
             if key == 27:
@@ -1716,6 +1757,7 @@ def display_loop(screen, args, executor, previews, live=None):
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
+                shortcut_pending = False
                 if selection and selection.dragging and kind in {"select", "motion", "release"}:
                     selection.move(x - 1, y - title_y - 1, width - 3)
                     if kind == "release":
@@ -1724,6 +1766,8 @@ def display_loop(screen, args, executor, previews, live=None):
                             notice = copy_preview_text(selection.text(width - 3))
                         else:
                             selection = None
+                            editor = compose(screen, args, message_target, inline=True)
+                            editor_task = selected_id
                     continue
                 if kind in {"select", "wheel"}:
                     selection = None

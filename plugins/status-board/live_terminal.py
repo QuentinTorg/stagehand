@@ -167,7 +167,7 @@ class LivePreview:
                         current_identity = (agent["pane_id"], agent["terminal_id"],
                                             (agent.get("agent_session") or {}).get("value"))
                         if identity is not None and identity != current_identity:
-                            raise ValueError("Source agent changed; press r to reconnect")
+                            raise ValueError("Source agent changed")
                         self._publish(generation, agent_status=agent.get("agent_status", "unknown"))
                         if not focused:
                             await detach()
@@ -212,6 +212,6 @@ class LivePreview:
                     await detach()
                     failed = True
                     self._publish(generation, status="unavailable", cells=(),
-                                  message=f"Live preview stopped: {error}. Press r to retry or use Snapshots in Settings.")
+                                  message=f"Live preview stopped: {error}. Press Ctrl-P then r to retry or use Snapshots in Settings.")
         finally:
             await detach()
