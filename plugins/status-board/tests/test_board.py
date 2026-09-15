@@ -20,11 +20,19 @@ spec.loader.exec_module(board)
 
 def finish_editor(*args, **kwargs):
     editor = board.compose(*args, **kwargs)
-    while True:
-        try:
-            next(editor)
-        except StopIteration as result:
-            return result.value
+    screen = args[0]
+    read = screen.get_wch
+    def typed_key():
+        # These editor tests model separate keystrokes, not queued paste bursts.
+        if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+            raise board.curses.error()
+        return read()
+    with patch.object(screen, "get_wch", side_effect=typed_key):
+        while True:
+            try:
+                next(editor)
+            except StopIteration as result:
+                return result.value
 
 
 class BoardTests(unittest.TestCase):
@@ -817,6 +825,8 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                     yield chr(key) if isinstance(key, int) and 0 <= key < 256 else key
         inputs = iter(board_keys())
         def read():
+            if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+                raise board.curses.error()
             key = next(inputs)
             if isinstance(key, Exception):
                 raise key
@@ -825,10 +835,14 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         original_compose = board.compose
         edit_inputs = (editor_keys if callable(editor_keys) else
                        iter(editor_keys) if editor_keys is not None else iter(["\x1b"] * 100))
+        def edit_read():
+            if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+                raise board.curses.error()
+            return edit_inputs() if callable(edit_inputs) else next(edit_inputs)
         def editor(*args, **kwargs):
             generator = original_compose(*args, **kwargs)
             while True:
-                with patch.object(screen, "get_wch", side_effect=edit_inputs):
+                with patch.object(screen, "get_wch", side_effect=edit_read):
                     try:
                         next(generator)
                     except StopIteration as result:
@@ -1541,7 +1555,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         executor = Mock()
         executor.submit.return_value = Future()
         screen = self.run_display(executor, [27, ord("q")])
-        self.assertEqual(screen.get_wch.call_count, 3)
+        self.assertEqual(screen.get_wch.call_count, 4)  # Includes Escape's paste-prefix probe.
 
     def test_selected_objective_and_rows_below_it_are_clickable(self):
         task = self.task()

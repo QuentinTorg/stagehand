@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import curses
 from dataclasses import dataclass, replace
@@ -34,6 +35,96 @@ ROLES = ("author", "reviewer", "worker", "workspace_agent")
 VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
 SHORTCUT_PREFIX = "\x10"  # Ctrl-P leaves Herdr's own Ctrl-B prefix untouched.
 SHORTCUT_REQUEST = object()
+
+
+@dataclass(frozen=True)
+class InsertText:
+    text: str
+
+
+class MessageInput:
+    """Batch text without interpreting pasted controls as send or navigation."""
+
+    def __init__(self, screen):
+        self.screen = screen
+        self.pending = deque()
+        self.pasting = False
+        self.tail = ""
+        self.after_cr = False
+
+    def read(self, batch=False):
+        if self.pasting:
+            return self.read_paste()
+        key = self.pending.popleft() if self.pending else self.screen.get_wch()
+        if key == "\x1b":
+            # Curses has no portable bracketed-paste event. Recognize its start
+            # while preserving ordinary Escape and any following keystrokes.
+            prefix = []
+            self.screen.timeout(30)
+            try:
+                for expected in "[200~":
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    prefix.append(value)
+                    if value != expected:
+                        break
+                else:
+                    self.pasting = True
+                    self.screen.keypad(False)
+                    return self.read_paste()
+            except curses.error:
+                pass
+            finally:
+                self.screen.timeout(200)
+            self.pending.extendleft(reversed(prefix))
+        elif batch and isinstance(key, str) and (key.isprintable() or key == "\n"):
+            characters = [key]
+            self.screen.timeout(0)
+            try:
+                # Bound each batch so long input cannot starve live UI updates.
+                for _ in range(8191):
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    if not isinstance(value, str) or not (value.isprintable() or value == "\n"):
+                        self.pending.appendleft(value)
+                        break
+                    characters.append(value)
+            except curses.error:
+                pass
+            finally:
+                self.screen.timeout(200)
+            return InsertText("".join(characters))
+        return key
+
+    def read_paste(self):
+        end, characters = "\x1b[201~", []
+        self.screen.timeout(200)
+        try:
+            for _ in range(8192):
+                value = self.screen.get_wch()
+                self.screen.timeout(0)
+                if not isinstance(value, str):
+                    continue
+                self.tail += value
+                if self.tail == end:
+                    self.tail, self.pasting, self.after_cr = "", False, False
+                    self.screen.keypad(True)
+                    break
+                # Retain a partial terminator across reads, including slow or
+                # fragmented pastes. All other controls stay out of command handling.
+                while self.tail and not end.startswith(self.tail):
+                    character, self.tail = self.tail[0], self.tail[1:]
+                    if character == "\r":
+                        characters.append("\n")
+                    elif character == "\n":
+                        if not self.after_cr:
+                            characters.append(character)
+                    elif character == "\t" or character.isprintable():
+                        characters.append(character)
+                    self.after_cr = character == "\r"
+        except curses.error:
+            pass
+        finally:
+            self.screen.timeout(200)
+        return InsertText("".join(characters))
 
 
 @dataclass(frozen=True)
@@ -1039,7 +1130,8 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
     draw_button(screen, height - 4, 12, "  x Clear  ")
 
 
-def compose(screen, args, row, inline=False, send_now=False, clear_now=False, initial_key=None):
+def compose(screen, args, row, inline=False, send_now=False, clear_now=False, initial_key=None, input_reader=None):
+    input_reader = input_reader or MessageInput(screen)
     path = draft_path(args, row)
     try:
         message = path.read_text() if path.exists() else ""
@@ -1053,7 +1145,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             return "Cannot clear saved draft; nothing sent."
     cursor, note = len(message), "Enter sends · Ctrl-J newline · Ctrl-P shortcuts · Esc saves"
     while True:
-        # Yield to the board between keystrokes so preview completions and live
+        # Yield to the board between input batches so preview completions and live
         # inventory still render while the human writes a reply.
         yield
         height, width = screen.getmaxyx()
@@ -1097,9 +1189,17 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             key, send_now = "\x07", False
         else:
             try:
-                key = screen.get_wch()
+                key = input_reader.read(batch=True)
             except curses.error:
                 continue
+        if isinstance(key, InsertText):
+            if key.text:
+                message, cursor = message[:cursor] + key.text + message[cursor:], cursor + len(key.text)
+                try:
+                    save_draft(path, message)
+                except OSError:
+                    note = "Draft save failed; keep this window open until saved."
+            continue
         if key == curses.KEY_MOUSE:
             event = mouse_event()
             if inline and event and event[0] == "select":
@@ -1300,6 +1400,12 @@ def drag_tracking(enabled):
         sys.stdout.flush()
 
 
+def bracketed_paste(enabled):
+    if sys.stdout.isatty():
+        sys.stdout.write("\x1b[?2004" + ("h" if enabled else "l"))
+        sys.stdout.flush()
+
+
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
@@ -1308,6 +1414,7 @@ def display(screen, args):
         return display_loop(screen, args, executor, previews, live)
     finally:
         live.close()
+        bracketed_paste(False)
         drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
         previews.shutdown(wait=False, cancel_futures=True)
@@ -1329,6 +1436,8 @@ def display_loop(screen, args, executor, previews, live=None):
     # Flush curses' initial terminal modes before selecting drag reporting.
     screen.refresh()
     drag_tracking(True)
+    bracketed_paste(True)
+    input_reader = MessageInput(screen)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
@@ -1412,7 +1521,7 @@ def display_loop(screen, args, executor, previews, live=None):
             put(2, "Your drafts are saved. Ctrl-P then q closes the board.")
             screen.refresh()
             try:
-                key = screen.get_wch()
+                key = input_reader.read()
             except curses.error:
                 continue
             if key == SHORTCUT_PREFIX:
@@ -1684,7 +1793,7 @@ def display_loop(screen, args, executor, previews, live=None):
             continue
         screen.refresh()
         try:
-            key = curses.KEY_MOUSE if queued_mouse else screen.get_wch()
+            key = curses.KEY_MOUSE if queued_mouse else input_reader.read()
         except curses.error:
             key = -1
         if key == SHORTCUT_PREFIX:
@@ -1692,9 +1801,9 @@ def display_loop(screen, args, executor, previews, live=None):
             continue
         if key not in (-1, curses.KEY_MOUSE, curses.KEY_RESIZE):
             command, shortcut_pending = shortcut_pending, False
-            if not command and key not in ("\x1b", 27):
+            if isinstance(key, InsertText) or (not command and key not in ("\x1b", 27)):
                 selection = None
-                editor = compose(screen, args, message_target, inline=True, initial_key=key)
+                editor = compose(screen, args, message_target, inline=True, initial_key=key, input_reader=input_reader)
                 editor_task = selected_id
                 continue
             # Existing navigation is reachable only after an explicit prefix.
@@ -1726,7 +1835,7 @@ def display_loop(screen, args, executor, previews, live=None):
         elif key == ord("i") and not viewing_controller:
             action = "info"
         elif key == ord("m"):
-            editor = compose(screen, args, message_target, inline=True)
+            editor = compose(screen, args, message_target, inline=True, input_reader=input_reader)
             editor_task = selected_id
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
@@ -1766,7 +1875,7 @@ def display_loop(screen, args, executor, previews, live=None):
                             notice = copy_preview_text(selection.text(width - 3))
                         else:
                             selection = None
-                            editor = compose(screen, args, message_target, inline=True)
+                            editor = compose(screen, args, message_target, inline=True, input_reader=input_reader)
                             editor_task = selected_id
                     continue
                 if kind in {"select", "wheel"}:
@@ -1799,7 +1908,7 @@ def display_loop(screen, args, executor, previews, live=None):
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif kind == "select" and message_top <= y < height - 2:
-                    editor = compose(screen, args, message_target, inline=True,
+                    editor = compose(screen, args, message_target, inline=True, input_reader=input_reader,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
                     editor_task = selected_id
