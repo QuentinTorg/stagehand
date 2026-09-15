@@ -596,14 +596,23 @@ def task_summary(task, modified, workspaces, agents, now):
     next_actor = "you" if needs_human else expected if status == "working" else None
     if next_actor == "human":
         next_actor = "you"
-    role_text, activity = [], {}
+    role_text, activity, runtime_states, runtime_ids = [], {}, {}, {}
     for role in ROLES:
         identity = mapping(task.get("agents")).get(role)
         if not identity:
             continue
         # Names can be reused elsewhere; require the recorded workspace as well.
-        found = next((a for a in agents or [] if a.get("name") == identity and a.get("workspace_id") == workspace_id), None)
+        matches = [a for a in agents or [] if workspace_id and a.get("name") == identity and a.get("workspace_id") == workspace_id]
+        found = matches[0] if len(matches) == 1 else None
+        recorded = mapping(mapping(task.get("role_sessions")).get(role))
+        if found and ((recorded.get("pane_id") and recorded["pane_id"] != found.get("pane_id")) or
+                      (recorded.get("session_id") and recorded["session_id"] != mapping(found.get("agent_session")).get("value"))):
+            found = None
         runtime = clean(found.get("agent_status", "unknown")) if found else "unavailable" if agents is None else "missing"
+        runtime_states[role] = runtime
+        if found:
+            runtime_ids[role] = [identity, found.get("pane_id"), found.get("terminal_id"),
+                                 mapping(found.get("agent_session")).get("value")]
         role_text.append(f"{role.replace('_', ' ').title()} {runtime}")
         if found and runtime in {"idle", "done", "working", "blocked"}:
             # Viewing an agent changes done to idle; that is not new work.
@@ -625,7 +634,7 @@ def task_summary(task, modified, workspaces, agents, now):
         action = None
     elif status is None:
         action = "Orchestrator: reconcile saved status with the latest result."
-    return {"id": str(task["task_id"]), "label": label, "color": color,
+    row = {"id": str(task["task_id"]), "label": label, "color": color,
             "phase": stage, "status": status, "summary": summary,
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
@@ -634,6 +643,48 @@ def task_summary(task, modified, workspaces, agents, now):
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
+    row["record_key"] = hashlib.sha256(json.dumps([workspace_id, task.get("agents"), task.get("role_sessions"), state],
+                                                 sort_keys=True, default=str).encode()).hexdigest()
+    row["runtime_states"], row["runtime_ids"] = runtime_states, runtime_ids
+    row["runtime_available"] = agents is not None
+    row["saved_display"] = {key: row[key] for key in ("status", "color", "summary", "action", "next", "roles", "stage")}
+    apply_runtime_display(row)
+    return row
+
+
+def apply_runtime_display(row, unreconciled=False, replaced=False):
+    """Runtime changes presentation only; it never grants authority or writes task state."""
+    row.update(row["saved_display"])
+    row["runtime_note"] = ""
+    row["runtime_overlay"] = False
+    if not row["runtime_available"] and not unreconciled:
+        row["runtime_note"] = "Live status unavailable; showing the saved workflow record."
+        return
+    states = row["runtime_states"]
+    blocked = [role for role, status in states.items() if status == "blocked"]
+    working = [role for role, status in states.items() if status == "working"]
+    uncertain = any(status not in {"working", "blocked", "idle", "done"} for status in states.values())
+    if replaced or (uncertain and not blocked and not working):
+        status, summary, actor = None, "Agent identity changed" if replaced else "Live status unavailable", "orchestrator"
+        action = "Orchestrator: verify the associated agent and reconcile its latest state."
+    elif blocked:
+        status, summary, actor = "needs-human", "Agent needs attention", "you"
+        action = "Open " + ", ".join(blocked) + " to inspect the pending question or permission request."
+    elif working:
+        status, summary, actor = "working", row["summary"] if row["status"] == "working" else "Agent working", working[0]
+        action = "Agent work is underway."
+    elif unreconciled or (states and row["status"] == "working" and row["next"] in states):
+        status, summary, actor = None, "Awaiting status update", "orchestrator"
+        action = "Orchestrator: reconcile the latest result; idle alone does not establish completion."
+    else:
+        return
+    row.update(status=status, color=STATES.get(status, 0), summary=summary, stage=summary, next=actor, action=action)
+    row["runtime_overlay"] = True
+    row["roles"] = row["roles"].split(" → ")[0] + " → " + actor
+    if row["saved_display"]["status"] != status or replaced or unreconciled:
+        saved = row["saved_display"]
+        row["runtime_note"] = "Saved record: " + (saved["summary"] or row["phase"]) + (
+            ". Recorded next action: " + saved["action"] if saved["action"] else "")
 
 
 def snapshot(directory, offline=False, include_controller=False):
@@ -869,6 +920,8 @@ def pr_cell(row, width):
 
 
 def task_stage(row):
+    if row.get("runtime_overlay"):
+        return row["summary"]
     if row.get("color") == 0:
         return "Status unconfirmed"
     if row.get("summary"):
@@ -917,6 +970,8 @@ def detail_lines(row, width, info=False):
     if info:
         entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
                     (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+        if row.get("runtime_note"):
+            entries.append((row["runtime_note"], 0, None))
     if info and row.get("location"):
         entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
     lines = [(line, color, []) for text, color, _ in entries
@@ -1042,6 +1097,7 @@ class ViewerState:
     def __init__(self, tasks):
         self.path = tasks.parent / "board-state.json"
         self.later, self.error = {}, None
+        self.observations = {}
         self.settings = dict(VIEWER_DEFAULTS)
         try:
             if self.path.exists():
@@ -1052,6 +1108,12 @@ class ViewerState:
                         for value in later.values()):
                     raise ValueError("invalid Later entries")
                 self.later = later
+                observations = saved.get("observations", {})
+                if not isinstance(observations, dict) or any(not isinstance(item, dict) or
+                        not isinstance(item.get("record_key"), str) or not isinstance(item.get("identities"), dict)
+                        for item in observations.values()):
+                    raise ValueError("invalid runtime observations")
+                self.observations = observations
                 settings = saved.get("settings", {})
                 if not isinstance(settings, dict) or any(type(settings[key]) is not bool
                         for key in VIEWER_DEFAULTS if key in settings):
@@ -1065,13 +1127,14 @@ class ViewerState:
         # No timestamps, labels, focus state, CI details, or bookkeeping counters.
         facts = {key: row.get(key) for key in
                  ("workspace_id", "status", "summary", "action", "next", "objective", "prs", "agent_names")}
+        facts.update({key: value for key, value in row.get("saved_display", {}).items() if key in facts})
         return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
 
     def save(self, later, settings=None):
         if self.error:
             raise ValueError(self.error)
         settings = self.settings if settings is None else settings
-        save_draft(self.path, json.dumps({"later": later, "settings": settings}, indent=2) + "\n")
+        save_draft(self.path, json.dumps({"later": later, "settings": settings, "observations": self.observations}, indent=2) + "\n")
         self.later = later
         self.settings = settings
 
@@ -1090,7 +1153,23 @@ class ViewerState:
 
     def reconcile(self, rows):
         later, returned = dict(self.later), []
+        before = dict(self.observations)
+        self.observations = {key: value for key, value in before.items() if key in {row["id"] for row in rows}}
         for row in rows:
+            if "record_key" in row:
+                previous_runtime = self.observations.get(row["id"])
+                if previous_runtime and previous_runtime["record_key"] != row["record_key"]:
+                    self.observations.pop(row["id"], None)
+                    previous_runtime = None
+                identities = row["runtime_ids"]
+                replaced = bool(previous_runtime and any(role in identities and identities[role] != identity
+                                for role, identity in previous_runtime["identities"].items()))
+                # Retain evidence of an observed turn until the workflow record
+                # changes. Restarting the board must not resurrect old approvals.
+                if not replaced and any(value in {"working", "blocked"} for value in row["runtime_states"].values()):
+                    baseline = previous_runtime["identities"] if previous_runtime else {}
+                    self.observations[row["id"]] = {"record_key": row["record_key"], "identities": {**baseline, **identities}}
+                apply_runtime_display(row, unreconciled=previous_runtime is not None, replaced=replaced)
             previous = later.get(row["id"])
             if previous is None:
                 continue
@@ -1104,8 +1183,12 @@ class ViewerState:
             else:
                 # Missing live inventory must not erase the last known baseline.
                 later[row["id"]] = dict(previous, activity={**previous["activity"], **activity})
-        if later != self.later:
-            self.save(later)
+        if later != self.later or self.observations != before:
+            try:
+                self.save(later)
+            except (OSError, ValueError):
+                self.observations = before
+                raise
         return returned
 
     def entries(self, rows, expanded):
@@ -1572,6 +1655,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             try:
                 all_rows, warnings, activity = pending.result()
                 returned = viewer.reconcile(all_rows)
+                all_rows.sort(key=lambda row: row["color"])
                 if returned:
                     notice = " ".join(returned)
             except Exception as error:
@@ -1678,8 +1762,12 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                                  [("task", "Tasks"), ("controller", "Orchestrator"), ("settings", "Settings"), ("help", "?")],
                                  utility_view or ("controller" if viewing_controller else "task"), tabs=True)
         legend_x = 1
-        for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
-            text = f"● {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
+        legend = [(1, "need you"), (2, "in progress"), (3, "finished")]
+        if any(row["color"] == 0 and row["id"] not in viewer.later for row in all_rows):
+            legend.append((0, "unconfirmed"))
+        for color, label in legend:
+            dot = "●" if color else "○"
+            text = f"{dot} {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
             try:
                 screen.addnstr(2, legend_x, text, max(0, width - legend_x - 1),
                                curses.color_pair(color) if curses.has_colors() else 0)

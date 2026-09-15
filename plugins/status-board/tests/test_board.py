@@ -278,7 +278,10 @@ class BoardTests(unittest.TestCase):
                                ("activity", {"reviewer": [agent["name"], "session1", "working"]})):
                 if row["id"] not in viewer.later:
                     viewer.toggle(row)
-                returned = viewer.reconcile([dict(viewed, **{key: value})])
+                changed = dict(viewed, **{key: value})
+                if key in changed["saved_display"]:
+                    changed["saved_display"] = dict(changed["saved_display"], **{key: value})
+                returned = viewer.reconcile([changed])
                 self.assertEqual(len(returned), 1)
                 self.assertNotIn(row["id"], board.ViewerState(viewer.path.parent / "tasks").later)
 
@@ -1674,10 +1677,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         task = self.task()
         row = board.task_summary(task, 0, [{"workspace_id": "w1", "label": "new-name"}],
             [{"name": "reviewer", "workspace_id": "w1", "agent_status": "done"}], 5)
-        self.assertEqual((row["label"], row["color"]), ("new-name", 2))
-        self.assertEqual("reviewing", row["stage"])
-        self.assertIn("Reviewer done → reviewer", row["roles"])
-        self.assertIsNone(row["action"])
+        self.assertEqual((row["label"], row["color"]), ("new-name", 0))
+        self.assertEqual("Awaiting status update", row["stage"])
+        self.assertIn("Reviewer done → orchestrator", row["roles"])
+        self.assertIn("reconcile", row["action"])
         self.assertEqual(task["workspace"]["label"], "old-name")
 
     def test_next_actor_without_legacy_worker_events(self):
@@ -1701,10 +1704,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         task["state"].update(attention_required=True, attention_reason="Approve the plan")
         row = board.task_summary(task, 0, [],
             [{"name": "reviewer", "workspace_id": "other", "agent_status": "working"}], 5)
-        self.assertEqual(row["color"], 1)
+        self.assertEqual(row["color"], 0)
         self.assertIn("workspace missing", row["label"])
-        self.assertIn("Reviewer missing → you", row["roles"])
-        self.assertIn("Approve the plan", row["action"])
+        self.assertIn("Reviewer missing → orchestrator", row["roles"])
+        self.assertIn("Approve the plan", row["runtime_note"])
 
     def test_decisions_precede_completed_handoffs_and_passive_work(self):
         passive = self.task()

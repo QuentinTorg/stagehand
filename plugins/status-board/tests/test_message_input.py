@@ -155,10 +155,10 @@ def save(path, text):
     global saves
     saves += 1
     original_save(path, text)
-    (root / "saves").write_text(str(saves))
+    original_save(root / "saves", str(saves))
 board.save_draft = save
 def send(args, row, text):
-    (root / "sent").write_text(text)
+    original_save(root / "sent", text)
     return True, "Delivered"
 board.send_message = send
 curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True, interval=5))
@@ -188,7 +188,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True
                 text = "café ☃ " * 400
                 os.write(master, ("\x1b[200~" + text + "\r\nnext\x07\x10\x1b[20").encode())
                 expected = text + "\nnext"
-                wait_for(lambda: draft_is(expected))
+                wait_for(lambda: draft_is(expected) and saves.exists())
                 self.assertFalse(sent.exists())
                 self.assertLessEqual(int(saves.read_text()), 2)
                 os.write(master, b"1~")

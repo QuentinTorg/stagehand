@@ -40,7 +40,9 @@ python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/
 
 Add `--offline` to skip live Herdr queries and disable messaging/navigation. The board never modifies task records, reads private session files, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
 
-The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) uses `working` (yellow), `needs-human` (red), or `complete` (green), plus a short summary and next action where needed. That state determines the color; separate attention flags are unnecessary. Completed tasks have no next action even when their workspace is retained. Recognized older states still render; ambiguous or unknown ones get a neutral dot and reconciliation warning instead of guessed progress. Among recognized tasks, human blockers appear first, ongoing work next, and finished work last.
+The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) supplies outcomes and human decisions. Verified live activity overrides stale presentation: working agents show yellow; an actual blocked agent shows red with a request to inspect its prompt. A conflicting saved approval or outcome remains in Details, not the current-action line. Missing, ambiguous, or changed agent identities show an unconfirmed state. Without live inventory, saved records are explicitly identified as such.
+
+After observed work stops, an unchanged record shows “Awaiting status update”—never automatic success or an old approval request. This observation persists in private `board-state.json` across board and orchestrator restarts until the record changes. The board never updates task YAML or infers authorization. A whole turn missed while the board is closed still requires orchestrator reconciliation. Recognized older records remain supported; ready PRs and finished investigations may stay green with their workspaces retained.
 
 ## Navigation and orchestrator view
 
