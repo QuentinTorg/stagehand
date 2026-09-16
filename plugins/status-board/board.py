@@ -1359,6 +1359,11 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             key, count = key.key, key.count
         if key == curses.KEY_MOUSE:
             event = mouse_event()
+            if inline and event and event[0] == "wheel" and event[2] < box_top:
+                # Let the board scroll the region under the pointer without
+                # discarding the editor's cursor, draft, or follow-up focus.
+                yield event
+                continue
             if inline and event and event[0] == "select":
                 _, x, y, _ = event
                 if y == height - 4 and 3 <= x <= 10:
@@ -1962,8 +1967,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         except curses.error:
             pass
         if editor is not None:
+            forwarded = None
             try:
-                next(editor)
+                forwarded = next(editor)
             except StopIteration as result:
                 editor = None
                 if result.value is SHORTCUT_REQUEST:
@@ -1977,7 +1983,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                     curses.curs_set(0)
                 except curses.error:
                     pass
-            continue
+            if forwarded is None:
+                continue
+            queued_mouse = forwarded
         screen.refresh()
         try:
             key = curses.KEY_MOUSE if queued_mouse else input_reader.read()

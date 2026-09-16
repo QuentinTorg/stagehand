@@ -847,10 +847,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             while True:
                 with patch.object(screen, "get_wch", side_effect=edit_read):
                     try:
-                        next(generator)
+                        forwarded = next(generator)
                     except StopIteration as result:
                         return result.value
-                yield
+                yield forwarded
         args = SimpleNamespace(tasks=Path("/unused/tasks"), offline=live is None, interval=5)
         if previews is None:
             previews = Mock()
@@ -864,6 +864,22 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             board.display_loop(screen, args, executor, previews, live)
         interval.assert_called_once_with(0)
         return screen
+
+    def test_composer_forwards_preview_wheel_without_losing_cursor_or_followup_focus(self):
+        executor, live = Mock(), Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "idle"}))
+        executor.submit.return_value = ready
+        live.available = True
+        live.update.return_value = {"status": "live", "message": "Live", "cells": ()}
+        with patch.dict(os.environ, HERDR_WORKSPACE_ID="control"), patch.object(
+            board, "mouse_event", side_effect=[("wheel", 10, 10, -3), ("wheel", 10, 10, 3)]
+        ), patch.object(board, "send_message", return_value=(True, "Delivered")) as send:
+            self.run_display(executor, ["d", board.SHORTCUT_PREFIX, "q"], live=live, commands=False,
+                             editor_keys=[board.curses.KEY_LEFT, board.curses.KEY_MOUSE, "X", "\r",
+                                          board.curses.KEY_MOUSE, *"followup", "\r", "\x1b"])
+        self.assertEqual([call.args for call in live.scroll.call_args_list], [(-3,), (3,)])
+        self.assertEqual([call.args[2] for call in send.call_args_list], ["Xd", "followup"])
 
     def test_live_views_release_on_details_and_do_not_poll_snapshots(self):
         executor, previews, live = Mock(), Mock(), Mock()
