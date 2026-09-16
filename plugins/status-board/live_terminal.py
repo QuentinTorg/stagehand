@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+import agent_binding
 
 try:
     import pyte
@@ -45,12 +46,15 @@ class TerminalGrid:
 
 
 def source_identity(snapshot, target, viewer):
-    name, workspace = target
-    matches = [agent for agent in snapshot["agents"]
-               if agent.get("name") == name and agent.get("workspace_id") == workspace]
-    if len(matches) != 1:
-        raise ValueError("Agent no longer uniquely matches this workspace")
-    agent = matches[0]
+    if isinstance(target, dict):
+        agent = agent_binding.resolve(target, snapshot["agents"])
+    else:
+        name, workspace = target
+        matches = [agent for agent in snapshot["agents"]
+                   if agent.get("name") == name and agent.get("workspace_id") == workspace]
+        if len(matches) != 1:
+            raise ValueError("Agent no longer uniquely matches this workspace")
+        agent = matches[0]
     if not agent.get("pane_id") or agent["pane_id"] == viewer or not agent.get("terminal_id"):
         raise ValueError("Missing source terminal or attempted self-preview")
     return agent
@@ -208,6 +212,10 @@ class LivePreview:
                         elif grid.sequence is None and time.monotonic() - started > 5:
                             raise TimeoutError("No terminal frame received")
                     await asyncio.sleep(.02)
+                except agent_binding.ControllerUnavailable as error:
+                    await detach()
+                    self._publish(generation, status="connecting", message=str(error), cells=())
+                    next_check = time.monotonic() + 1
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError, asyncio.TimeoutError) as error:
                     await detach()
                     failed = True

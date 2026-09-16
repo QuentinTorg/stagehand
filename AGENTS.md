@@ -4,21 +4,17 @@
 
 This checkout is both the source package and a valid private control workspace for Herdr-managed tasks. Product implementation belongs in task-specific Herdr worktrees, never in this checkout.
 
-Exactly one live agent may own the stable Herdr name `workflow_orchestrator`. That named agent is the active workflow orchestrator. Merely running in this repository does not grant the role: maintenance, documentation, and skill-development agents must remain unnamed or use another name and must not consume coordinator wake notifications.
-
-An agent launched as `workflow_orchestrator` must load and use the repository-local `orchestrating-development` skill before handling its first request.
+The human designates the orchestrator by asking an existing agent to coordinate work. That agent must load and use the repository-local `orchestrating-development` skill before coordinating. Merely running here does not grant the role: maintenance, documentation, and skill-development agents must not bind themselves as controller or consume its wakes.
 
 If a required skill, local configuration, rule, or tool is missing or misconfigured, follow the [guided installation procedure](./skills/orchestrating-development/references/installation.md#guided-setup) before coordinating work.
 
-An unnamed agent asked to orchestrate must load the orchestration skill and inspect live agents. If `workflow_orchestrator` is unowned, name the current agent with `herdr agent rename <current-pane-id> workflow_orchestrator` before reading task state; otherwise reuse the owner or ask the human.
+Before coordinating work, the orchestrator must:
 
-Before coordinating work, the named orchestrator must:
-
-1. inspect live Herdr agents and reuse the intended `workflow_orchestrator` owner when one exists;
+1. inspect the saved controller binding and live Herdr agents; reuse the bound session or obtain human authorization for a handover;
 2. load and follow the repository-local `orchestrating-development` skill; and
 3. load the local configuration described below.
 
-If a prerequisite remains unresolved after guided setup, or ownership of the reserved name is ambiguous, stop and tell the human instead of improvising or replacing an active owner.
+The [installation procedure](./skills/orchestrating-development/references/installation.md#controller-binding) binds the exact controller session. Names such as `workflow_orchestrator` are optional labels, not routing or ownership requirements. If prerequisites or controller identity remain unresolved, tell the human rather than guessing or replacing an owner.
 
 ## Local configuration
 

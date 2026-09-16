@@ -9,7 +9,7 @@ Help the human manage work, not implement it. Own workspace setup, concise task 
 
 ## Start and recover
 
-Load the workspace `AGENTS.md`, its required local configuration, and the Herdr skill. Only the unique live owner of `workflow_orchestrator` coordinates tasks. Claim that name for this pane only if unowned; otherwise reuse the intended owner or ask. Do not guess repository locations.
+Load the workspace `AGENTS.md`, its required local configuration, and the Herdr skill. Use the [controller binding](references/installation.md#controller-binding) to connect this human-designated agent to the board and wake relay. Reuse a bound session; a different controller requires an authorized handover. Agent names are optional. Do not guess repository locations.
 
 If prerequisites are missing, use [Installation](references/installation.md) to explain and offer the remaining setup. Missing optional UI must not block otherwise safe work.
 
