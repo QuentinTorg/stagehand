@@ -2,6 +2,9 @@
 """Show saved task progress and route human messages to the orchestrator."""
 
 import argparse
+import base64
+from bisect import bisect_left
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import curses
 from dataclasses import dataclass, replace
@@ -31,6 +34,123 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
 VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
+SHORTCUT_PREFIX = "\x10"  # Ctrl-P leaves Herdr's own Ctrl-B prefix untouched.
+SHORTCUT_REQUEST = object()
+
+
+@dataclass(frozen=True)
+class InsertText:
+    text: str
+
+
+@dataclass(frozen=True)
+class RepeatedKey:
+    key: int | str
+    count: int
+
+
+EDIT_KEYS = {curses.KEY_BACKSPACE, "\x7f", "\b", curses.KEY_DC, curses.KEY_LEFT,
+             curses.KEY_RIGHT, curses.KEY_UP, curses.KEY_DOWN, curses.KEY_HOME, curses.KEY_END}
+
+
+class MessageInput:
+    """Batch text without interpreting pasted controls as send or navigation."""
+
+    def __init__(self, screen):
+        self.screen = screen
+        self.pending = deque()
+        self.pasting = False
+        self.tail = ""
+        self.after_cr = False
+
+    def read(self, batch=False):
+        if self.pasting:
+            return self.read_paste()
+        key = self.pending.popleft() if self.pending else self.screen.get_wch()
+        if key == "\x1b":
+            # Curses has no portable bracketed-paste event. Recognize its start
+            # while preserving ordinary Escape and any following keystrokes.
+            prefix = []
+            self.screen.timeout(30)
+            try:
+                for expected in "[200~":
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    prefix.append(value)
+                    if value != expected:
+                        break
+                else:
+                    self.pasting = True
+                    self.screen.keypad(False)
+                    return self.read_paste()
+            except curses.error:
+                pass
+            finally:
+                self.screen.timeout(200)
+            self.pending.extendleft(reversed(prefix))
+        elif batch and isinstance(key, str) and (key.isprintable() or key == "\n"):
+            characters = [key]
+            self.screen.timeout(0)
+            try:
+                # Bound each batch so long input cannot starve live UI updates.
+                for _ in range(8191):
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    if not isinstance(value, str) or not (value.isprintable() or value == "\n"):
+                        self.pending.appendleft(value)
+                        break
+                    characters.append(value)
+            except curses.error:
+                pass
+            finally:
+                self.screen.timeout(200)
+            return InsertText("".join(characters))
+        elif batch and key in EDIT_KEYS:
+            count = 1
+            self.screen.timeout(0)
+            try:
+                for _ in range(8191):
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    if value != key:
+                        self.pending.appendleft(value)
+                        break
+                    count += 1
+            except curses.error:
+                pass
+            finally:
+                self.screen.timeout(200)
+            return RepeatedKey(key, count)
+        return key
+
+    def read_paste(self):
+        end, characters = "\x1b[201~", []
+        self.screen.timeout(200)
+        try:
+            for _ in range(8192):
+                value = self.screen.get_wch()
+                self.screen.timeout(0)
+                if not isinstance(value, str):
+                    continue
+                self.tail += value
+                if self.tail == end:
+                    self.tail, self.pasting, self.after_cr = "", False, False
+                    self.screen.keypad(True)
+                    break
+                # Retain a partial terminator across reads, including slow or
+                # fragmented pastes. All other controls stay out of command handling.
+                while self.tail and not end.startswith(self.tail):
+                    character, self.tail = self.tail[0], self.tail[1:]
+                    if character == "\r":
+                        characters.append("\n")
+                    elif character == "\n":
+                        if not self.after_cr:
+                            characters.append(character)
+                    elif character == "\t" or character.isprintable():
+                        characters.append(character)
+                    self.after_cr = character == "\r"
+        except curses.error:
+            pass
+        finally:
+            self.screen.timeout(200)
+        return InsertText("".join(characters))
 
 
 @dataclass(frozen=True)
@@ -250,10 +370,11 @@ def terminal_color(value):
     return -1
 
 
-def draw_live_grid(screen, top, cells, palette, columns, rows):
+def live_grid_lines(cells, columns, rows):
     # Coordinates belong to this rectangle, not the host terminal. Terminal
     # erase/cursor/OSC operations were consumed by the in-memory emulator.
-    for y, line in enumerate(cells[:rows]):
+    result = []
+    for line in cells[:rows]:
         pieces, styles = [], []
         for x, cell in enumerate(line[:columns]):
             if not cell.data or not all(c.isprintable() for c in cell.data):
@@ -265,7 +386,72 @@ def draw_live_grid(screen, top, cells, palette, columns, rows):
                                   underline=cell.underscore, reverse=cell.reverse)
             pieces.append(cell.data)
             styles.extend([style] * len(cell.data))
-        draw_preview_line(screen, top + y, StyledText("".join(pieces), styles), palette, columns + 2)
+        result.append(StyledText("".join(pieces), styles))
+    return result
+
+
+def draw_live_grid(screen, top, cells, palette, columns, rows):
+    for y, line in enumerate(live_grid_lines(cells, columns, rows)):
+        draw_preview_line(screen, top + y, line, palette, columns + 2)
+
+
+class PreviewSelection:
+    """Freeze only the visible preview, not the source agent or its size lease."""
+
+    def __init__(self, lines, context, column, row):
+        self.lines, self.context = tuple(lines), context
+        self.anchor = self.cursor = (row, column)
+        self.dragging = True
+
+    def move(self, column, row, columns):
+        self.cursor = (max(0, min(len(self.lines) - 1, row)),
+                       max(0, min(columns - 1, column)))
+
+    def span(self, row, columns):
+        start, end = sorted((self.anchor, self.cursor))
+        if not start[0] <= row <= end[0]:
+            return 0, 0
+        return (start[1] if row == start[0] else 0,
+                end[1] + 1 if row == end[0] else columns)
+
+    def characters(self, row, columns):
+        left, right = self.span(row, columns)
+        position, selected = 0, []
+        for i, character in enumerate(self.lines[row]):
+            width = cell_width(character)
+            if (width and position < right and position + width > left) or (
+                    not width and selected and selected[-1] == i - 1):
+                selected.append(i)
+            position += width
+        return selected
+
+    def text(self, columns):
+        start, end = sorted((self.anchor, self.cursor))
+        return "\n".join("".join(self.lines[row][i] for i in self.characters(row, columns)).rstrip()
+                         for row in range(start[0], end[0] + 1))
+
+    def draw(self, screen, top, palette, columns):
+        for row, line in enumerate(self.lines):
+            styles = list(line.styles)
+            for i in self.characters(row, columns):
+                styles[i] = replace(styles[i], reverse=not styles[i].reverse)
+            draw_preview_line(screen, top + row, StyledText(line, styles), palette, columns + 2)
+
+
+def copy_preview_text(text):
+    # OSC 52 carries only an explicit human selection. Source terminal escape
+    # sequences never pass through this path, and clipboard reads are forbidden.
+    if not text:
+        return "Selection is empty; nothing copied."
+    payload = text.encode("utf-8")
+    if len(payload) > 100000:
+        return "Selection too large to copy; select a smaller range."
+    try:
+        sys.stdout.write("\x1b]52;c;" + base64.b64encode(payload).decode("ascii") + "\x07")
+        sys.stdout.flush()
+    except OSError:
+        return "Clipboard request failed; try Shift-drag."
+    return "Copy requested · Esc or click to resume · Shift-drag if clipboard is unavailable"
 
 
 def live_target(current, role, controller=False):
@@ -410,14 +596,23 @@ def task_summary(task, modified, workspaces, agents, now):
     next_actor = "you" if needs_human else expected if status == "working" else None
     if next_actor == "human":
         next_actor = "you"
-    role_text, activity = [], {}
+    role_text, activity, runtime_states, runtime_ids = [], {}, {}, {}
     for role in ROLES:
         identity = mapping(task.get("agents")).get(role)
         if not identity:
             continue
         # Names can be reused elsewhere; require the recorded workspace as well.
-        found = next((a for a in agents or [] if a.get("name") == identity and a.get("workspace_id") == workspace_id), None)
+        matches = [a for a in agents or [] if workspace_id and a.get("name") == identity and a.get("workspace_id") == workspace_id]
+        found = matches[0] if len(matches) == 1 else None
+        recorded = mapping(mapping(task.get("role_sessions")).get(role))
+        if found and ((recorded.get("pane_id") and recorded["pane_id"] != found.get("pane_id")) or
+                      (recorded.get("session_id") and recorded["session_id"] != mapping(found.get("agent_session")).get("value"))):
+            found = None
         runtime = clean(found.get("agent_status", "unknown")) if found else "unavailable" if agents is None else "missing"
+        runtime_states[role] = runtime
+        if found:
+            runtime_ids[role] = [identity, found.get("pane_id"), found.get("terminal_id"),
+                                 mapping(found.get("agent_session")).get("value")]
         role_text.append(f"{role.replace('_', ' ').title()} {runtime}")
         if found and runtime in {"idle", "done", "working", "blocked"}:
             # Viewing an agent changes done to idle; that is not new work.
@@ -439,7 +634,7 @@ def task_summary(task, modified, workspaces, agents, now):
         action = None
     elif status is None:
         action = "Orchestrator: reconcile saved status with the latest result."
-    return {"id": str(task["task_id"]), "label": label, "color": color,
+    row = {"id": str(task["task_id"]), "label": label, "color": color,
             "phase": stage, "status": status, "summary": summary,
             "location": clean(mapping((live or {}).get("worktree")).get("checkout_path")),
             "objective": clean(task.get("objective")) or "No objective recorded.",
@@ -448,6 +643,48 @@ def task_summary(task, modified, workspaces, agents, now):
             "stage": details, "roles": roles, "repository": repository,
             "pr": pr, "prs": prs, "action": action, "saved": age(modified, now),
             "next": clean(next_actor) or ("Complete" if status == "complete" else "Awaiting workflow update")}
+    row["record_key"] = hashlib.sha256(json.dumps([workspace_id, task.get("agents"), task.get("role_sessions"), state],
+                                                 sort_keys=True, default=str).encode()).hexdigest()
+    row["runtime_states"], row["runtime_ids"] = runtime_states, runtime_ids
+    row["runtime_available"] = agents is not None
+    row["saved_display"] = {key: row[key] for key in ("status", "color", "summary", "action", "next", "roles", "stage")}
+    apply_runtime_display(row)
+    return row
+
+
+def apply_runtime_display(row, unreconciled=False, replaced=False):
+    """Runtime changes presentation only; it never grants authority or writes task state."""
+    row.update(row["saved_display"])
+    row["runtime_note"] = ""
+    row["runtime_overlay"] = False
+    if not row["runtime_available"] and not unreconciled:
+        row["runtime_note"] = "Live status unavailable; showing the saved workflow record."
+        return
+    states = row["runtime_states"]
+    blocked = [role for role, status in states.items() if status == "blocked"]
+    working = [role for role, status in states.items() if status == "working"]
+    uncertain = any(status not in {"working", "blocked", "idle", "done"} for status in states.values())
+    if replaced or (uncertain and not blocked and not working):
+        status, summary, actor = None, "Agent identity changed" if replaced else "Live status unavailable", "orchestrator"
+        action = "Orchestrator: verify the associated agent and reconcile its latest state."
+    elif blocked:
+        status, summary, actor = "needs-human", "Agent needs attention", "you"
+        action = "Open " + ", ".join(blocked) + " to inspect the pending question or permission request."
+    elif working:
+        status, summary, actor = "working", row["summary"] if row["status"] == "working" else "Agent working", working[0]
+        action = "Agent work is underway."
+    elif unreconciled or (states and row["status"] == "working" and row["next"] in states):
+        status, summary, actor = None, "Awaiting status update", "orchestrator"
+        action = "Orchestrator: reconcile the latest result; idle alone does not establish completion."
+    else:
+        return
+    row.update(status=status, color=STATES.get(status, 0), summary=summary, stage=summary, next=actor, action=action)
+    row["runtime_overlay"] = True
+    row["roles"] = row["roles"].split(" → ")[0] + " → " + actor
+    if row["saved_display"]["status"] != status or replaced or unreconciled:
+        saved = row["saved_display"]
+        row["runtime_note"] = "Saved record: " + (saved["summary"] or row["phase"]) + (
+            ". Recorded next action: " + saved["action"] if saved["action"] else "")
 
 
 def snapshot(directory, offline=False, include_controller=False):
@@ -613,12 +850,15 @@ def terminal_lines(output, width):
 
 
 def help_lines(width, warnings):
-    text = ["Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
+    text = ["Typing always goes to the message box, including after sending. Messages go only to the orchestrator.",
+            "Ctrl-P, then a key: run a board command. All navigation keys listed below require this prefix; mouse controls do not.",
+            "Esc cancels a pending command or saves and unfocuses the composer. It does not enable bare-letter shortcuts.",
+            "", "Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
             "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
-            "", "m or click the box: write a message. All messages go to the orchestrator.",
+            "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
             "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Task and general drafts stay separate.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
@@ -680,6 +920,8 @@ def pr_cell(row, width):
 
 
 def task_stage(row):
+    if row.get("runtime_overlay"):
+        return row["summary"]
     if row.get("color") == 0:
         return "Status unconfirmed"
     if row.get("summary"):
@@ -728,6 +970,8 @@ def detail_lines(row, width, info=False):
     if info:
         entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
                     (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+        if row.get("runtime_note"):
+            entries.append((row["runtime_note"], 0, None))
     if info and row.get("location"):
         entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
     lines = [(line, color, []) for text, color, _ in entries
@@ -804,12 +1048,56 @@ def save_draft(path, text):
             temporary.unlink()
 
 
+class Draft:
+    """Keep UI text current without making input wait for a disk write per key."""
+
+    def __init__(self, path):
+        self.path = path
+        self.text = self.saved = path.read_text() if path.exists() else ""
+        self.changed_at = self.dirty_since = None
+
+    def update(self, text):
+        if text != self.text:
+            self.text = text
+            self.changed_at = time.monotonic()
+            if self.dirty_since is None:
+                self.dirty_since = self.changed_at
+
+    def flush(self, force=False):
+        if self.text == self.saved:
+            self.dirty_since = None
+            return
+        now = time.monotonic()
+        # Idle debounce avoids repeat-key I/O; the deadline also protects drafts
+        # during uninterrupted typing. Explicit sends and exits bypass both.
+        if force or now - self.changed_at >= .2 or now - self.dirty_since >= 1:
+            save_draft(self.path, self.text)
+            self.saved, self.dirty_since = self.text, None
+
+    def save(self, text):
+        previous = self.text, self.changed_at, self.dirty_since
+        self.update(text)
+        try:
+            self.flush(force=True)
+        except OSError:
+            # An explicit Clear must not discard the cached draft if its write fails.
+            self.text, self.changed_at, self.dirty_since = previous
+            raise
+
+
+def cached_draft(drafts, path):
+    if path not in drafts:
+        drafts[path] = Draft(path)
+    return drafts[path]
+
+
 class ViewerState:
     """Personal organization, separate from workflow authority and task records."""
 
     def __init__(self, tasks):
         self.path = tasks.parent / "board-state.json"
         self.later, self.error = {}, None
+        self.observations = {}
         self.settings = dict(VIEWER_DEFAULTS)
         try:
             if self.path.exists():
@@ -820,6 +1108,12 @@ class ViewerState:
                         for value in later.values()):
                     raise ValueError("invalid Later entries")
                 self.later = later
+                observations = saved.get("observations", {})
+                if not isinstance(observations, dict) or any(not isinstance(item, dict) or
+                        not isinstance(item.get("record_key"), str) or not isinstance(item.get("identities"), dict)
+                        for item in observations.values()):
+                    raise ValueError("invalid runtime observations")
+                self.observations = observations
                 settings = saved.get("settings", {})
                 if not isinstance(settings, dict) or any(type(settings[key]) is not bool
                         for key in VIEWER_DEFAULTS if key in settings):
@@ -833,13 +1127,14 @@ class ViewerState:
         # No timestamps, labels, focus state, CI details, or bookkeeping counters.
         facts = {key: row.get(key) for key in
                  ("workspace_id", "status", "summary", "action", "next", "objective", "prs", "agent_names")}
+        facts.update({key: value for key, value in row.get("saved_display", {}).items() if key in facts})
         return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
 
     def save(self, later, settings=None):
         if self.error:
             raise ValueError(self.error)
         settings = self.settings if settings is None else settings
-        save_draft(self.path, json.dumps({"later": later, "settings": settings}, indent=2) + "\n")
+        save_draft(self.path, json.dumps({"later": later, "settings": settings, "observations": self.observations}, indent=2) + "\n")
         self.later = later
         self.settings = settings
 
@@ -858,7 +1153,23 @@ class ViewerState:
 
     def reconcile(self, rows):
         later, returned = dict(self.later), []
+        before = dict(self.observations)
+        self.observations = {key: value for key, value in before.items() if key in {row["id"] for row in rows}}
         for row in rows:
+            if "record_key" in row:
+                previous_runtime = self.observations.get(row["id"])
+                if previous_runtime and previous_runtime["record_key"] != row["record_key"]:
+                    self.observations.pop(row["id"], None)
+                    previous_runtime = None
+                identities = row["runtime_ids"]
+                replaced = bool(previous_runtime and any(role in identities and identities[role] != identity
+                                for role, identity in previous_runtime["identities"].items()))
+                # Retain evidence of an observed turn until the workflow record
+                # changes. Restarting the board must not resurrect old approvals.
+                if not replaced and any(value in {"working", "blocked"} for value in row["runtime_states"].values()):
+                    baseline = previous_runtime["identities"] if previous_runtime else {}
+                    self.observations[row["id"]] = {"record_key": row["record_key"], "identities": {**baseline, **identities}}
+                apply_runtime_display(row, unreconciled=previous_runtime is not None, replaced=replaced)
             previous = later.get(row["id"])
             if previous is None:
                 continue
@@ -872,8 +1183,12 @@ class ViewerState:
             else:
                 # Missing live inventory must not erase the last known baseline.
                 later[row["id"]] = dict(previous, activity={**previous["activity"], **activity})
-        if later != self.later:
-            self.save(later)
+        if later != self.later or self.observations != before:
+            try:
+                self.save(later)
+            except (OSError, ValueError):
+                self.observations = before
+                raise
         return returned
 
     def entries(self, rows, expanded):
@@ -946,7 +1261,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
         title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
-             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "m / click to write"),
+             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
@@ -967,21 +1282,28 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
     draw_button(screen, height - 4, 12, "  x Clear  ")
 
 
-def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
+def compose(screen, args, row, inline=False, send_now=False, clear_now=False, initial_key=None, input_reader=None, drafts=None):
+    input_reader = input_reader or MessageInput(screen)
     path = draft_path(args, row)
     try:
-        message = path.read_text() if path.exists() else ""
+        draft = cached_draft(drafts if drafts is not None else {}, path)
+        message = draft.text
     except OSError:
         return "Cannot read saved draft; nothing sent."
     if clear_now:
         try:
-            save_draft(path, "")
+            draft.save("")
             return "Draft cleared; nothing sent."
         except OSError:
             return "Cannot clear saved draft; nothing sent."
-    cursor, note = len(message), "Enter sends · Ctrl-J newline · Esc keeps draft and returns"
+    cursor, note = len(message), "Enter sends · Ctrl-J newline · Ctrl-P shortcuts · Esc saves"
     while True:
-        # Yield to the board between keystrokes so preview completions and live
+        draft.update(message)
+        try:
+            draft.flush()
+        except OSError:
+            note = "Draft save failed; keep this window open until saved."
+        # Yield to the board between input batches so preview completions and live
         # inventory still render while the human writes a reply.
         yield
         height, width = screen.getmaxyx()
@@ -1000,7 +1322,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             screen.erase()
             content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + (row["label"] if row else "General / new task")),
                        (2, "Repository: " + (row["repository"] if row else "Not task-specific"))]
-        content += [(height - 2, note), (height - 1, " Click outside / Esc to return" if inline else " [ Send ]  [ Back ]")]
+        content += [(height - 2, note), (height - 1, " Type to message · Ctrl-P then a key for board commands" if inline else " [ Send ]  [ Back ]")]
         for y, text in content:
             try:
                 screen.move(y, 0)
@@ -1019,22 +1341,36 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
         except curses.error:
             pass
         screen.refresh()
-        if send_now:
+        if initial_key is not None:
+            key, initial_key = initial_key, None
+        elif send_now:
             key, send_now = "\x07", False
         else:
             try:
-                key = screen.get_wch()
+                key = input_reader.read(batch=True)
             except curses.error:
                 continue
+        if isinstance(key, InsertText):
+            if key.text:
+                message, cursor = message[:cursor] + key.text + message[cursor:], cursor + len(key.text)
+            continue
+        count = 1
+        if isinstance(key, RepeatedKey):
+            key, count = key.key, key.count
         if key == curses.KEY_MOUSE:
             event = mouse_event()
+            if inline and event and event[0] == "wheel" and event[2] < box_top:
+                # Let the board scroll the region under the pointer without
+                # discarding the editor's cursor, draft, or follow-up focus.
+                yield event
+                continue
             if inline and event and event[0] == "select":
                 _, x, y, _ = event
                 if y == height - 4 and 3 <= x <= 10:
                     key = "\x07"
                 elif y == height - 4 and 12 <= x <= 22:
                     try:
-                        save_draft(path, "")
+                        draft.save("")
                     except OSError:
                         note = "Cannot clear saved draft."
                         continue
@@ -1045,7 +1381,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                     cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - target_x)))
                 elif not (1 <= x < width - 2 and box_top <= y < height - 2):
                     try:
-                        save_draft(path, message)
+                        draft.save(message)
                     except OSError:
                         note = "Could not leave editor; draft remains here."
                         continue
@@ -1053,20 +1389,21 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                     return ("Draft saved; nothing sent.", event)
             elif event and event[0] == "select" and event[2] == height - 1:
                 key = "\x07" if 2 <= event[1] <= 9 else "\x1b" if 12 <= event[1] <= 19 else key
-        if key == "\x1b":
+        if key in ("\x1b", SHORTCUT_PREFIX):
             try:
-                save_draft(path, message)
+                if message or path.exists():
+                    draft.save(message)
             except OSError:
                 note = "Cannot save draft. Copy your text before closing."
                 continue
             curses.curs_set(0)
-            return "Draft saved. Click the message box to continue."
+            return SHORTCUT_REQUEST if key == SHORTCUT_PREFIX else "Draft saved. Type to continue."
         if key in ("\r", curses.KEY_ENTER, "\x07"):
             if not message.strip():
                 note = "Write a message before sending."
                 continue
             try:
-                save_draft(path, message)
+                draft.save(message)
             except OSError:
                 note = "Cannot save draft. Nothing sent."
                 continue
@@ -1083,26 +1420,38 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
                     path.unlink()
                 except OSError:
                     note += " Saved copy remains; do not resend."
-                curses.curs_set(0)
-                return note
+                # Keep focus and clear the delivered text in memory even if
+                # deleting its recovery file failed. Enter must never resend it.
+                message, cursor = "", 0
+                draft.text = draft.saved = ""
+                draft.dirty_since = None
             continue
         if key in (curses.KEY_BACKSPACE, "\x7f", "\b") and cursor:
-            message, cursor = message[:cursor - 1] + message[cursor:], cursor - 1
+            start = max(0, cursor - count)
+            message, cursor = message[:start] + message[cursor:], start
         elif key == curses.KEY_DC:
-            message = message[:cursor] + message[cursor + 1:]
+            message = message[:cursor] + message[cursor + count:]
         elif key == curses.KEY_LEFT:
-            cursor = max(0, cursor - 1)
+            cursor = max(0, cursor - count)
         elif key == curses.KEY_RIGHT:
-            cursor = min(len(message), cursor + 1)
+            cursor = min(len(message), cursor + count)
         elif key in (curses.KEY_UP, curses.KEY_DOWN):
-            target_y = cy + (-1 if key == curses.KEY_UP else 1)
-            # At the visual edges, finish traversing the text instead of stalling.
-            if target_y < 0:
-                cursor = 0
-            elif target_y > positions[-1][0]:
-                cursor = len(message)
-            else:
-                cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - cx)))
+            for _ in range(count):
+                cy, cx = positions[cursor]
+                target_y = cy + (-1 if key == curses.KEY_UP else 1)
+                # Preserve individual arrow semantics across uneven visual lines.
+                if target_y < 0:
+                    cursor = 0
+                    break
+                elif target_y > positions[-1][0]:
+                    cursor = len(message)
+                    break
+                else:
+                    # Positions are ordered; avoid rescanning the entire draft
+                    # for every repeated arrow across a long multiline message.
+                    cursor = bisect_left(positions, (target_y, cx))
+                    if cursor == len(positions) or positions[cursor][0] != target_y:
+                        cursor -= 1
         elif key == curses.KEY_HOME:
             cursor = message.rfind("\n", 0, cursor) + 1
         elif key == curses.KEY_END:
@@ -1112,10 +1461,6 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False):
             message, cursor = message[:cursor] + key + message[cursor:], cursor + len(key)
         else:
             continue
-        try:
-            save_draft(path, message)
-        except OSError:
-            note = "Draft save failed; keep this window open until saved."
 
 
 def task_visible_rows(height, count, requested, message_top):
@@ -1224,20 +1569,36 @@ def drag_tracking(enabled):
         sys.stdout.flush()
 
 
+def bracketed_paste(enabled):
+    if sys.stdout.isatty():
+        sys.stdout.write("\x1b[?2004" + ("h" if enabled else "l"))
+        sys.stdout.flush()
+
+
 def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
     live = LivePreview()
+    drafts = {}
     try:
-        return display_loop(screen, args, executor, previews, live)
+        return display_loop(screen, args, executor, previews, live, drafts)
     finally:
         live.close()
+        bracketed_paste(False)
         drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
         previews.shutdown(wait=False, cancel_futures=True)
+        for draft in drafts.values():
+            draft.flush(force=True)
 
 
-def display_loop(screen, args, executor, previews, live=None):
+def display_loop(screen, args, executor, previews, live=None, drafts=None):
+    drafts = drafts if drafts is not None else {}
+
+    def flush_drafts(force=False):
+        for draft in drafts.values():
+            draft.flush(force=force)
+
     # Preserve Enter (CR) separately from Ctrl-J (LF) for send versus newline.
     curses.nonl()
     try:
@@ -1253,6 +1614,8 @@ def display_loop(screen, args, executor, previews, live=None):
     # Flush curses' initial terminal modes before selecting drag reporting.
     screen.refresh()
     drag_tracking(True)
+    bracketed_paste(True)
+    input_reader = MessageInput(screen)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
@@ -1270,6 +1633,8 @@ def display_loop(screen, args, executor, previews, live=None):
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
     requested_rows, dragging = None, False
+    selection = None
+    shortcut_pending = False
     viewer = ViewerState(args.tasks)
     activity = {"status": "unknown"}
     notice, pending, queued_mouse = "", None, None
@@ -1283,6 +1648,10 @@ def display_loop(screen, args, executor, previews, live=None):
     preview_refresh_at = 0
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     while True:
+        try:
+            flush_drafts()
+        except OSError:
+            notice = "Draft save failed; keep this window open until saved."
         # Preserve click coordinates until a blur event is handled; a refresh may
         # otherwise reorder the task rows between leaving the editor and selection.
         if pending is not None and pending.done() and queued_mouse is None and not dragging:
@@ -1291,6 +1660,7 @@ def display_loop(screen, args, executor, previews, live=None):
             try:
                 all_rows, warnings, activity = pending.result()
                 returned = viewer.reconcile(all_rows)
+                all_rows.sort(key=lambda row: row["color"])
                 if returned:
                     notice = " ".join(returned)
             except Exception as error:
@@ -1326,14 +1696,29 @@ def display_loop(screen, args, executor, previews, live=None):
 
         # Avoid overlapping controls on a transient tiny resize. No input is sent.
         if width < 60 or height < 24:
+            selection = None
             if live:
                 live.update(None, (1, 1))
             dragging = False
             put(0, "STAGEHAND — enlarge this pane to at least 60 × 24.")
-            put(2, "Your drafts are saved. q closes the board.")
+            put(2, "Your drafts are saved. Ctrl-P then q closes the board.")
             screen.refresh()
-            if screen.getch() == ord("q"):
-                return
+            try:
+                key = input_reader.read()
+            except curses.error:
+                continue
+            if key == SHORTCUT_PREFIX:
+                shortcut_pending = not shortcut_pending
+            else:
+                if shortcut_pending and key == "q":
+                    try:
+                        flush_drafts(force=True)
+                        return
+                    except OSError:
+                        put(3, "Cannot save drafts; keep this window open.", 1)
+                        screen.refresh()
+                if key != curses.KEY_RESIZE:
+                    shortcut_pending = False
             continue
 
         selected = min(selected, max(0, len(rows) - 1))
@@ -1342,8 +1727,8 @@ def display_loop(screen, args, executor, previews, live=None):
         message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
         if editor is not None and editor_task != selected_id:
-            # If a task disappears during editing, keep its saved draft instead
-            # of showing an editor bound to a different workspace.
+            # Disappearing tasks retain their cached drafts and save deadlines;
+            # never redirect an editor's text into the newly selected workspace.
             editor.close()
             editor = None
         if selected_id != detail_task:
@@ -1382,8 +1767,12 @@ def display_loop(screen, args, executor, previews, live=None):
                                  [("task", "Tasks"), ("controller", "Orchestrator"), ("settings", "Settings"), ("help", "?")],
                                  utility_view or ("controller" if viewing_controller else "task"), tabs=True)
         legend_x = 1
-        for color, label in ((1, "need you"), (2, "in progress"), (3, "finished")):
-            text = f"● {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
+        legend = [(1, "need you"), (2, "in progress"), (3, "finished")]
+        if any(row["color"] == 0 and row["id"] not in viewer.later for row in all_rows):
+            legend.append((0, "unconfirmed"))
+        for color, label in legend:
+            dot = "●" if color else "○"
+            text = f"{dot} {sum(row['color'] == color for row in all_rows if row['id'] not in viewer.later)} {label}"
             try:
                 screen.addnstr(2, legend_x, text, max(0, width - legend_x - 1),
                                curses.color_pair(color) if curses.has_colors() else 0)
@@ -1394,7 +1783,7 @@ def display_loop(screen, args, executor, previews, live=None):
         table_links, detail_links = {}, {}
         try:
             path = draft_path(args, message_target)
-            draft = path.read_text() if path.exists() else ""
+            draft = cached_draft(drafts, path).text
         except OSError:
             draft = ""
         _, _, message_top, _, _ = message_layout(draft, height, width)
@@ -1478,11 +1867,11 @@ def display_loop(screen, args, executor, previews, live=None):
             if use_live and wanted_preview:
                 live_state = state if target else {"status": "unavailable", "message": "No agent is assigned to this conversation", "cells": ()}
         if utility_view == "settings":
-            paragraphs = ["Click a setting or press 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
+            paragraphs = ["Click a setting or press Ctrl-P then 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
                           "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
                           "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation.",
                           "", "Live preview: resize the selected agent to this panel while the board is focused. Leaving releases it. No typing or approvals reach the previewed agent. Snapshots keep the source untouched.",
-                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press r to retry a stopped attachment; it never takes over another viewer."]
+                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press Ctrl-P then r to retry a stopped attachment; it never takes over another viewer."]
             details = [(line, 0, []) for paragraph in paragraphs
                        for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
             title, color = "Board settings", 10
@@ -1528,8 +1917,14 @@ def display_loop(screen, args, executor, previews, live=None):
             active_offset = detail_offset
         scroll_hint = f" · {active_offset + 1}–{min(len(details), active_offset + detail_height)}/{len(details)}" if len(details) > detail_height else ""
         put(title_y, title + scroll_hint, color, bold=True)
+        selection_context = (request, wanted_preview, use_live, width, height, title_y, detail_height)
+        if selection and (selection.context != selection_context or not wanted_preview):
+            selection = None
+        preview_lines = []
         if live_state and live_state.get("cells"):
-            draw_live_grid(screen, title_y + 1, live_state["cells"], preview_palette, width - 3, detail_height)
+            preview_lines = live_grid_lines(live_state["cells"], width - 3, detail_height)
+            for i, line in enumerate(preview_lines):
+                draw_preview_line(screen, title_y + 1 + i, line, preview_palette, width - 1)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
             y = title_y + 1 + i
             if isinstance(line, StyledText):
@@ -1542,9 +1937,20 @@ def display_loop(screen, args, executor, previews, live=None):
                     screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
                 except curses.error:
                     pass
+            if wanted_preview:
+                preview_lines.append(line if isinstance(line, StyledText) else
+                                     StyledText(line, [TerminalStyle()] * len(line)))
+        if selection:
+            # Clear new frames beneath the frozen selection, including newly
+            # occupied rows. Inventory and message controls remain live.
+            for i in range(detail_height):
+                put(title_y + 1 + i, " " * (width - 3))
+            selection.draw(screen, title_y + 1, preview_palette, width - 3)
+            hint = "release to copy" if selection.dragging else "preview frozen"
+            put(title_y, f"Selection · {hint} · Esc or click to resume", 10, bold=True)
         try:
             path = draft_path(args, message_target)
-            draft = path.read_text() if path.exists() else ""
+            draft = cached_draft(drafts, path).text
             draw_message_box(screen, message_target, draft, activity=args.activity_label)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
@@ -1555,28 +1961,63 @@ def display_loop(screen, args, executor, previews, live=None):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            screen.addnstr(height - 1, 0, " m Message · t Tasks · c Orchestrator · s Settings · ? Help · q Close", width - 1, curses.A_DIM)
+            footer = ("Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
+                      if shortcut_pending else "Type to message · Enter sends · Ctrl-P shortcuts · Drag preview to copy")
+            screen.addnstr(height - 1, 0, footer, width - 1, curses.A_DIM)
         except curses.error:
             pass
         if editor is not None:
+            forwarded = None
             try:
-                next(editor)
+                forwarded = next(editor)
             except StopIteration as result:
-                notice, editor = result.value, None
+                editor = None
+                if result.value is SHORTCUT_REQUEST:
+                    shortcut_pending = True
+                    notice = "Choose a board shortcut; Esc cancels."
+                else:
+                    notice = result.value
                 if isinstance(notice, tuple):
                     notice, queued_mouse = notice
                 try:
                     curses.curs_set(0)
                 except curses.error:
                     pass
-            continue
+            if forwarded is None:
+                continue
+            queued_mouse = forwarded
         screen.refresh()
-        key = curses.KEY_MOUSE if queued_mouse else screen.getch()
+        try:
+            key = curses.KEY_MOUSE if queued_mouse else input_reader.read()
+        except curses.error:
+            key = -1
+        if key == SHORTCUT_PREFIX:
+            selection, shortcut_pending = None, not shortcut_pending
+            continue
+        if key not in (-1, curses.KEY_MOUSE, curses.KEY_RESIZE):
+            command, shortcut_pending = shortcut_pending, False
+            if isinstance(key, InsertText) or (not command and key not in ("\x1b", 27)):
+                selection = None
+                editor = compose(screen, args, message_target, inline=True, initial_key=key, input_reader=input_reader, drafts=drafts)
+                editor_task = selected_id
+                continue
+            # Existing navigation is reachable only after an explicit prefix.
+            key = ord(key) if isinstance(key, str) else key
+        if selection and key not in (-1, curses.KEY_MOUSE):
+            selection = None
+            if key == 27:
+                notice = "Live updates resumed."
+                continue
         if key != curses.KEY_MOUSE and key != -1:
             dragging = False
         action = None
         if key == ord("q"):
-            return
+            try:
+                flush_drafts(force=True)
+                return
+            except OSError:
+                notice = "Cannot close: draft save failed. Copy your text before closing."
+                continue
         if key in (ord("r"), curses.KEY_RESIZE):
             refresh_at = 0
             if live and key == ord("r"):
@@ -1594,7 +2035,7 @@ def display_loop(screen, args, executor, previews, live=None):
         elif key == ord("i") and not viewing_controller:
             action = "info"
         elif key == ord("m"):
-            editor = compose(screen, args, message_target, inline=True)
+            editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
             editor_task = selected_id
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
@@ -1625,6 +2066,25 @@ def display_loop(screen, args, executor, previews, live=None):
             event, queued_mouse = queued_mouse or mouse_event(), None
             if event:
                 kind, x, y, delta = event
+                shortcut_pending = False
+                if selection and selection.dragging and kind in {"select", "motion", "release"}:
+                    selection.move(x - 1, y - title_y - 1, width - 3)
+                    if kind == "release":
+                        selection.dragging = False
+                        if selection.anchor != selection.cursor:
+                            notice = copy_preview_text(selection.text(width - 3))
+                        else:
+                            selection = None
+                            editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
+                            editor_task = selected_id
+                    continue
+                if kind in {"select", "wheel"}:
+                    selection = None
+                if (kind == "select" and wanted_preview and preview_lines
+                        and 1 <= x < width - 2
+                        and title_y < y <= title_y + len(preview_lines)):
+                    selection = PreviewSelection(preview_lines, selection_context, x - 1, y - title_y - 1)
+                    continue
                 if dragging and kind in {"select", "motion", "release"}:
                     requested_rows = task_visible_rows(height, len(rows), y - 6, message_top)
                     dragging = kind != "release"
@@ -1648,7 +2108,7 @@ def display_loop(screen, args, executor, previews, live=None):
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif kind == "select" and message_top <= y < height - 2:
-                    editor = compose(screen, args, message_target, inline=True,
+                    editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts,
                                      send_now=y == height - 4 and 3 <= x <= 10,
                                      clear_now=y == height - 4 and 12 <= x <= 22)
                     editor_task = selected_id

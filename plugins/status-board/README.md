@@ -26,6 +26,8 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process.
 
+**Typing defaults to messaging.** All board keyboard shortcuts below require **Ctrl-P, then the indicated key** (including navigation arrows). For example, Ctrl-P then `c` opens Orchestrator; Ctrl-P then `q` closes the board. The prefix works while composing and preserves your draft. Mouse controls need no prefix. Esc cancels the prefix; it does not turn ordinary letters into shortcuts. Herdr's own Ctrl-B prefix is unchanged.
+
 Click a task row to select it. Scroll conversation output with the mouse wheel or **[ / ]**; End scrolls toward the latest output. Next sizes to its labels; Status hides only when the remaining width is too small. Whole PR numbers stay visible. A clickable `+N` opens the remaining PR links in **Details** (**i**), which also preserves full workspace names and status text. Arrow keys or j/k select a workspace; Page Up/Down page. **?** opens keyboard help and update warnings. Mouse input requires terminal mouse forwarding.
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
@@ -38,7 +40,9 @@ python3 plugins/status-board/board.py --tasks /absolute/stagehand/.orchestrator/
 
 Add `--offline` to skip live Herdr queries and disable messaging/navigation. The board never modifies task records, reads private session files, consumes wakes, or changes task resources. It can show stale saved progress, so the orchestrator still owns reconciliation. A saved expected role indicates the next actor, not permission to proceed.
 
-The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) uses `working` (yellow), `needs-human` (red), or `complete` (green), plus a short summary and next action where needed. That state determines the color; separate attention flags are unnecessary. Completed tasks have no next action even when their workspace is retained. Recognized older states still render; ambiguous or unknown ones get a neutral dot and reconciliation warning instead of guessed progress. Among recognized tasks, human blockers appear first, ongoing work next, and finished work last.
+The [common task record](../../skills/orchestrating-development/assets/task-record.yaml) supplies outcomes and human decisions. Verified live activity overrides stale presentation: working agents show yellow; an actual blocked agent shows red with a request to inspect its prompt. A conflicting saved approval or outcome remains in Details, not the current-action line. Missing, ambiguous, or changed agent identities show an unconfirmed state. Without live inventory, saved records are explicitly identified as such.
+
+After observed work stops, an unchanged record shows “Awaiting status update”—never automatic success or an old approval request. This observation persists in private `board-state.json` across board and orchestrator restarts until the record changes. The board never updates task YAML or infers authorization. A whole turn missed while the board is closed still requires orchestrator reconciliation. Recognized older records remain supported; ready PRs and finished investigations may stay green with their workspaces retained.
 
 ## Navigation and orchestrator view
 
@@ -54,6 +58,8 @@ Switching conversations, opening Details/Settings/Help, or shrinking below minim
 
 The live heading distinguishes Live, Paused, Connecting, and stopped/error states. Only dimensions and deliberate scroll actions reach the source; typing, clicks, terminal responses, and approvals never do. Scroll availability depends on the source application; End scrolls toward the latest output. Messages still go through the orchestrator. Purpose and task records are unchanged.
 
+Drag across conversation text to select it; release requests a clipboard copy through Herdr using OSC 52. The visible preview freezes during selection, while the agent continues running. Esc, a new click, scrolling, or changing views clears selection and resumes updates; resizing cancels selection. Copy preserves visible line breaks and omits trailing spaces. Clipboard delivery depends on the host terminal; Shift-drag remains available as a fallback. Buttons, task rows, and divider dragging are unchanged.
+
 Choose **Settings → Preview: Snapshots** to leave source dimensions untouched. This also serves as the fallback when pyte is absent. Snapshot mode uses the bounded reads described above (120 lines/32 KB), only for visible conversations. `recent-unwrapped` removes soft wrapping but retains source hard breaks. Snapshot headings show last successful read age and stale/errors; live mode streams frames instead of polling conversation snapshots. Switching modes preserves drafts.
 
 ## Set tasks aside
@@ -64,7 +70,11 @@ Preferences persist in private `board-state.json` beside the task directory, sep
 
 ## Message the orchestrator
 
-Select a task and click the message box in the bottom detail panel to type there; **m** also focuses it. The selected task and conversation keep refreshing while you write. Enter or Send submits, Ctrl-J inserts a newline (Ctrl-G also sends), and Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board adds only the workspace name and Herdr workspace ID (task ID only if no workspace exists), then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
+Start typing to write in the message box, or focus it with a plain click in preview text or the box itself. Dragging preview text still selects it. The selected task and conversation keep refreshing while you write. Enter or Send submits and leaves the composer ready for a follow-up; Ctrl-J inserts a newline (Ctrl-G also sends). Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board adds only the workspace name and Herdr workspace ID (task ID only if no workspace exists), then sends your exact text to `workflow_orchestrator` in the same Herdr workspace. It never contacts a worker directly or treats delivery as workflow progress.
+
+Pastes and repeated editing keys are processed in batches. Bracketed pastes preserve newlines without sending or triggering shortcuts; press Enter afterward to send. Terminals that do not support bracketed paste cannot distinguish pasted Enter from a typed Enter.
+
+Draft text stays in memory while editing and saves after about 200 ms without changes, or about once a second during continuous typing. Sending, leaving the editor, and closing the board save immediately. Cursor-only movement does not write to disk. An abrupt process or machine failure can lose the most recent unsaved edits.
 
 Drafts are saved per task privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Clicking away or switching tasks never sends; **x Clear** discards only the selected task's draft. Escape leaves editing but does not close the board. Successful delivery clears the draft. Working orchestrators accept messages only when **Send while working** is enabled; blocked, unknown, or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
 
