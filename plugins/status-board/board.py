@@ -26,6 +26,7 @@ import webbrowser
 import yaml
 from live_terminal import LivePreview
 import agent_binding
+import resume
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -1655,6 +1656,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             selected_id = previous_row["id"] if previous_row else None
             try:
                 all_rows, warnings, activity = pending.result()
+                if getattr(args, "resume_warning", None):
+                    warnings.append(args.resume_warning)
                 returned = viewer.reconcile(all_rows)
                 all_rows.sort(key=lambda row: row["color"])
                 if returned:
@@ -2184,6 +2187,7 @@ def main():
     parser.add_argument("--controller", default=os.environ.get("STAGEHAND_CONTROLLER_PANE"), help="Explicit orchestrator pane to bind; saved beside task records")
     parser.add_argument("--bind-only", action="store_true", help="Save controller binding without opening the board")
     parser.add_argument("--replace-controller", action="store_true", help="Explicitly authorize replacing the saved controller binding")
+    parser.add_argument("--no-resume", action="store_true", help="Do not restore this viewer after a Herdr server restart")
     parser.add_argument("--offline", action="store_true", help="Read records without Herdr calls")
     parser.add_argument("--interval", type=float, default=5, help="Refresh seconds, minimum 2")
     args = parser.parse_args()
@@ -2223,10 +2227,21 @@ def main():
     elif not sys.stdout.isatty():
         parser.error("Interactive board needs a terminal; use --once for text output")
     else:
+        registration = None
+        if not args.offline:
+            try:
+                registration = resume.register(args.tasks, args.interval, enabled=not args.no_resume)
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                if not args.no_resume:
+                    args.resume_warning = f"Automatic viewer recovery unavailable: {error}"
         try:
             curses.wrapper(display, args)
         except KeyboardInterrupt:
             pass
+        # A crash or server shutdown keeps the recovery registration. Normal
+        # quit (including Ctrl-C) is an intentional close, not a restart request.
+        if registration:
+            resume.close(registration)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,15 @@ herdr plugin pane open --plugin quentintorg.stagehand-board --entrypoint board \
 
 First establish the shared [controller binding](../../skills/orchestrating-development/references/installation.md#controller-binding). The board loads `controller.json` beside the task directory for previews, messages, activity, and navigation. Alternatively, pass `STAGEHAND_CONTROLLER_PANE=<orchestrator-pane-id>` when opening it, or `--controller <pane-id>` when launching `board.py` directly; this saves the same binding. `--bind-only` saves without opening the UI, and `--replace-controller` permits an explicitly authorized handover. Never infer the controller from the focused pane or the board's own pane.
 
-The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. No startup hook creates panes automatically. Closing the board stops only its display process. The board and bundled relay share `agent_binding.py` through a relative symlink; keep the bundled plugin directories together.
+The explicit task directory scopes the board to this controller; it never discovers other control workspaces. Herdr installation is per-user, but this command opens a pane only in the selected workspace. Closing the board stops only its display process. The board and bundled relay share `agent_binding.py` through a relative symlink; keep the bundled plugin directories together.
+
+### Restart recovery
+
+Interactive boards register for recovery automatically. The plugin's startup hook relaunches previously open boards after a Herdr server restart, reusing their existing panes, Python environment, task directory, and saved controller binding. Ordinary detach/reattach keeps the running process; live handoff does not duplicate it. Saved drafts, settings, Later entries, and task records survive; transient selection and scroll position reset.
+
+Quit with **Ctrl-P then q** (or Ctrl-C) to disable restoration for that board, or launch with `--no-resume` to opt out. Removed panes are not recreated, occupied panes receive no input, and each restored terminal gets at most one launch attempt. Failures appear in the plugin log and request a Herdr notification; inspect `herdr plugin log list --plugin quentintorg.stagehand-board` and the saved viewer pane. Recovery registrations live under the board's plugin config directory and are scoped to the Herdr socket/session.
+
+For an existing installation, relink the updated plugin and reload the board once to register it. No orchestrator prompt or worker change is required. This hook restores the dashboard, not the agent process: Herdr's native agent restoration resumes the orchestrator, and the binding reconnects to that verified conversation.
 
 **Typing defaults to messaging.** All board keyboard shortcuts below require **Ctrl-P, then the indicated key** (including navigation arrows). For example, Ctrl-P then `c` opens Orchestrator; Ctrl-P then `q` closes the board. The prefix works while composing and preserves your draft. Mouse controls need no prefix. Esc cancels the prefix; it does not turn ordinary letters into shortcuts. Herdr's own Ctrl-B prefix is unchanged.
 
