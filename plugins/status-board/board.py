@@ -25,6 +25,7 @@ import webbrowser
 
 import yaml
 from live_terminal import LivePreview
+from preview_links import LinkedScreen, safe_link
 import agent_binding
 import resume
 
@@ -165,6 +166,7 @@ class TerminalStyle:
     italic: bool = False
     underline: bool = False
     reverse: bool = False
+    hyperlink: str | None = None
 
 
 class StyledText(str):
@@ -223,7 +225,7 @@ def cell_width(character):
 
 
 def styled_lines(output):
-    """Read snapshot styling only. Discard cursor, OSC, clipboard and mode commands."""
+    """Read snapshot styles and links; discard clipboard, cursor, and mode commands."""
     style, characters, styles, column, index = TerminalStyle(), [], [], 0, 0
     while index < len(output):
         character = output[index]
@@ -241,12 +243,17 @@ def styled_lines(output):
                 while index < len(output) and not "@" <= output[index] <= "~":
                     index += 1
                 if index < len(output) and output[index] == "m":
-                    style = sgr_style(style, output[start:index])
+                    link = style.hyperlink
+                    style = replace(sgr_style(style, output[start:index]), hyperlink=link)
                 index += 1
             elif kind in "]PX^_":
                 # String controls end at ST; OSC also accepts BEL. An incomplete
                 # sequence is discarded through EOF instead of displaying its payload.
                 ending = re.search(r"\x1b\\|\x9c|\x07" if kind == "]" else r"\x1b\\|\x9c", output[index:])
+                if kind == "]" and ending:
+                    parts = output[index:index + ending.start()].split(";", 2)
+                    if len(parts) == 3 and parts[0] == "8":
+                        style = replace(style, hyperlink=safe_link(parts[2]))
                 index = index + ending.end() if ending else len(output)
             elif " " <= kind <= "/":
                 while index < len(output) and " " <= output[index] <= "/":
@@ -345,6 +352,7 @@ class PreviewPalette:
 
 def draw_preview_line(screen, y, line, palette, width):
     x, start = 1, 0
+    links = []
     while start < len(line):
         end = start + 1
         while end < len(line) and line.styles[end] == line.styles[start]:
@@ -357,8 +365,12 @@ def draw_preview_line(screen, y, line, palette, width):
             screen.addnstr(y, x, text, len(text), palette.attributes(line.styles[start]))
         except curses.error:
             pass
+        if line.styles[start].hyperlink:
+            links.append((x, text, cells, line.styles[start]))
         x += cells
         start = end
+    if isinstance(screen, LinkedScreen):
+        screen.preview_row(y, links)
 
 
 @lru_cache(maxsize=512)
@@ -386,7 +398,8 @@ def live_grid_lines(cells, columns, rows):
                 break
             style = TerminalStyle(terminal_color(cell.fg), terminal_color(cell.bg),
                                   bold=cell.bold, italic=cell.italics,
-                                  underline=cell.underscore, reverse=cell.reverse)
+                                  underline=cell.underscore, reverse=cell.reverse,
+                                  hyperlink=getattr(cell, "hyperlink", None))
             pieces.append(cell.data)
             styles.extend([style] * len(cell.data))
         result.append(StyledText("".join(pieces), styles))
@@ -2235,7 +2248,7 @@ def main():
                 if not args.no_resume:
                     args.resume_warning = f"Automatic viewer recovery unavailable: {error}"
         try:
-            curses.wrapper(display, args)
+            curses.wrapper(lambda screen: display(LinkedScreen(screen, sys.stdout), args))
         except KeyboardInterrupt:
             pass
         # A crash or server shutdown keeps the recovery registration. Normal

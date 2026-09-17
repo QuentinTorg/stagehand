@@ -6,7 +6,9 @@ import json
 import os
 import threading
 import time
+from collections import namedtuple
 import agent_binding
+from preview_links import LinkStream
 
 try:
     import pyte
@@ -15,6 +17,30 @@ except ImportError:
 
 
 MAX_FRAME = 16 * 1024 * 1024
+
+
+if pyte is not None:
+    LinkChar = namedtuple("LinkChar", (*pyte.screens.Char._fields, "hyperlink"), defaults=(None,))
+
+    class LinkScreen(pyte.Screen):
+        hyperlink = None
+
+        def set_link(self, value):
+            self.hyperlink = value
+
+        def reset(self):
+            self.hyperlink = None
+            super().reset()
+
+        def draw(self, data):
+            # Store the target on the cells themselves: edits, wrapping, and
+            # scrolling then move links with their text, not stale coordinates.
+            self.cursor.attrs = LinkChar(*self.cursor.attrs[:len(pyte.screens.Char._fields)], self.hyperlink)
+            try:
+                super().draw(data)
+            finally:
+                # Erased spaces must not inherit a previously drawn link.
+                self.cursor.attrs = self.cursor.attrs._replace(hyperlink=None)
 
 
 class TerminalGrid:
@@ -37,8 +63,9 @@ class TerminalGrid:
                 or (self.sequence is not None and seq != self.sequence + 1)):
             raise ValueError("Discontinuous terminal frames")
         if resized or frame.get("full"):
-            self.screen = pyte.Screen(cols, rows)
-            self.stream = pyte.ByteStream(self.screen)
+            self.screen = LinkScreen(cols, rows)
+            stream = pyte.Stream(self.screen)
+            self.stream = LinkStream(stream.feed, self.screen.set_link)
         self.stream.feed(base64.b64decode(frame["bytes"], validate=True))
         self.sequence = seq
         # Immutable cells cross the thread boundary; partial frames stay local.
