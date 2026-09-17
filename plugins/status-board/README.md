@@ -70,6 +70,8 @@ The live heading distinguishes Live, Paused, Connecting, and stopped/error state
 
 Drag across conversation text to select it; release requests a clipboard copy through Herdr using OSC 52. The visible preview freezes during selection, while the agent continues running. Esc, a new click, scrolling, or changing views clears selection and resumes updates; resizing cancels selection. Copy preserves visible line breaks and omits trailing spaces. Clipboard delivery depends on the host terminal; Shift-drag remains available as a fallback. Buttons, task rows, and divider dragging are unchanged.
 
+Embedded conversation links retain their targets in live and snapshot previews. Open them with Herdr's configured link modifier (for example, Alt-click); ordinary clicks and drag-to-copy are unchanged. Herdr handles activation on the viewing client, including remote sessions. Supported targets are HTTP(S), file, and mailto links; other terminal controls are not forwarded.
+
 Choose **Settings → Preview: Snapshots** to leave source dimensions untouched. This also serves as the fallback when pyte is absent. Snapshot mode uses the bounded reads described above (120 lines/32 KB), only for visible conversations. `recent-unwrapped` removes soft wrapping but retains source hard breaks. Snapshot headings show last successful read age and stale/errors; live mode streams frames instead of polling conversation snapshots. Switching modes preserves drafts.
 
 ## Set tasks aside
