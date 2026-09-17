@@ -127,6 +127,54 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.update(("new", "workspace"), (80, 20))["cells"], ())
         self.assertEqual(view.scroll_delta, 0)
 
+    def test_bound_controller_preview_accepts_restored_unnamed_session(self):
+        value = snapshot()
+        agent = value["agents"][0]
+        agent["agent_session"] = {"agent": "codex", "kind": "id", "value": "controller"}
+        with patch.dict(os.environ, HERDR_SOCKET_PATH="/test/herdr.sock"):
+            target = terminal.agent_binding.capture(agent)
+            agent.pop("name")
+            agent.update(pane_id="restored", terminal_id="new-terminal")
+            self.assertEqual(terminal.source_identity(value, target, "viewer")["pane_id"], "restored")
+            agent["agent_session"]["value"] = "replacement"
+            with self.assertRaises(terminal.agent_binding.ControllerUnavailable):
+                terminal.source_identity(value, target, "viewer")
+
+    async def test_bound_controller_can_finish_resuming_after_board_starts(self):
+        state = snapshot()
+        agent = state["agents"][0]
+        agent["agent_session"] = {"agent": "codex", "kind": "id", "value": "controller"}
+        with patch.dict(os.environ, HERDR_SOCKET_PATH="/test/herdr.sock"):
+            target = terminal.agent_binding.capture(agent)
+            state["agents"] = []
+            child = Mock()
+            child.stdout, child.stderr = asyncio.StreamReader(), asyncio.StreamReader()
+            child.stdout.feed_data((json.dumps(frame()) + "\n").encode())
+            child.stderr.feed_eof()
+            child.stdin.drain = AsyncMock()
+            child.stdin.close.side_effect = child.stdout.feed_eof
+            child.wait = AsyncMock(return_value=0)
+            view = terminal.LivePreview()
+            view.viewer, view.available = "viewer", False
+            with patch.object(terminal, "read_snapshot", AsyncMock(side_effect=lambda: state)), patch.object(
+                terminal.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+            ) as launch:
+                view.update(target, (20, 5))
+                runner = asyncio.create_task(view._run())
+                try:
+                    await asyncio.sleep(.1)
+                    self.assertIn("Waiting", view.state["message"])
+                    launch.assert_not_called()
+                    state["agents"] = [dict(agent, name=None)]
+                    deadline = time.monotonic() + 3
+                    while view.state["status"] != "live" and time.monotonic() < deadline:
+                        await asyncio.sleep(.05)
+                    self.assertEqual(view.state["status"], "live")
+                    launch.assert_awaited_once()
+                finally:
+                    view.stopping.set()
+                    await runner
+
 
 if __name__ == "__main__":
     unittest.main()

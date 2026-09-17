@@ -16,6 +16,10 @@ import tempfile
 import time
 import uuid
 
+# Keep the relay independently installable; the board links this same resolver.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_binding
+
 
 PLUGIN_ID = "quentintorg.agent-wake"
 SETTLED = {"idle", "done", "blocked"}
@@ -129,7 +133,12 @@ def _configure(args) -> int:
         for item in config.get("consumers", [])
         if isinstance(item, dict) and item.get("root") != root
     ]
-    entries.append({"root": root, "target": args.target})
+    entry = {"root": root, "target": args.target}
+    if args.target_binding:
+        path = str(Path(args.target_binding).resolve())
+        agent_binding.load(path)
+        entry["target"] = {"binding": path}
+    entries.append(entry)
     config["version"] = 1
     config["consumers"] = entries
     _atomic_json(config_path, config)
@@ -161,7 +170,13 @@ def _arm(args) -> int:
         source = _agent(payload)
         if error or not _matches_identity(source, args.pane, args.workspace_id, args.agent):
             raise SystemExit("persistent watch requires the exact live source agent")
-        if target in {args.agent, args.pane}:
+        controller_pane = None
+        if isinstance(target, dict):
+            controller, error = _consumer_agent(target)
+            if error:
+                raise SystemExit(f"cannot verify controller: {error}")
+            controller_pane = controller.get("pane_id")
+        if controller_pane == args.pane or (isinstance(target, str) and target in {args.agent, args.pane}):
             raise SystemExit("a persistent watch cannot target its own source agent")
         if not source.get("agent_session"):
             bootstrap_process = _bootstrap_process(source)
@@ -392,7 +407,22 @@ def _record_event_for(state_root: Path, event: dict) -> None:
             _atomic_json(path, watch)
 
 
-def _notify_consumer(state_root: Path, configured_target: str) -> None:
+def _consumer_agent(target):
+    if isinstance(target, dict):
+        try:
+            binding = agent_binding.load(target["binding"])
+            payload, error = _herdr("agent", "list")
+            if error:
+                return {}, error
+            agent = agent_binding.resolve(binding, (payload or {}).get("result", {}).get("agents", []))
+            return agent, None
+        except (ValueError, KeyError) as error:
+            return {}, str(error)
+    payload, error = _herdr("agent", "get", target)
+    return _agent(payload), error
+
+
+def _notify_consumer(state_root: Path, configured_target) -> None:
     with _locked(state_root) as root:
         inbox = _documents(root / "inbox")
         delivered = {wake.get("watch_id", wake["id"]) for _, wake in inbox
@@ -406,16 +436,21 @@ def _notify_consumer(state_root: Path, configured_target: str) -> None:
         if not pending:
             return
         target = configured_target
-        payload, error = _herdr("agent", "get", target)
+        agent, error = _consumer_agent(target)
         if error:
+            for path, wake in pending:
+                wake["last_error"] = error
+                _atomic_json(path, wake)
             return
-        if _status(_agent(payload)) not in TARGET_READY:
+        if _status(agent) not in TARGET_READY:
             # Close the narrow race where the target settles just before this
             # inbox write; longer work remains queued for its later status hook.
             time.sleep(BUSY_RECHECK_SECONDS)
-            payload, error = _herdr("agent", "get", target)
-            if error or _status(_agent(payload)) not in TARGET_READY:
+            agent, error = _consumer_agent(target)
+            if error or _status(agent) not in TARGET_READY:
                 return
+        if isinstance(target, dict):
+            target = agent["pane_id"]
         notices = [
             {
                 "id": wake["id"],
@@ -486,7 +521,9 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     configure = commands.add_parser("configure")
     configure.add_argument("--state-root", required=True)
-    configure.add_argument("--target", required=True)
+    target = configure.add_mutually_exclusive_group(required=True)
+    target.add_argument("--target", help="Legacy live agent name or pane")
+    target.add_argument("--target-binding", help="Explicit saved controller binding shared with a board")
     configure.set_defaults(run=_configure)
     arm = commands.add_parser("arm")
     arm.add_argument("--state-root", required=True)

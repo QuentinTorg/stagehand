@@ -16,6 +16,8 @@ herdr plugin link /path/to/stagehand/plugins/agent-wake --enabled
 
 Use a unique live controller name and a private durable state directory. Only explicitly registered source agents are watched; installing globally does not attach other agents.
 
+For restart-safe controller routing, use `--target-binding /absolute/controller.json` instead of `--target`. Create that file with `python3 agent_binding.py --pane <controller-pane-id> --output /absolute/controller.json`. It records the current Herdr socket/session, workspace, and native conversation identity, so an unnamed resumed controller can receive wakes. Without a native session ID, it binds only the current terminal and requires rebinding after restart. An authorized handover uses `--replace-controller`; missing or ambiguous matches retain wakes unsent. Stagehand's board reads the same file. Existing `--target` callers remain supported.
+
 ## Watch an agent
 
 After the source agent is running, register it before sending work:

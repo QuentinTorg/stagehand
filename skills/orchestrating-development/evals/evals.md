@@ -6,7 +6,7 @@ These are manual behavioral checks, not proof supplied by a prose validator. Sce
 
 - Explicitly ask a controller in the configured workspace to start, monitor, resume, or report on development, reviewer-only, delegated, or open-ended work: use the skill.
 - Ask for direct implementation/review in a product worktree, or discussion about orchestration: do not assume controller authority.
-- Start a maintenance agent beside a named controller: it neither claims `workflow_orchestrator` nor consumes its wakes. An ambiguous owner requires clarification.
+- Start a maintenance agent beside a bound controller: it neither replaces the binding nor consumes its wakes. An ambiguous owner requires clarification.
 - Remove local configuration or Herdr skill discovery: offer guided setup with exact planned installs and missing choices; use `herdr --skill` for bootstrap. Do not guess paths or mutate tasks before requirements are satisfied.
 - Test individual skill links, private-overlay ignore rules, and workspace permissions. Missing Hunk or global worker event rules must not block setup. Do not forward private configuration to workers.
 - Upgrade with active old workers: preserve task evidence, coordinate removal of old notification instructions, replace one-shot watches with persistent watches, and do not recreate existing work.

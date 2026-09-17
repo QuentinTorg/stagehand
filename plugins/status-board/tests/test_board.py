@@ -36,6 +36,22 @@ def finish_editor(*args, **kwargs):
 
 
 class BoardTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, HERDR_SOCKET_PATH="/test/herdr.sock")
+        environment.start()
+        self.addCleanup(environment.stop)
+        anchor = patch.object(board.agent_binding, "process_identity", return_value=123)
+        anchor.start()
+        self.addCleanup(anchor.stop)
+        self.controller = {"pane_id": "control:p1", "terminal_id": "controller-terminal",
+                           "workspace_id": "control", "agent_status": "idle"}
+        binding = patch.object(board, "CONTROLLER_BINDING", board.agent_binding.capture(self.controller))
+        binding.start()
+        self.addCleanup(binding.stop)
+
+    def controller_reply(self, **fields):
+        return board.json.dumps({"result": {"agents": [dict(self.controller, **fields)]}})
+
     def test_terminal_colors_and_attributes_survive_wrap_and_resets(self):
         text = "\x1b[1;33mYellow\x1b[22;34mBlue\x1b[39mPlain\n\x1b[2;3;4;7mStyled\x1b[0mNormal"
         lines = list(board.styled_lines(text))
@@ -169,7 +185,7 @@ class BoardTests(unittest.TestCase):
                     self.assertLessEqual(x + min(len(value), count), size[1], call)
 
     def test_activity_uses_scoped_inventory_without_preview_reads(self):
-        agent = {"name": "workflow_orchestrator", "workspace_id": "control", "agent_status": "working"}
+        agent = dict(self.controller, agent_status="working")
         for agents, expected in (([agent], "working"), ([dict(agent, workspace_id="other")], "unavailable"),
                                  ([agent, agent], "unavailable"), (None, "unavailable")):
             with patch.object(board, "read_tasks", return_value=([], [])), patch.object(
@@ -205,8 +221,7 @@ class BoardTests(unittest.TestCase):
             for status in ("working", "blocked", "unknown", "idle"):
                 for workspace in ("control", "other"):
                     args = SimpleNamespace(offline=False, send_while_working=enabled)
-                    response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
-                        "workspace_id": workspace, "agent_status": status}}}))
+                    response = SimpleNamespace(stdout=self.controller_reply(workspace_id=workspace, agent_status=status))
                     delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
                     with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
                         board.subprocess, "run", side_effect=[response, delivered]
@@ -355,8 +370,7 @@ class BoardTests(unittest.TestCase):
                 row = board.task_summary(self.task(), 0, None, None, 5)
                 message = "Keep this exact draft.\nDo not duplicate it."
                 board.save_draft(board.draft_path(args, row), message)
-                reply = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
-                    "workspace_id": "control", "agent_status": "idle" if status == "uncertain" else status}}}))
+                reply = SimpleNamespace(stdout=self.controller_reply(agent_status="idle" if status == "uncertain" else status))
                 replies = [reply, board.subprocess.TimeoutExpired("herdr", 10)] if status == "uncertain" else [reply]
                 screen = Mock()
                 screen.getmaxyx.return_value = (38, 100)
@@ -893,7 +907,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                              previews=previews, live=live)
         previews.submit.assert_not_called()
         targets = [call.args[0] for call in live.update.call_args_list]
-        self.assertIn(("workflow_orchestrator", "control"), targets)
+        self.assertIn(board.CONTROLLER_BINDING, targets)
         self.assertIsNone(targets[-1])
 
     def test_live_target_never_guesses_unassigned_role_or_workspace(self):
@@ -1154,7 +1168,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_orchestrator_navigation_rejects_wrong_control_workspace(self):
         args = SimpleNamespace(offline=False)
         for workspace in ("control", "other"):
-            reply = board.json.dumps({"result": {"agent": {"workspace_id": workspace, "pane_id": "control:p1"}}})
+            reply = self.controller_reply(workspace_id=workspace)
             with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
                 board, "herdr_call", side_effect=[reply, "{}"]
             ) as call:
@@ -1175,8 +1189,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         call.assert_called_once_with("workspace", "get", "w1")
 
     def test_controller_preview_is_bounded_and_read_only(self):
-        agent = {"workspace_id": "control", "pane_id": "control:p1", "agent_status": "blocked"}
-        reply = board.json.dumps({"result": {"agent": agent}})
+        reply = self.controller_reply(agent_status="blocked")
         with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
             board, "herdr_call", side_effect=[reply, "x" * 40000]
         ) as call:
@@ -1591,8 +1604,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_send_preserves_exact_human_message_and_routes_only_to_controller(self):
         row = board.task_summary(self.task(), 0, None, None, 5)
         args = SimpleNamespace(offline=False, tasks=Path("/control/.orchestrator/tasks"))
-        response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
-            "workspace_id": "control", "agent_status": "idle"}}}))
+        response = SimpleNamespace(stdout=self.controller_reply())
         delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
         message = 'Please investigate this first.\nDo not implement yet: "scope".'
         with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
@@ -1601,14 +1613,14 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             success, _ = board.send_message(args, row, message)
         self.assertTrue(success)
         command = run.call_args_list[1].args[0]
-        self.assertEqual(command[1:4], ["agent", "prompt", "workflow_orchestrator"])
+        self.assertEqual(command[1:4], ["agent", "prompt", "control:p1"])
         self.assertEqual(command[-1], f"Human message about {row['label']} (w1):\n\n{message}")
 
     def test_general_message_has_no_task_context_and_its_own_draft(self):
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
         row = board.task_summary(self.task(), 0, None, None, 5)
         self.assertNotEqual(board.draft_path(args, row), board.draft_path(args, None))
-        reply = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {"workspace_id": "control", "agent_status": "idle"}}}))
+        reply = SimpleNamespace(stdout=self.controller_reply())
         delivered = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
         message = "Let's discuss a new task.\nDo not start yet."
         with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
@@ -1621,8 +1633,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
         row = board.task_summary(self.task(), 0, None, None, 5)
         for workspace, status in [("control", "working"), ("control", "blocked"), ("other", "idle")]:
-            response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
-                "workspace_id": workspace, "agent_status": status}}}))
+            response = SimpleNamespace(stdout=self.controller_reply(workspace_id=workspace, agent_status=status))
             with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
                 board.subprocess, "run", return_value=response
             ) as run:
@@ -1633,8 +1644,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
     def test_uncertain_delivery_is_not_retried(self):
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
         row = board.task_summary(self.task(), 0, None, None, 5)
-        response = SimpleNamespace(stdout=board.json.dumps({"result": {"agent": {
-            "workspace_id": "control", "agent_status": "idle"}}}))
+        response = SimpleNamespace(stdout=self.controller_reply())
         with patch.dict(board.os.environ, {"HERDR_ENV": "1", "HERDR_WORKSPACE_ID": "control"}), patch.object(
             board.subprocess, "run", side_effect=[response, board.subprocess.TimeoutExpired("herdr", 10)]
         ) as run:

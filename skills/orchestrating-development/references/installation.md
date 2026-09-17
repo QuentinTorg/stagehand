@@ -30,6 +30,18 @@ Load the Herdr skill before control operations. If it is not discoverable, run `
 
 Clone [Skilldex](https://github.com/QuentinTorg/skilldex) if needed, then install `preparing-pull-requests`, `reviewing-code`, and `resolving-findings` individually where product agents discover skills. Inspect existing destinations first. `writing-specifications` is optional. Do not install superseded review/feedback skills. These skills support plain review output; Hunk is not a prerequisite.
 
+## Controller binding
+
+Start an agent normally, then ask it to orchestrate. Bind its explicit pane ID (not the UI-focused pane) to this control workspace:
+
+```sh
+python3 /absolute/path/to/stagehand/plugins/agent-wake/agent_binding.py \
+  --pane <orchestrator-pane-id> \
+  --output /absolute/path/to/stagehand/.orchestrator/controller.json
+```
+
+The board and relay share this private binding. It identifies the Herdr socket/session, workspace, and native agent conversation; names are optional. The same resumed conversation reconnects even if its name or terminal ID changes. Without a native session ID, only the current terminal can be verified; rebind after restart. Missing or ambiguous identities never select a neighboring agent. Use `--replace-controller` only for a human-authorized handover; this updates routing, not agent processes or task ownership evidence.
+
 ## Agent Wake Relay
 
 Link the bundled plugin and register this exact control workspace:
@@ -38,7 +50,7 @@ Link the bundled plugin and register this exact control workspace:
 herdr plugin link /absolute/path/to/stagehand/plugins/agent-wake --enabled
 /absolute/path/to/stagehand/plugins/agent-wake/agent-wake configure \
   --state-root /absolute/path/to/stagehand/.orchestrator/wake \
-  --target workflow_orchestrator
+  --target-binding /absolute/path/to/stagehand/.orchestrator/controller.json
 herdr plugin list
 /absolute/path/to/stagehand/plugins/agent-wake/agent-wake status \
   --state-root /absolute/path/to/stagehand/.orchestrator/wake
@@ -46,7 +58,7 @@ herdr plugin list
 
 The plugin can be installed globally; it watches only explicitly registered source agents. The coordinator registers persistent watches as it starts roles. See [relay usage and limits](../../../plugins/agent-wake/README.md). Do not install callbacks or global Herdr permissions in worker sessions.
 
-Reserve `workflow_orchestrator` for exactly one live controller. Inspect any existing owner before naming a new one; maintenance agents must not claim it or consume its wakes.
+Existing name-based relay configurations must be reconfigured to use this binding. Worker subscriptions remain intact. Reload an existing board after installing this update or explicitly handing over to a different controller.
 
 ## Status pane and validation
 

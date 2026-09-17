@@ -124,6 +124,30 @@ class WakePluginTest(unittest.TestCase):
         self.assertTrue(self.documents("inbox")[0]["notified"])
         self.assertEqual("fired", self.documents("watches")[0]["state"])
 
+    def test_binding_routes_wakes_to_restored_unnamed_controller_only(self):
+        controller = {"workspace_id": "w1", "pane_id": "w1:p1", "terminal_id": "old",
+                      "agent_status": "idle", "agent_session": {"agent": "codex", "kind": "id", "value": "session"}}
+        with mock.patch.dict(os.environ, HERDR_SOCKET_PATH="/test/herdr.sock"):
+            path = self.root / "controller.json"
+            wake.agent_binding.save(path, wake.agent_binding.capture(controller))
+            self.command("configure", "--target-binding", str(path))
+            target = wake._configured_consumers()[0]["target"]
+            wake._atomic_json(self.state_root / "inbox" / "notice.json",
+                              {"id": "notice", "key": "task", "metadata": {}, "workspace_id": "w2",
+                               "pane_id": "w2:p1", "status": "done", "notified": False})
+            with mock.patch.object(wake, "_herdr", return_value=({"result": {"agents": []}}, None)) as call:
+                wake._notify_consumer(self.state_root, target)
+                self.assertEqual(call.call_count, 1)
+                self.assertFalse(self.documents("inbox")[0]["notified"])
+            controller.update(pane_id="w1:p2", terminal_id="restored")
+            with mock.patch.object(wake, "_herdr", side_effect=[
+                ({"result": {"agents": [controller]}}, None),
+                ({"result": {"type": "agent_prompted"}}, None)
+            ]) as call:
+                wake._notify_consumer(self.state_root, target)
+                self.assertEqual(call.call_args.args[:3], ("agent", "prompt", "w1:p2"))
+                self.assertTrue(self.documents("inbox")[0]["notified"])
+
     def test_settled_without_observed_working_is_ignored(self):
         self.arm()
         with mock.patch.object(wake, "_herdr") as herdr:

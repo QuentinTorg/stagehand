@@ -25,6 +25,8 @@ import webbrowser
 
 import yaml
 from live_terminal import LivePreview
+import agent_binding
+import resume
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -36,6 +38,7 @@ ROLES = ("author", "reviewer", "worker", "workspace_agent")
 VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
 SHORTCUT_PREFIX = "\x10"  # Ctrl-P leaves Herdr's own Ctrl-B prefix untouched.
 SHORTCUT_REQUEST = object()
+CONTROLLER_BINDING = None
 
 
 @dataclass(frozen=True)
@@ -456,8 +459,7 @@ def copy_preview_text(text):
 
 def live_target(current, role, controller=False):
     if controller:
-        workspace = os.environ.get("HERDR_WORKSPACE_ID")
-        return ("workflow_orchestrator", workspace) if workspace else None
+        return CONTROLLER_BINDING
     names = current.get("agent_names", {}) if current else {}
     roles = [name for name in ROLES if names.get(name)]
     role = role or (current.get("next") if current and current.get("next") in roles else next(iter(roles), None))
@@ -699,11 +701,13 @@ def snapshot(directory, offline=False, include_controller=False):
     rows.sort(key=lambda row: row["color"])
     if include_controller:
         # Reuse inventory; showing activity must not poll hidden conversations.
-        owners = [agent for agent in agents or [] if agent.get("name") == "workflow_orchestrator"]
-        owner = owners[0] if len(owners) == 1 else {}
         status = "offline" if offline else "unavailable"
-        if os.environ.get("HERDR_WORKSPACE_ID") and owner.get("workspace_id") == os.environ["HERDR_WORKSPACE_ID"]:
-            status = clean(owner.get("agent_status")) or "unknown"
+        if not offline:
+            try:
+                owner = agent_binding.resolve(CONTROLLER_BINDING, agents)
+                status = clean(owner.get("agent_status")) or "unknown"
+            except ValueError as error:
+                warnings.append(str(error))
         return rows, warnings, {"status": status, "observed_at": time.monotonic()}
     return rows, warnings
 
@@ -714,11 +718,8 @@ def herdr_call(*arguments):
 
 
 def controller_identity():
-    agent = json.loads(herdr_call("agent", "get", "workflow_orchestrator"))["result"]["agent"]
-    workspace = os.environ.get("HERDR_WORKSPACE_ID")
-    if not workspace or agent.get("workspace_id") != workspace or not agent.get("pane_id"):
-        raise ValueError("Orchestrator is not in this control workspace")
-    return agent
+    agents = json.loads(herdr_call("agent", "list"))["result"]["agents"]
+    return agent_binding.resolve(CONTROLLER_BINDING, agents)
 
 
 def read_preview(pane):
@@ -1208,11 +1209,7 @@ def send_message(args, row, message):
         prompt = f"Human message about {row['label']} ({target}):\n\n{message}"
     command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
     try:
-        result = subprocess.run(command + ["get", "workflow_orchestrator"],
-                                capture_output=True, text=True, timeout=5, check=True)
-        agent = json.loads(result.stdout)["result"]["agent"]
-        if not os.environ.get("HERDR_WORKSPACE_ID") or agent.get("workspace_id") != os.environ["HERDR_WORKSPACE_ID"]:
-            return False, "Orchestrator is not in this control workspace. Draft kept."
+        agent = controller_identity()
         status = agent.get("agent_status")
         if status == "blocked":
             return False, "Orchestrator is blocked. Open its native session; draft kept."
@@ -1224,7 +1221,7 @@ def send_message(args, row, message):
         return False, "Cannot verify the orchestrator. Nothing sent; draft kept."
     try:
         # No automatic retry: a timeout may occur after Herdr has delivered the input.
-        result = subprocess.run(command + ["prompt", "workflow_orchestrator", prompt],
+        result = subprocess.run(command + ["prompt", agent["pane_id"], prompt],
                                 capture_output=True, text=True, timeout=10, check=True)
         if json.loads(result.stdout)["result"]["type"] == "agent_prompted":
             return True, "Delivered to orchestrator (not yet processed)."
@@ -1659,6 +1656,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             selected_id = previous_row["id"] if previous_row else None
             try:
                 all_rows, warnings, activity = pending.result()
+                if getattr(args, "resume_warning", None):
+                    warnings.append(args.resume_warning)
                 returned = viewer.reconcile(all_rows)
                 all_rows.sort(key=lambda row: row["color"])
                 if returned:
@@ -2181,9 +2180,14 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
 
 
 def main():
+    global CONTROLLER_BINDING
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", type=Path, default=os.environ.get("STAGEHAND_TASKS_DIR"), help="Explicit active task-record directory (or STAGEHAND_TASKS_DIR)")
     parser.add_argument("--once", action="store_true", help="Print one plain-text snapshot")
+    parser.add_argument("--controller", default=os.environ.get("STAGEHAND_CONTROLLER_PANE"), help="Explicit orchestrator pane to bind; saved beside task records")
+    parser.add_argument("--bind-only", action="store_true", help="Save controller binding without opening the board")
+    parser.add_argument("--replace-controller", action="store_true", help="Explicitly authorize replacing the saved controller binding")
+    parser.add_argument("--no-resume", action="store_true", help="Do not restore this viewer after a Herdr server restart")
     parser.add_argument("--offline", action="store_true", help="Read records without Herdr calls")
     parser.add_argument("--interval", type=float, default=5, help="Refresh seconds, minimum 2")
     args = parser.parse_args()
@@ -2191,6 +2195,24 @@ def main():
         parser.error("Provide an absolute --tasks path or STAGEHAND_TASKS_DIR; the board never guesses ownership")
     if not 2 <= args.interval <= 3600:
         parser.error("--interval must be between 2 and 3600 seconds")
+    if (args.bind_only or args.replace_controller) and not args.controller:
+        parser.error("--bind-only and --replace-controller require --controller")
+    binding_path = args.tasks.parent / "controller.json"
+    try:
+        if args.controller:
+            if args.offline or os.environ.get("HERDR_ENV") != "1":
+                raise ValueError("Binding requires a live Herdr session")
+            agent = json.loads(herdr_call("agent", "get", args.controller))["result"]["agent"]
+            if agent.get("pane_id") != args.controller:
+                raise ValueError("--controller must be an explicit pane ID, not an agent name")
+            agent_binding.save(binding_path, agent_binding.capture(agent), replace=args.replace_controller)
+        if not args.offline:
+            CONTROLLER_BINDING = agent_binding.load(binding_path)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        parser.error(str(error))
+    if args.bind_only:
+        print(f"Controller bound: {binding_path}")
+        return
     if args.once:
         rows, warnings = snapshot(args.tasks, args.offline)
         for warning in warnings:
@@ -2205,10 +2227,21 @@ def main():
     elif not sys.stdout.isatty():
         parser.error("Interactive board needs a terminal; use --once for text output")
     else:
+        registration = None
+        if not args.offline:
+            try:
+                registration = resume.register(args.tasks, args.interval, enabled=not args.no_resume)
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                if not args.no_resume:
+                    args.resume_warning = f"Automatic viewer recovery unavailable: {error}"
         try:
             curses.wrapper(display, args)
         except KeyboardInterrupt:
             pass
+        # A crash or server shutdown keeps the recovery registration. Normal
+        # quit (including Ctrl-C) is an intentional close, not a restart request.
+        if registration:
+            resume.close(registration)
 
 
 if __name__ == "__main__":

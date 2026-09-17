@@ -43,7 +43,7 @@ A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or 
 
 ## Reconciliation and recovery
 
-At startup, use `status --state-root <root>` and `flush` to inspect pending wakes and recover observed transitions. Confirm the configured target is still the unique controller. Reconcile watches against current role identities; cancel stale ones and register replacements. Do not attach unrelated human-created agents.
+At startup, use `status --state-root <root>` and `flush` to inspect pending wakes and recover observed transitions. Confirm the saved binding resolves to this controller session. Reconcile watches against current role identities; cancel stale ones and register replacements. Do not attach unrelated human-created agents.
 
 The plugin cannot reconstruct a whole working-and-settled turn missed while it was disabled, nor every agent's permission UI. On startup, requested status, or other task handling, use a bounded inventory and inspect changed or unexpectedly settled roles. Missing hooks must not leave tasks waiting indefinitely. Report an unavailable relay and offer repair instead of deploying worker callbacks.
 
