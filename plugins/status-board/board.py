@@ -86,9 +86,40 @@ class MessageInput:
     def __init__(self, screen):
         self.screen = screen
         self.pending = deque()
+        self.mouse_pending = deque()
+        self.responsive_until = 0
         self.pasting = False
         self.tail = ""
         self.after_cr = False
+
+    def read_mouse(self):
+        event = self.mouse_pending.popleft() if self.mouse_pending else mouse_event()
+        if not event or event[0] != "wheel":
+            return event
+        kind, x, y, delta = event
+        self.responsive_until = time.monotonic() + .25
+        # A wheel burst needs one redraw, not one per notch. Stop at direction,
+        # position, or input changes so clicks and typing keep their exact order.
+        self.screen.timeout(0)
+        try:
+            for _ in range(63):
+                key = self.pending.popleft() if self.pending else self.screen.get_wch()
+                if key != curses.KEY_MOUSE:
+                    self.pending.appendleft(key)
+                    break
+                following = self.mouse_pending.popleft() if self.mouse_pending else mouse_event()
+                if (following and following[:3] == (kind, x, y)
+                        and following[3] * delta > 0):
+                    delta += following[3]
+                else:
+                    self.mouse_pending.appendleft(following)
+                    self.pending.appendleft(curses.KEY_MOUSE)
+                    break
+        except curses.error:
+            pass
+        finally:
+            self.screen.timeout(200)
+        return kind, x, y, delta
 
     def read_direct(self):
         key = self.read()
@@ -121,6 +152,9 @@ class MessageInput:
         return sequence
 
     def read(self, batch=False):
+        # Catch the terminal's scroll response promptly, then return to the
+        # inexpensive idle cadence instead of polling rapidly all the time.
+        self.screen.timeout(20 if time.monotonic() < self.responsive_until else 200)
         if self.pasting:
             return self.read_paste()
         key = self.pending.popleft() if self.pending else self.screen.get_wch()
@@ -462,6 +496,19 @@ def live_grid_lines(cells, columns, rows):
 def draw_live_grid(screen, top, cells, palette, columns, rows):
     for y, line in enumerate(live_grid_lines(cells, columns, rows)):
         draw_preview_line(screen, top + y, line, palette, columns + 2)
+
+
+class LiveGridCache:
+    """Reuse styling until the immutable terminal frame or viewport changes."""
+
+    def __init__(self):
+        self.cells, self.size, self.lines = None, None, []
+
+    def lines_for(self, cells, columns, rows):
+        if cells is not self.cells or self.size != (columns, rows):
+            self.lines = live_grid_lines(cells, columns, rows)
+            self.cells, self.size = cells, (columns, rows)
+        return self.lines
 
 
 class PreviewSelection:
@@ -1502,7 +1549,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
         if isinstance(key, RepeatedKey):
             key, count = key.key, key.count
         if key == curses.KEY_MOUSE:
-            event = mouse_event()
+            event = input_reader.read_mouse()
             if inline and event and event[0] == "wheel" and event[2] < box_top:
                 # Let the board scroll the region under the pointer without
                 # discarding the editor's cursor, draft, or follow-up focus.
@@ -1774,6 +1821,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         curses.init_pair(10, curses.COLOR_CYAN, -1)
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
     preview_palette = PreviewPalette()
+    preview_cache = LiveGridCache()
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
@@ -2088,7 +2136,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             selection = None
         preview_lines = []
         if live_state and live_state.get("cells"):
-            preview_lines = live_grid_lines(live_state["cells"], width - 3, detail_height)
+            preview_lines = preview_cache.lines_for(live_state["cells"], width - 3, detail_height)
             for i, line in enumerate(preview_lines):
                 draw_preview_line(screen, title_y + 1 + i, line, preview_palette, width - 1)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
@@ -2258,7 +2306,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                              if rows[i % len(rows)] and rows[i % len(rows)]["id"] not in viewer.later and rows[i % len(rows)]["color"] == 1), selected)
             general, utility_view = False, None
         elif key == curses.KEY_MOUSE:
-            event, queued_mouse = queued_mouse or mouse_event(), None
+            event, queued_mouse = queued_mouse or input_reader.read_mouse(), None
             if event:
                 kind, x, y, delta = event
                 shortcut_pending = False

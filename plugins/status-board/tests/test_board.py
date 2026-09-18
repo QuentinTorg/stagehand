@@ -24,7 +24,7 @@ def finish_editor(*args, **kwargs):
     read = screen.get_wch
     def typed_key():
         # These editor tests model separate keystrokes, not queued paste bursts.
-        if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+        if screen.timeout.call_args and screen.timeout.call_args.args[0] not in (20, 200):
             raise board.curses.error()
         return read()
     with patch.object(screen, "get_wch", side_effect=typed_key):
@@ -880,7 +880,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                     yield chr(key) if isinstance(key, int) and 0 <= key < 256 else key
         inputs = iter(board_keys())
         def read():
-            if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+            if screen.timeout.call_args and screen.timeout.call_args.args[0] not in (20, 200):
                 raise board.curses.error()
             key = next(inputs)
             if isinstance(key, Exception):
@@ -891,7 +891,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         edit_inputs = (editor_keys if callable(editor_keys) else
                        iter(editor_keys) if editor_keys is not None else iter(["\x1b"] * 100))
         def edit_read():
-            if screen.timeout.call_args and screen.timeout.call_args.args[0] != 200:
+            if screen.timeout.call_args and screen.timeout.call_args.args[0] not in (20, 200):
                 raise board.curses.error()
             return edit_inputs() if callable(edit_inputs) else next(edit_inputs)
         def editor(*args, **kwargs):
@@ -1358,6 +1358,16 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn("Details", rendered)
         self.assertLess(rendered.index("Task purpose remains available."), rendered.index("Please clarify the boundary case."))
         self.assertEqual(compose.call_args.args[2]["id"], row["id"])
+
+    def test_live_grid_cache_reuses_only_same_frame_and_size(self):
+        cache = board.LiveGridCache()
+        cells, replacement = object(), object()
+        with patch.object(board, "live_grid_lines", side_effect=[["first"], ["resized"], ["new"]]) as render:
+            first = cache.lines_for(cells, 80, 24)
+            self.assertIs(cache.lines_for(cells, 80, 24), first)
+            self.assertEqual(cache.lines_for(cells, 40, 24), ["resized"])
+            self.assertEqual(cache.lines_for(replacement, 40, 24), ["new"])
+            self.assertEqual(render.call_count, 3)
 
     def test_interaction_controls_share_message_button_row(self):
         for width in (60, 140):

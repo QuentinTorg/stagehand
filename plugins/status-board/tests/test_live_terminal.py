@@ -127,6 +127,66 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.update(("new", "workspace"), (80, 20))["cells"], ())
         self.assertEqual(view.scroll_delta, 0)
 
+    async def test_slow_inventory_does_not_block_frames_scroll_or_input(self):
+        view = terminal.LivePreview()
+        view.viewer, view.available = "viewer", False
+        checking, cancelled = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def inventory():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return snapshot()
+            checking.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        child = Mock()
+        child.stdout, child.stderr = asyncio.StreamReader(), asyncio.StreamReader()
+        child.stdout.feed_data((json.dumps(frame("")) + "\n").encode())
+        child.stdin.drain = AsyncMock()
+        child.stdin.close.side_effect = child.stdout.feed_eof
+        child.wait = AsyncMock(return_value=0)
+
+        async def until(predicate):
+            deadline = time.monotonic() + 2
+            while not predicate():
+                if time.monotonic() > deadline:
+                    self.fail("Terminal stream stalled behind inventory")
+                await asyncio.sleep(.005)
+
+        with patch.object(terminal, "read_snapshot", side_effect=inventory), patch.object(
+            terminal.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+        ), patch.object(view, "_publish", wraps=view._publish) as publish:
+            view.update(("author", "workspace"), (20, 5))
+            runner = asyncio.create_task(view._run())
+            try:
+                await until(lambda: checking.is_set())
+                epoch = view.begin_input()
+                self.assertIsNotNone(epoch)
+                view.scroll(-3)
+                self.assertTrue(view.send_input("hello", epoch))
+                # Sixty incremental edits must all survive, without sixty
+                # scheduled sleeps or immutable copies of the whole grid.
+                publish.reset_mock()
+                for seq in range(2, 62):
+                    child.stdout.feed_data((json.dumps(frame("x", seq, False)) + "\n").encode())
+                await until(lambda: sum(cell.data == "x" for row in view.state["cells"] for cell in row) == 60)
+                commands = [json.loads(call.args[0]) for call in child.stdin.write.call_args_list]
+                self.assertIn({"type": "terminal.input", "text": "hello"}, commands)
+                self.assertTrue(any(c.get("type") == "terminal.scroll" and c["lines"] == 3 for c in commands))
+                self.assertLess(sum("cells" in call.kwargs for call in publish.call_args_list), 60)
+                # A switch cancels the pending identity query and releases the
+                # old attachment rather than adopting a stale query result.
+                view.update(None, (20, 5))
+                await until(lambda: cancelled.is_set() and child.stdin.close.called)
+            finally:
+                view.stopping.set()
+                await runner
+
     def test_input_requires_explicit_consent_and_never_survives_attachment_changes(self):
         view = terminal.LivePreview()
         view.available = False
