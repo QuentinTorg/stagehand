@@ -184,6 +184,44 @@ class BoardTests(unittest.TestCase):
                     self.assertTrue(0 <= y < size[0] and 0 <= x < size[1], call)
                     self.assertLessEqual(x + min(len(value), count), size[1], call)
 
+    def test_settings_pair_controls_with_wrapped_descriptions(self):
+        settings = {"send_while_working": False, "animate_activity": True, "live_preview": True}
+        for width in (60, 80, 88, 120, 240):
+            lines, controls = board.settings_layout(settings, width)
+            self.assertEqual([key for _, key, _ in controls.values()], list(settings))
+            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True])
+            self.assertEqual(len({len(label) for label, _, _ in controls.values()}), 1)
+            for index, (label, _, _) in controls.items():
+                if width >= 80:
+                    self.assertTrue(lines[index][0].startswith(" " * (len(label) + 3)))
+                    self.assertTrue(lines[index][0].strip())
+                else:
+                    self.assertEqual(lines[index][0], "")
+                    self.assertTrue(lines[index + 1][0].startswith("  "))
+            self.assertTrue(all(len(line) <= width - 4 for line, _, _ in lines))
+
+    def test_settings_click_targets_follow_scrolling(self):
+        with tempfile.TemporaryDirectory() as root:
+            viewer = board.ViewerState(Path(root) / "tasks")
+            executor = Mock()
+            executor.submit.return_value = Future()
+            lines, controls = board.settings_layout(viewer.settings, 60)
+            preview_index = next(index for index, (_, key, _) in controls.items() if key == "live_preview")
+            # In a short pane the last control starts offscreen. Scroll it into
+            # view, then click its displayed row rather than its original row.
+            height, width = 24, 60
+            message_top = board.message_layout("", height, width)[2]
+            detail_height = message_top - 6
+            offset = min(preview_index, len(lines) - detail_height)
+            events = [("wheel", 40, 8, preview_index), ("select", 5, 5 + preview_index - offset, 0)]
+            with patch.object(board, "ViewerState", return_value=viewer), patch.object(
+                board, "mouse_event", side_effect=events
+            ), patch.object(board, "send_message") as send:
+                self.run_display(executor, [ord("s"), board.curses.KEY_MOUSE, board.curses.KEY_MOUSE, ord("q")], (height, width))
+            self.assertFalse(board.ViewerState(Path(root) / "tasks").settings["live_preview"])
+            self.assertFalse(viewer.settings["send_while_working"])
+            send.assert_not_called()
+
     def test_activity_uses_scoped_inventory_without_preview_reads(self):
         agent = dict(self.controller, agent_status="working")
         for agents, expected in (([agent], "working"), ([dict(agent, workspace_id="other")], "unavailable"),

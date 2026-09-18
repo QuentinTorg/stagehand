@@ -889,6 +889,41 @@ def help_lines(width, warnings):
             for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
 
 
+def settings_layout(settings, width):
+    """Keep controls and explanations in one scrollable layout so hit targets
+    follow the visible rows, including after a narrow-pane reflow.
+    """
+    items = [
+        ("send_while_working", "1 Send while working", "On" if settings["send_while_working"] else "Off",
+         "Allow Enter / Send during an active turn. Enable only for agents that accept mid-turn input. "
+         "Blocked, unknown, or unavailable agents still reject messages."),
+        ("animate_activity", "2 Animation", "On" if settings["animate_activity"] else "Off",
+         "Show rotating dots while the orchestrator is working. This indicates activity, not completion progress; "
+         "stale observations stop the animation."),
+        ("live_preview", "3 Preview", "Live" if settings["live_preview"] else "Snapshots",
+         "Live resizes the selected agent to the preview while this pane is focused; leaving releases it. "
+         "No typing or approvals reach the agent. Snapshots leave its size unchanged. "
+         "Live requires Herdr 0.9.0+ and pyte; without pyte, snapshots are used. "
+         "Ctrl-P then r retries a stopped attachment without taking over another viewer."),
+    ]
+    content_width = max(1, min(width - 4, 120))
+    labels = [f"  {label}: {value}  " for _, label, value, _ in items]
+    control_width = max(map(len, labels))
+    beside = content_width - control_width - 3 >= 40
+    intro = "Click a control or use Ctrl-P then 1 / 2 / 3. Esc returns. Saved for this workspace."
+    lines = [(line, 0, []) for line in textwrap.wrap(intro, content_width)] + [("", 0, [])]
+    controls = {}
+    for (key, _, _, description), label in zip(items, labels):
+        controls[len(lines)] = (label.ljust(control_width), key, settings[key])
+        indent = control_width + 3 if beside else 2
+        wrapped = textwrap.wrap(description, max(1, content_width - indent))
+        if not beside:
+            lines.append(("", 0, []))
+        lines.extend((" " * indent + line, 0, []) for line in wrapped)
+        lines.append(("", 0, []))
+    return lines, controls
+
+
 def clipped(text, width):
     return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
@@ -1870,9 +1905,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             detail_y = 3
 
         if utility_view == "settings":
-            context_actions = [("setting-send_while_working", "1 Send while working: " + ("On" if args.send_while_working else "Off")),
-                               ("setting-animate_activity", "2 Animation: " + ("On" if viewer.settings["animate_activity"] else "Off")),
-                               ("setting-live_preview", "3 Preview: " + ("Live" if viewer.settings["live_preview"] else "Snapshots"))]
+            context_actions = []
         elif utility_view:
             context_actions = [("help", "Back")]
         elif viewing_controller:
@@ -1900,14 +1933,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             state = live.update(target, (width - 3, detail_height))
             if use_live and wanted_preview:
                 live_state = state if target else {"status": "unavailable", "message": "No agent is assigned to this conversation", "cells": ()}
+        setting_controls = {}
         if utility_view == "settings":
-            paragraphs = ["Click a setting or press Ctrl-P then 1 / 2 / 3 to toggle. Esc returns. Preferences are saved for this control workspace.",
-                          "", "Send while working: allow Enter / Send during an active turn. Enable only if your agent supports mid-turn input. Permission-blocked, unknown, and unavailable agents still reject sends.",
-                          "", "Animation: show rotating dots while Herdr reports the orchestrator working. This is activity, not completion progress. Stale observations stop the animation.",
-                          "", "Live preview: resize the selected agent to this panel while the board is focused. Leaving releases it. No typing or approvals reach the previewed agent. Snapshots keep the source untouched.",
-                          "", "Live requires Herdr 0.9.0+ and the board's pyte dependency. Without pyte the board uses snapshots. Press Ctrl-P then r to retry a stopped attachment; it never takes over another viewer."]
-            details = [(line, 0, []) for paragraph in paragraphs
-                       for line in (textwrap.wrap(paragraph, max(1, min(width - 4, 110))) or [""])]
+            details, setting_controls = settings_layout(viewer.settings, width)
             title, color = "Board settings", 10
         elif utility_view:
             details = help_lines(width, warnings)
@@ -1966,6 +1994,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 draw_preview_line(screen, y, line, preview_palette, width)
             else:
                 put(y, line, color, bold=bool(color))
+            if active_offset + i in setting_controls:
+                label, setting, enabled = setting_controls[active_offset + i]
+                if draw_button(screen, y, 1, label, active=enabled):
+                    actions.append((y, 1, 1 + len(label), "setting-" + setting))
             detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
             for left, right, _ in links:
                 try:

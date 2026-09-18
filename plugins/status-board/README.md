@@ -92,7 +92,7 @@ Drafts are saved per task privately under `board-drafts/` beside the configured 
 
 ## Settings and activity
 
-Open **Settings** at the top, or press **s**. Click a setting or press **1 / 2 / 3** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
+Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
 - **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the orchestrator working. Turn it off for a static Working label. The indicator is visible in both task and orchestrator views, including while typing. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
