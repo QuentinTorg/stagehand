@@ -1,7 +1,9 @@
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +15,49 @@ loader = importlib.machinery.SourceFileLoader("agent_wake", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 wake = importlib.util.module_from_spec(spec)
 loader.exec_module(wake)
+
+
+class HerdrExecutableTests(unittest.TestCase):
+    def test_deleted_override_uses_installed_binary_in_same_session(self):
+        with tempfile.TemporaryDirectory() as root:
+            installed = Path(root) / "herdr"
+            installed.write_text(
+                "#!/usr/bin/env python3\nimport json, os, sys\n"
+                "print(json.dumps({'result': {'arguments': sys.argv[1:], "
+                "'socket': os.environ.get('HERDR_SOCKET_PATH')}}))\n")
+            installed.chmod(0o755)
+            with mock.patch.dict(os.environ, {
+                "PATH": root + os.pathsep + os.defpath,
+                "HERDR_BIN_PATH": str(installed) + " (deleted)",
+                "HERDR_SOCKET_PATH": "/named/session/herdr.sock",
+            }):
+                result, error = wake._herdr("agent", "get", "w2:p1")
+            self.assertIsNone(error)
+            self.assertEqual(result["result"], {"arguments": ["agent", "get", "w2:p1"],
+                                               "socket": "/named/session/herdr.sock"})
+
+    def test_existing_override_is_not_replaced_or_retried(self):
+        with tempfile.TemporaryDirectory() as root:
+            override = Path(root) / "custom-herdr"
+            override.touch()
+            with mock.patch.dict(os.environ, HERDR_BIN_PATH=str(override)):
+                self.assertEqual(wake.agent_binding.herdr_binary(), str(override))
+                for failure in (PermissionError("denied"), subprocess.TimeoutExpired("herdr", 15)):
+                    with mock.patch.object(wake.subprocess, "run", side_effect=failure) as run:
+                        _, error = wake._herdr("agent", "prompt", "controller", "notice")
+                    self.assertTrue(error)
+                    run.assert_called_once()
+                with mock.patch.object(wake.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 1, "", "server rejected command"
+                )) as run:
+                    _, error = wake._herdr("agent", "prompt", "controller", "notice")
+                self.assertEqual(error, "server rejected command")
+                run.assert_called_once()
+
+    def test_missing_override_without_fallback_is_reported(self):
+        with mock.patch.dict(os.environ, HERDR_BIN_PATH="/missing/herdr", PATH=""):
+            _, error = wake._herdr("agent", "get", "w2:p1")
+        self.assertIn("/missing/herdr", error)
 
 
 class WakePluginTest(unittest.TestCase):
@@ -88,6 +133,53 @@ class WakePluginTest(unittest.TestCase):
     def documents(self, name):
         directory = self.state_root / name
         return [json.loads(path.read_text()) for path in directory.glob("*.json")]
+
+    def test_hooks_and_flush_only_visit_bound_session(self):
+        agent = {"workspace_id": "w1", "pane_id": "w1:p1", "terminal_id": "terminal",
+                 "agent_session": {"agent": "codex", "kind": "id", "value": "controller"}}
+        entries = []
+        for label in ("named", "default"):
+            with mock.patch.dict(os.environ, HERDR_SOCKET_PATH=f"/{label}/herdr.sock"):
+                path = self.root / f"{label}.json"
+                wake.agent_binding.save(path, wake.agent_binding.capture(agent))
+            root = self.root / label
+            root.mkdir()
+            entries.append({"root": str(root), "target": {"binding": str(path)}})
+        with mock.patch.dict(os.environ, HERDR_SOCKET_PATH="/named/herdr.sock"), mock.patch.object(
+            wake, "_configured_consumers", return_value=entries
+        ), mock.patch.object(wake, "_record_event_for") as record, mock.patch.object(wake, "_notify_consumer") as notify:
+            self.emit("done")
+            wake._flush()
+            self.assertEqual([call.args[0] for call in record.call_args_list], [self.root / "named"])
+            self.assertEqual([call.args[0] for call in notify.call_args_list], [self.root / "named"] * 2)
+            with self.assertRaises(SystemExit):
+                wake._flush(self.root / "default")
+            self.assertEqual(notify.call_count, 2)
+
+    def test_targeted_flush_leaves_other_consumers_untouched(self):
+        other = self.root / "other"
+        other.mkdir()
+        entries = [{"root": str(self.state_root), "target": "controller_agent"},
+                   {"root": str(other), "target": "other_controller"}]
+        with mock.patch.object(wake, "_configured_consumers", return_value=entries), mock.patch.object(
+            wake, "_notify_consumer"
+        ) as notify:
+            self.command("flush")
+            notify.assert_called_once_with(self.state_root, "controller_agent")
+            with self.assertRaises(SystemExit):
+                wake._flush(self.root / "not-configured")
+            self.assertEqual(notify.call_count, 1)
+
+    def test_source_lookup_failure_is_logged_without_consuming_event(self):
+        self.arm()
+        self.emit("working")
+        with mock.patch.object(wake, "_herdr", return_value=(None, "missing executable")), mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as log:
+            self.emit("done")
+        self.assertIn("cannot inspect w2:p1: missing executable", log.getvalue())
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual(self.documents("watches")[0]["state"], "armed")
 
     def test_working_then_done_wakes_once(self):
         self.arm()
