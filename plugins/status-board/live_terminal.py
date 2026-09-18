@@ -112,10 +112,37 @@ class LivePreview:
         self.target, self.size, self.generation, self.scroll_delta = None, (1, 1), 0, 0
         self.state = {"status": "paused", "message": "Select a conversation", "cells": ()}
         self.thread = None
+        self.input_epoch, self.interacting, self.pending_input = 0, None, ""
+
+    def end_input(self):
+        with self.lock:
+            self.interacting, self.pending_input = None, ""
+
+    def begin_input(self):
+        with self.lock:
+            if self.state["status"] != "live":
+                return None
+            self.interacting = self.input_epoch
+            return self.input_epoch
+
+    def send_input(self, text, epoch):
+        with self.lock:
+            # Consent belongs to this attachment, never its replacement or a
+            # newly selected agent. Never replay input after a reconnect.
+            if (epoch != self.interacting or epoch != self.input_epoch
+                    or self.state["status"] != "live" or len(self.pending_input) + len(text) > 65536):
+                return False
+            self.pending_input += text
+            return True
+
+    def _invalidate_input(self):
+        self.input_epoch += 1
+        self.interacting, self.pending_input = None, ""
 
     def update(self, target, size):
         with self.lock:
             if target != self.target:
+                self._invalidate_input()
                 self.target, self.scroll_delta = target, 0
                 self.generation += 1
                 self.state = {"status": "connecting", "message": "Connecting…", "cells": ()}
@@ -128,6 +155,7 @@ class LivePreview:
 
     def retry(self):
         with self.lock:
+            self._invalidate_input()
             self.generation += 1
 
     def scroll(self, delta):
@@ -142,7 +170,9 @@ class LivePreview:
     def _publish(self, generation, **state):
         with self.lock:
             if generation == self.generation:
-                self.state = dict(self.state, **state)
+                if state.get("status") in {"paused", "connecting", "unavailable"}:
+                    self._invalidate_input()
+                self.state = dict(self.state, **state, input_epoch=self.input_epoch)
 
     async def _run(self):
         process = reading = errors = None
@@ -199,7 +229,8 @@ class LivePreview:
                                             (agent.get("agent_session") or {}).get("value"))
                         if identity is not None and identity != current_identity:
                             raise ValueError("Source agent changed")
-                        self._publish(generation, agent_status=agent.get("agent_status", "unknown"))
+                        self._publish(generation, agent_status=agent.get("agent_status", "unknown"),
+                                      agent_kind=agent.get("agent"))
                         if not focused:
                             await detach()
                             self._publish(generation, status="paused", message="Paused · focus this pane for live output")
@@ -222,10 +253,21 @@ class LivePreview:
                             await command({"type": "terminal.resize", "cols": size[0], "rows": size[1]})
                             sent_size = size
                         if scroll:
-                            # Deliberate scrolling only. Never route typing,
-                            # mouse clicks, terminal queries, or approvals here.
+                            # Mouse navigation remains local; only explicit
+                            # interaction mode may forward human keystrokes.
                             await command({"type": "terminal.scroll", "direction": "up" if scroll < 0 else "down",
                                            "lines": abs(scroll), "source": "wheel", "column": 0, "row": 0})
+                        with self.lock:
+                            text, self.pending_input = self.pending_input, ""
+                            if (text and generation == self.generation
+                                    and self.interacting == self.input_epoch):
+                                # Write while holding the identity lock so a UI
+                                # view switch cannot redirect queued input.
+                                process.stdin.write((json.dumps({"type": "terminal.input", "text": text}) + "\n").encode())
+                            else:
+                                text = ""
+                        if text:
+                            await asyncio.wait_for(process.stdin.drain(), .5)
                         if reading.done():
                             line = reading.result()
                             if not line:
@@ -234,7 +276,9 @@ class LivePreview:
                             frame = json.loads(line)
                             cells = grid.feed(frame)
                             self._publish(generation, status="live", message="Live", cells=cells,
-                                          size=(frame["width"], frame["height"]), received_at=time.monotonic())
+                                          size=(frame["width"], frame["height"]), received_at=time.monotonic(),
+                                          cursor=None if grid.screen.cursor.hidden else
+                                          (grid.screen.cursor.x, grid.screen.cursor.y))
                             reading = asyncio.create_task(process.stdout.readline())
                         elif grid.sequence is None and time.monotonic() - started > 5:
                             raise TimeoutError("No terminal frame received")

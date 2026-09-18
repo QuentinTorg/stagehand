@@ -948,6 +948,40 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn(board.CONTROLLER_BINDING, targets)
         self.assertIsNone(targets[-1])
 
+    def test_interaction_routes_keys_until_explicit_exit_not_to_composer(self):
+        executor, live = Mock(), Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "blocked"}))
+        executor.submit.return_value = ready
+        live.available = True
+        live.update.return_value = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
+        live.begin_input.return_value = 5
+        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)), patch.object(
+            board, "send_message"
+        ) as send:
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, "q", board.curses.KEY_UP,
+                                                "\r", "\x1d", board.curses.KEY_MOUSE, board.SHORTCUT_PREFIX, "q"],
+                                      live=live, commands=False)
+        self.assertEqual([call.args for call in live.send_input.call_args_list], [("q", 5), ("\x1b[A", 5), ("\r", 5), ("\x1d", 5)])
+        live.end_input.assert_called()
+        send.assert_not_called()
+        self.assertIn("INTERACTING", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
+    def test_interaction_stops_when_preview_loses_focus(self):
+        executor, live = Mock(), Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "blocked"}))
+        executor.submit.return_value = ready
+        live.available = True
+        active = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
+        live.update.side_effect = [active, active, dict(active, status="paused", input_epoch=6)] + [active] * 10
+        live.begin_input.return_value = 5
+        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)):
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, board.SHORTCUT_PREFIX, "q"],
+                                      live=live, commands=False)
+        live.send_input.assert_not_called()
+        self.assertIn("Interaction ended", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
     def test_live_target_never_guesses_unassigned_role_or_workspace(self):
         row = {"agent_names": {"author": "a", "reviewer": "r"}, "workspace_id": "work", "next": "reviewer"}
         self.assertEqual(board.live_target(row, None), ("r", "work"))
@@ -1341,6 +1375,36 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             first = next(call.args[2] for call in screen.addnstr.call_args_list if call.args[0] == top + 1)
             self.assertEqual(first, "│ " + "x" * interior + " │")
 
+    def test_message_wrap_keeps_words_together_and_preserves_spacing(self):
+        message = "one two three\n  four five"
+        lines, positions, *_ = board.message_layout(message, 38, 17)
+        self.assertEqual(lines, ["one two ", "three", "  four ", "five"])
+        self.assertEqual(positions[8], (1, 0))
+        self.assertEqual(positions[-1], (3, 4))
+        self.assertEqual("".join(lines), message.replace("\n", ""))
+
+    def test_message_wrap_splits_overlong_tokens_without_losing_characters(self):
+        message = "go https://example.com/long/path now"
+        lines, positions, _, _, interior = board.message_layout(message, 38, 17)
+        self.assertTrue(all(len(line) <= interior for line in lines))
+        self.assertEqual("".join(lines), message)
+        for index, character in enumerate(message):
+            row, column = positions[index]
+            self.assertEqual(lines[row][column], character)
+
+    def test_word_wrapping_reflows_with_stable_cursor_offsets(self):
+        message = "Please review these changes.\nKeep  the whitespace."
+        for width in (40, 20, 17, 60):
+            lines, positions, _, _, interior = board.message_layout(message, 38, width)
+            self.assertEqual(len(positions), len(message) + 1)
+            self.assertEqual(positions, sorted(positions))
+            self.assertTrue(all(len(line) <= interior for line in lines))
+            for index, character in enumerate(message):
+                row, column = positions[index]
+                if character != "\n":
+                    self.assertEqual(lines[row][column], character)
+            self.assertEqual("".join(lines), message.replace("\n", ""))
+
     def test_message_resize_reflows_without_changing_draft_or_cursor_identity(self):
         message = "x" * 150 + "\n" + "y" * 230
         for width in (320, 88, 200, 60, 320):
@@ -1371,6 +1435,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             ("abcdefghijklmnop", [up, up, down], 13),
             ("abcdefghijklmnop", [up, up, down, down], 16),
             ("abcdefghijklm", [up, up, down], 13),
+            # Whole-word wrapping leaves a shorter first visual line.
+            ("one two longer", [up], 6),
+            ("one two longer", [up, up, down], 8),
+            ("one two longer", [up, up, down, down], 14),
         ]
         for message, keys, expected in cases:
             with self.subTest(message=message, keys=keys), tempfile.TemporaryDirectory() as root:

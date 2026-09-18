@@ -53,6 +53,29 @@ class RepeatedKey:
     count: int
 
 
+def terminal_input(key):
+    """Encode deliberate human input, not board commands or terminal replies."""
+    if isinstance(key, InsertText):
+        return "\x1b[200~" + key.text + "\x1b[201~"
+    if isinstance(key, str):
+        return key
+    keys = {curses.KEY_UP: "\x1b[A", curses.KEY_DOWN: "\x1b[B",
+            curses.KEY_RIGHT: "\x1b[C", curses.KEY_LEFT: "\x1b[D",
+            curses.KEY_HOME: "\x1b[H", curses.KEY_END: "\x1b[F",
+            curses.KEY_BACKSPACE: "\x7f", curses.KEY_DC: "\x1b[3~",
+            curses.KEY_IC: "\x1b[2~", curses.KEY_ENTER: "\r",
+            curses.KEY_BTAB: "\x1b[Z", curses.KEY_PPAGE: "\x1b[5~", curses.KEY_NPAGE: "\x1b[6~"}
+    if key in keys:
+        return keys[key]
+    # ncurses gives modified arrows extended terminfo key codes; preserve Alt
+    # for question trays instead of forwarding the numeric code as text.
+    name = curses.keyname(key).decode(errors="replace") if key >= 0 else ""
+    modified = re.fullmatch(r"k(UP|DN|LFT|RIT)([2-8])", name)
+    if modified:
+        return "\x1b[1;" + modified[2] + {"UP": "A", "DN": "B", "LFT": "D", "RIT": "C"}[modified[1]]
+    return None
+
+
 EDIT_KEYS = {curses.KEY_BACKSPACE, "\x7f", "\b", curses.KEY_DC, curses.KEY_LEFT,
              curses.KEY_RIGHT, curses.KEY_UP, curses.KEY_DOWN, curses.KEY_HOME, curses.KEY_END}
 
@@ -66,6 +89,36 @@ class MessageInput:
         self.pasting = False
         self.tail = ""
         self.after_cr = False
+
+    def read_direct(self):
+        key = self.read()
+        if key != "\x1b":
+            return key
+        # Keep Alt/CSI sequences in one write. Splitting Escape across display
+        # frames can dismiss a dialog instead of opening its question tray.
+        sequence = key
+        self.screen.timeout(30)
+        try:
+            next_key = self.pending.popleft() if self.pending else self.screen.get_wch()
+            encoded = terminal_input(next_key)
+            if encoded is None:
+                self.pending.appendleft(next_key)
+                return key
+            sequence += encoded
+            if encoded in {"[", "O"}:
+                for _ in range(16):
+                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                    if not isinstance(value, str):
+                        self.pending.appendleft(value)
+                        break
+                    sequence += value
+                    if "@" <= value <= "~":
+                        break
+        except curses.error:
+            pass
+        finally:
+            self.screen.timeout(200)
+        return sequence
 
     def read(self, batch=False):
         if self.pasting:
@@ -864,7 +917,8 @@ def terminal_lines(output, width):
 
 
 def help_lines(width, warnings):
-    text = ["Typing always goes to the message box, including after sending. Messages go only to the orchestrator.",
+    text = ["Typing goes to the message box unless you explicitly choose Interact. Composer messages go only to the orchestrator.",
+            "Interact (Ctrl-P then e): answer the visible agent directly using typing, arrows, Enter, and Esc. Alt+↑ opens Codex questions. Click Finish interacting to return to read-only viewing.",
             "Ctrl-P, then a key: run a board command. All navigation keys listed below require this prefix; mouse controls do not.",
             "Esc cancels a pending command or saves and unfocuses the composer. It does not enable bare-letter shortcuts.",
             "", "Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
@@ -902,7 +956,7 @@ def settings_layout(settings, width):
          "stale observations stop the animation."),
         ("live_preview", "3 Preview", "Live" if settings["live_preview"] else "Snapshots",
          "Live resizes the selected agent to the preview while this pane is focused; leaving releases it. "
-         "No typing or approvals reach the agent. Snapshots leave its size unchanged. "
+         "Read-only unless you choose Interact to send keys directly. Snapshots leave its size unchanged. "
          "Live requires Herdr 0.9.0+ and pyte; without pyte, snapshots are used. "
          "Ctrl-P then r retries a stopped attachment without taking over another viewer."),
     ]
@@ -972,6 +1026,25 @@ def pr_cell(row, width):
         text += separator + label
         spans.append((start, len(text), url))
     return text, spans
+
+
+def draw_pr_links(screen, y, x, text, spans, selected=False):
+    """Expose real URLs to the viewing client, not just local click targets."""
+    runs = []
+    for left, right, url in spans:
+        label = text[left:right]
+        try:
+            screen.addnstr(y, x + left, label, right - left,
+                           curses.A_UNDERLINE | (curses.A_REVERSE if selected else 0))
+        except curses.error:
+            continue
+        if safe_link(url):
+            # Let the host render link affordances instead of baking in a solid
+            # underline. Keep a plain-curses fallback and the selected-row style.
+            runs.append((x + left, label, sum(map(cell_width, label)),
+                         TerminalStyle(reverse=selected, hyperlink=url)))
+    if isinstance(screen, LinkedScreen):
+        screen.preview_row(y, runs)
 
 
 def task_stage(row):
@@ -1289,14 +1362,21 @@ def message_layout(message, height, width):
     # Match the box interior: outer margins, borders, and one-cell side padding.
     line_width = max(1, width - 7)
     lines, positions = [""], []
-    for character in message:
-        positions.append((len(lines) - 1, len(lines[-1])))
-        if character == "\n":
+    for match in re.finditer(r"\n|[^\S\n]+|\S+", message):
+        token = match.group()
+        # Move whole words when they fit; keep every original character so cursor
+        # offsets and the sent draft are unchanged. Overlong tokens still split.
+        if (not token.isspace() and len(token) <= line_width
+                and len(lines[-1]) + len(token) > line_width):
             lines.append("")
-        else:
-            lines[-1] += character
-            if len(lines[-1]) >= line_width:
+        for character in token:
+            positions.append((len(lines) - 1, len(lines[-1])))
+            if character == "\n":
                 lines.append("")
+            else:
+                lines[-1] += character
+                if len(lines[-1]) >= line_width:
+                    lines.append("")
     positions.append((len(lines) - 1, len(lines[-1])))
     capacity = max(3, min(12, height // 3, height - 28))
     visible = min(capacity, max(3, len(lines)))
@@ -1699,6 +1779,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
     preview_refresh_at = 0
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
+    interaction = None
     while True:
         try:
             flush_drafts()
@@ -1750,6 +1831,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
 
         # Avoid overlapping controls on a transient tiny resize. No input is sent.
         if width < 60 or height < 24:
+            interaction = None
+            if live:
+                live.end_input()
             selection = None
             if live:
                 live.update(None, (1, 1))
@@ -1809,6 +1893,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         request = (("controller",) if viewing_controller or current is None else
                    (current["id"], current["workspace_id"], preview_role, current.get("next"),
                     tuple(sorted(current.get("agent_names", {}).items()))))
+        if interaction and (not use_live or not wanted_preview or interaction[0] != request):
+            live.end_input()
+            interaction = None
         if wanted_preview and not use_live and preview_pending is None and (request != preview_key or time.monotonic() >= preview_refresh_at):
             preview_request = request
             preview_pending = (previews.submit(controller_snapshot, args.offline) if viewing_controller else
@@ -1887,13 +1974,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 if row["prs"]:
                     pr_x = 5 + pr_column(*layout)
                     text, spans = pr_cell(row, pr_width)
-                    for left, right, url in spans:
-                        try:
-                            style = curses.A_UNDERLINE | (curses.A_REVERSE if i == selected else 0)
-                            screen.addnstr(y, pr_x + left, text[left:right], right - left, style)
-                            table_links.setdefault(y, []).append((pr_x + left, pr_x + right, url))
-                        except curses.error:
-                            pass
+                    draw_pr_links(screen, y, pr_x, text, spans, selected=i == selected)
+                    table_links[y] = [(pr_x + left, pr_x + right, url) for left, right, url in spans]
             draw_task_frame(screen, width, visible, selected, len(rows),
                             (f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}"
                              if rows else "Workspaces · no tasks"),
@@ -1920,6 +2002,12 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             context_actions += [("aside", "Return to active" if current["id"] in viewer.later else "Set aside"),
                                 ("workspace", "Open workspace ↗")]
         conversation = preview_result if not viewing_controller and preview_key == request else {}
+        if use_live and wanted_preview:
+            controls = [("interact", "Finish interacting" if interaction else "Interact")]
+            if interaction:
+                controls.append(("question", "Alt+↑"))
+            # Keep navigation last; these controls operate on the visible agent.
+            context_actions[-1:-1] = controls
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
                                            tabs=not viewing_controller and not utility_view)
@@ -1933,6 +2021,11 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             state = live.update(target, (width - 3, detail_height))
             if use_live and wanted_preview:
                 live_state = state if target else {"status": "unavailable", "message": "No agent is assigned to this conversation", "cells": ()}
+        if interaction and (not live_state or live_state["status"] != "live"
+                            or interaction[1] != live_state.get("input_epoch")):
+            live.end_input()
+            interaction = None
+            notice = "Interaction ended: preview changed or disconnected. No input replayed."
         setting_controls = {}
         if utility_view == "settings":
             details, setting_controls = settings_layout(viewer.settings, width)
@@ -1943,6 +2036,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         elif live_state is not None:
             role_label = "Orchestrator" if viewing_controller else (preview_role or "Agent").replace("_", " ").title()
             title = f"{role_label} · {live_state['message']}"
+            if interaction:
+                title = f"INTERACTING WITH {role_label.upper()} · keys go directly here"
             color = 1 if live_state["status"] == "unavailable" else 10
             details = []
             if not live_state.get("cells"):
@@ -1999,11 +2094,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 if draw_button(screen, y, 1, label, active=enabled):
                     actions.append((y, 1, 1 + len(label), "setting-" + setting))
             detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
-            for left, right, _ in links:
-                try:
-                    screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
-                except curses.error:
-                    pass
+            if links:
+                draw_pr_links(screen, y, 1, line, links)
             if wanted_preview:
                 preview_lines.append(line if isinstance(line, StyledText) else
                                      StyledText(line, [TerminalStyle()] * len(line)))
@@ -2018,7 +2110,13 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         try:
             path = draft_path(args, message_target)
             draft = cached_draft(drafts, path).text
-            draw_message_box(screen, message_target, draft, activity=args.activity_label)
+            if interaction:
+                put(message_top, "Direct agent input — not an orchestrator message", 10, bold=True)
+                put(message_top + 1, "Type and use arrows / Enter to answer the visible prompt. Esc goes to the agent.")
+                put(message_top + 2, "Alt+↑ opens Codex's queued questions. Click Finish interacting to return to the board.")
+                put(message_top + 3, "Answers and approvals are your explicit input. Your message draft is preserved.")
+            else:
+                draw_message_box(screen, message_target, draft, activity=args.activity_label)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
         if viewer.error:
@@ -2028,7 +2126,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            footer = ("Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
+            footer = ("Direct input · Click Finish interacting or another view to return to the board" if interaction else
+                      "Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
                       if shortcut_pending else "Type to message · Enter sends · Ctrl-P shortcuts · Drag preview to copy")
             screen.addnstr(height - 1, 0, footer, width - 1, curses.A_DIM)
         except curses.error:
@@ -2055,9 +2154,24 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             queued_mouse = forwarded
         screen.refresh()
         try:
-            key = curses.KEY_MOUSE if queued_mouse else input_reader.read()
+            if interaction and live_state.get("cursor"):
+                x, y = live_state["cursor"]
+                if 0 <= x < width - 3 and 0 <= y < detail_height:
+                    curses.curs_set(1)
+                    screen.move(title_y + 1 + y, 1 + x)
+                    screen.refresh()
+            key = curses.KEY_MOUSE if queued_mouse else (input_reader.read_direct() if interaction else input_reader.read())
         except curses.error:
             key = -1
+        if interaction and key not in (-1, curses.KEY_MOUSE, curses.KEY_RESIZE):
+            text = terminal_input(key)
+            if text is None:
+                notice = "Unsupported key; use the native agent pane for this shortcut."
+            elif not live.send_input(text, interaction[1]):
+                live.end_input()
+                interaction = None
+                notice = "Input not queued: attachment changed or input buffer full. Check the agent before retrying."
+            continue
         if key == SHORTCUT_PREFIX:
             selection, shortcut_pending = None, not shortcut_pending
             continue
@@ -2105,6 +2219,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         elif key == ord("m"):
             editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
             editor_task = selected_id
+        elif key == ord("e") and use_live and wanted_preview:
+            action = "interact"
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
             delta = -1 if key in (curses.KEY_UP, ord("k"), curses.KEY_PPAGE, ord("[")) else 1
             if key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
@@ -2152,7 +2268,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                     requested_name = columns(*layout[:-1], requested_name=x - 5)[0]
                     dragging_column = kind != "release"
                     continue
-                if (kind == "select" and wanted_preview and preview_lines
+                if (kind == "select" and not interaction and wanted_preview and preview_lines
                         and 1 <= x < width - 2
                         and title_y < y <= title_y + len(preview_lines)):
                     selection = PreviewSelection(preview_lines, selection_context, x - 1, y - title_y - 1)
@@ -2182,10 +2298,11 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 elif kind == "select" and show_tasks and x == width - 2 and 5 <= y <= 5 + visible:
                     selected = round((y - 5) * (len(rows) - 1) / visible)
                 elif kind == "select" and message_top <= y < height - 2:
-                    editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts,
-                                     send_now=y == height - 4 and 3 <= x <= 10,
-                                     clear_now=y == height - 4 and 12 <= x <= 22)
-                    editor_task = selected_id
+                    if not interaction:
+                        editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts,
+                                         send_now=y == height - 4 and 3 <= x <= 10,
+                                         clear_now=y == height - 4 and 12 <= x <= 22)
+                        editor_task = selected_id
                 elif kind == "select":
                     index = clicked_row(x, y, width, offset, visible, len(rows)) if show_tasks else None
                     if index is not None:
@@ -2202,7 +2319,24 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                             if left <= x < right:
                                 open_pr(url)
                                 break
-        if action == "auto-size":
+        if interaction and action and action not in {"interact", "question"}:
+            live.end_input()
+            interaction = None
+        if action == "interact":
+            if interaction:
+                live.end_input()
+                interaction = None
+            else:
+                epoch = live.begin_input()
+                if epoch is not None:
+                    interaction = (request, epoch)
+                    selection, shortcut_pending = None, False
+                else:
+                    notice = "Focus this pane and wait for Live before interacting."
+        elif action == "question" and interaction:
+            if not live.send_input("\x1b[1;3A", interaction[1]):
+                notice = "Question shortcut not sent; check the live connection."
+        elif action == "auto-size":
             requested_rows = None
             requested_name = None
         elif action == "task":

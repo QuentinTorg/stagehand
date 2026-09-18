@@ -22,6 +22,17 @@ import board
 
 
 class MessageInputTests(unittest.TestCase):
+    def test_direct_input_encodes_navigation_without_board_shortcuts(self):
+        for key, expected in [("q", "q"), ("\r", "\r"), ("\x1b", "\x1b"),
+                              (board.curses.KEY_UP, "\x1b[A"),
+                              (board.curses.KEY_BACKSPACE, "\x7f"),
+                              (board.InsertText("a\nb"), "\x1b[200~a\nb\x1b[201~")]:
+            self.assertEqual(board.terminal_input(key), expected)
+        with patch.object(board.curses, "keyname", return_value=b"kUP3"):
+            self.assertEqual(board.terminal_input(999), "\x1b[1;3A")
+        with patch.object(board.curses, "keyname", return_value=b"UNKNOWN"):
+            self.assertIsNone(board.terminal_input(999))
+
     def reader(self, text):
         keys = deque(text)
         screen = Mock()
@@ -39,6 +50,15 @@ class MessageInputTests(unittest.TestCase):
         self.assertEqual(reader.read(batch=True), board.InsertText("next"))
         self.assertEqual(reader.read(batch=True), board.SHORTCUT_PREFIX)
         self.assertEqual(reader.read(), "q")
+
+    def test_direct_input_preserves_alt_sequences_and_bracketed_paste(self):
+        reader, _ = self.reader("\x1b[1;3A\x1bx\x1b[200~a\nb\x1b[201~\r")
+        self.assertEqual(reader.read_direct(), "\x1b[1;3A")
+        self.assertEqual(reader.read_direct(), "\x1bx")
+        self.assertEqual(reader.read_direct(), board.InsertText("a\nb"))
+        self.assertEqual(reader.read_direct(), "\r")
+        reader, _ = self.reader("\x1b")
+        self.assertEqual(reader.read_direct(), "\x1b")
 
     def test_fragmented_paste_preserves_unicode_and_newlines_not_commands(self):
         reader, keys = self.reader("\x1b[200~café ☃\r")
@@ -207,6 +227,76 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True
                 wait_for(lambda: sent.exists())
                 self.assertEqual(sent.read_text(), expected)
                 os.write(master, b"\x10q")
+                wait_for(lambda: b"\x1b[?2004l" in output)
+                process.wait(timeout=5)
+                self.assertEqual(process.returncode, 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                os.close(master)
+
+    def test_real_terminal_interaction_opens_questions_and_returns_to_board(self):
+        # Exercise ncurses' modified-key decoding and input routing in a PTY;
+        # capture input locally rather than answering any real agent question.
+        source = '''
+import curses, json, sys
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1])
+import board
+root = Path(sys.argv[2])
+board.CONTROLLER_BINDING = {"test": True}
+board.board_snapshot = lambda *args: ([], [], {"status": "blocked"})
+class Live:
+    available = True
+    def update(self, *args):
+        return {"status": "live", "message": "Live", "cells": (), "input_epoch": 1}
+    def begin_input(self): return 1
+    def send_input(self, text, epoch):
+        with (root / "keys").open("a") as out: out.write(json.dumps(text) + "\\n")
+        return True
+    def end_input(self): (root / "finished").touch()
+    def close(self): pass
+board.LivePreview = Live
+def send(*args): raise AssertionError("Interaction must not send an orchestrator message")
+board.send_message = send
+curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=False, interval=5))
+'''
+        with tempfile.TemporaryDirectory() as root:
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 100, 0, 0))
+            process = subprocess.Popen([sys.executable, "-c", source, str(Path(board.__file__).parent), root],
+                                       stdin=slave, stdout=slave, stderr=slave,
+                                       env=dict(os.environ, TERM="xterm-256color"), start_new_session=True)
+            os.close(slave)
+            output = bytearray()
+            def wait_for(predicate):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], .01)[0]:
+                        output.extend(os.read(master, 65536))
+                    if predicate():
+                        return
+                self.fail(f"Interaction did not reach expected state: {output[-1500:]!r}")
+            path = Path(root) / "keys"
+            try:
+                wait_for(lambda: b"Interact" in output)
+                os.write(master, b"\x10e")
+                wait_for(lambda: b"INTERACTING" in output)
+                os.write(master, b"\x1b[1;3A")
+                wait_for(lambda: path.exists())
+                os.write(master, b"2\r")
+                wait_for(lambda: len(path.read_text().splitlines()) == 3)
+                import json
+                self.assertEqual([json.loads(line) for line in path.read_text().splitlines()], ["\x1b[1;3A", "2", "\r"])
+                os.write(master, b"\x1d")
+                wait_for(lambda: len(path.read_text().splitlines()) == 4)
+                self.assertEqual(json.loads(path.read_text().splitlines()[-1]), "\x1d")
+                self.assertFalse((Path(root) / "finished").exists())
+                os.write(master, b"\x1b[<0;4;4M")
+                wait_for(lambda: (Path(root) / "finished").exists())
+                os.write(master, b"\x1b[<0;4;4m\x10q")
                 wait_for(lambda: b"\x1b[?2004l" in output)
                 process.wait(timeout=5)
                 self.assertEqual(process.returncode, 0)
