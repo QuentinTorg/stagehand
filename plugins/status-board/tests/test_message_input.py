@@ -51,6 +51,47 @@ class MessageInputTests(unittest.TestCase):
         self.assertEqual(reader.read(batch=True), board.SHORTCUT_PREFIX)
         self.assertEqual(reader.read(), "q")
 
+    def test_wheel_burst_combines_without_consuming_click_or_text(self):
+        mouse = board.curses.KEY_MOUSE
+        reader, _ = self.reader([mouse, mouse, mouse, "z"])
+        events = [("wheel", 10, 12, -1)] * 3 + [("select", 10, 12, 0)]
+        with patch.object(board, "mouse_event", side_effect=events):
+            self.assertEqual(reader.read_mouse(), ("wheel", 10, 12, -3))
+            self.assertEqual(reader.read(), mouse)
+            self.assertEqual(reader.read_mouse(), ("select", 10, 12, 0))
+            self.assertEqual(reader.read(), "z")
+
+    def test_wheel_batch_stops_at_region_or_direction_change(self):
+        mouse = board.curses.KEY_MOUSE
+        for following in (("wheel", 11, 12, -1), ("wheel", 10, 12, 1)):
+            reader, _ = self.reader([mouse, "a"])
+            with patch.object(board, "mouse_event", side_effect=[("wheel", 10, 12, -1), following]):
+                self.assertEqual(reader.read_mouse(), ("wheel", 10, 12, -1))
+                self.assertEqual(reader.read(), mouse)
+                self.assertEqual(reader.read_mouse(), following)
+                self.assertEqual(reader.read(), "a")
+
+    def test_wheel_batch_is_bounded(self):
+        mouse = board.curses.KEY_MOUSE
+        reader, _ = self.reader([mouse] * 100)
+        with patch.object(board, "mouse_event", return_value=("wheel", 10, 12, -1)):
+            self.assertEqual(reader.read_mouse(), ("wheel", 10, 12, -64))
+            self.assertEqual(reader.read(), mouse)
+            self.assertEqual(reader.read_mouse(), ("wheel", 10, 12, -37))
+
+    def test_scroll_response_refresh_returns_to_idle_cadence(self):
+        reader, keys = self.reader([])
+        with patch.object(board.time, "monotonic", return_value=10) as clock, patch.object(
+            board, "mouse_event", return_value=("wheel", 10, 12, -1)
+        ):
+            reader.read_mouse()
+            keys.extend(["a", "b"])
+            self.assertEqual(reader.read(), "a")
+            reader.screen.timeout.assert_called_with(20)
+            clock.return_value = 10.3
+            self.assertEqual(reader.read(), "b")
+            reader.screen.timeout.assert_called_with(200)
+
     def test_direct_input_preserves_alt_sequences_and_bracketed_paste(self):
         reader, _ = self.reader("\x1b[1;3A\x1bx\x1b[200~a\nb\x1b[201~\r")
         self.assertEqual(reader.read_direct(), "\x1b[1;3A")
@@ -294,9 +335,9 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=Fals
                 wait_for(lambda: len(path.read_text().splitlines()) == 4)
                 self.assertEqual(json.loads(path.read_text().splitlines()[-1]), "\x1d")
                 self.assertFalse((Path(root) / "finished").exists())
-                os.write(master, b"\x1b[<0;4;4M")
+                os.write(master, b"\x1b[<0;26;37M")
                 wait_for(lambda: (Path(root) / "finished").exists())
-                os.write(master, b"\x1b[<0;4;4m\x10q")
+                os.write(master, b"\x1b[<0;26;37m\x10q")
                 wait_for(lambda: b"\x1b[?2004l" in output)
                 process.wait(timeout=5)
                 self.assertEqual(process.returncode, 0)

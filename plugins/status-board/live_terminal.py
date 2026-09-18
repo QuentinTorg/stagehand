@@ -49,7 +49,7 @@ class TerminalGrid:
     def __init__(self):
         self.screen, self.stream, self.sequence = None, None, None
 
-    def feed(self, frame):
+    def feed(self, frame, capture=True):
         if frame.get("type") == "terminal.closed":
             raise RuntimeError(frame.get("reason", "Attachment closed"))
         if frame.get("type") != "terminal.frame" or frame.get("encoding") != "ansi":
@@ -68,8 +68,12 @@ class TerminalGrid:
             self.stream = LinkStream(stream.feed, self.screen.set_link)
         self.stream.feed(base64.b64decode(frame["bytes"], validate=True))
         self.sequence = seq
+        return self.cells() if capture else None
+
+    def cells(self):
         # Immutable cells cross the thread boundary; partial frames stay local.
-        return tuple(tuple(self.screen.buffer[y][x] for x in range(cols)) for y in range(rows))
+        return tuple(tuple(self.screen.buffer[y][x] for x in range(self.screen.columns))
+                     for y in range(self.screen.lines))
 
 
 def source_identity(snapshot, target, viewer):
@@ -175,7 +179,7 @@ class LivePreview:
                 self.state = dict(self.state, **state, input_epoch=self.input_epoch)
 
     async def _run(self):
-        process = reading = errors = None
+        process = reading = errors = checking = None
         active_generation, identity, grid = -1, None, None
         failed, focused, next_check, started, sent_size = False, False, 0, 0, None
 
@@ -207,14 +211,23 @@ class LivePreview:
                     scroll, self.scroll_delta = self.scroll_delta, 0
                 try:
                     if generation != active_generation:
+                        if checking is not None:
+                            checking.cancel()
+                            await asyncio.gather(checking, return_exceptions=True)
+                            checking = None
                         await detach()
                         active_generation, failed, focused, next_check = generation, False, False, 0
                         self._publish(generation, status="connecting", message="Connecting…", cells=())
                     if target is None or failed:
                         await asyncio.sleep(.05)
                         continue
-                    if time.monotonic() >= next_check:
-                        snapshot = await read_snapshot()
+                    # Inventory validates ownership/focus, but a slow query must
+                    # not stall an already established terminal stream.
+                    if checking is None and time.monotonic() >= next_check:
+                        checking = asyncio.create_task(read_snapshot())
+                    if checking is not None and checking.done():
+                        completed, checking = checking, None
+                        snapshot = completed.result()
                         # Selection may change while a slow query is in flight.
                         with self.lock:
                             if generation != self.generation:
@@ -269,17 +282,25 @@ class LivePreview:
                         if text:
                             await asyncio.wait_for(process.stdin.drain(), .5)
                         if reading.done():
-                            line = reading.result()
-                            if not line:
-                                reason = errors.result().decode(errors="replace").strip() if errors.done() else "Attachment ended"
-                                raise RuntimeError(reason or "Attachment ended")
-                            frame = json.loads(line)
-                            cells = grid.feed(frame)
-                            self._publish(generation, status="live", message="Live", cells=cells,
+                            # Apply every delta in order, but publish only the
+                            # latest grid in this bounded burst. Never let output
+                            # floods starve input, focus checks, or view changes.
+                            deadline = time.monotonic() + .008
+                            for _ in range(64):
+                                line = reading.result()
+                                if not line:
+                                    reason = errors.result().decode(errors="replace").strip() if errors.done() else "Attachment ended"
+                                    raise RuntimeError(reason or "Attachment ended")
+                                frame = json.loads(line)
+                                grid.feed(frame, capture=False)
+                                reading = asyncio.create_task(process.stdout.readline())
+                                await asyncio.sleep(0)
+                                if not reading.done() or time.monotonic() >= deadline:
+                                    break
+                            self._publish(generation, status="live", message="Live", cells=grid.cells(),
                                           size=(frame["width"], frame["height"]), received_at=time.monotonic(),
                                           cursor=None if grid.screen.cursor.hidden else
                                           (grid.screen.cursor.x, grid.screen.cursor.y))
-                            reading = asyncio.create_task(process.stdout.readline())
                         elif grid.sequence is None and time.monotonic() - started > 5:
                             raise TimeoutError("No terminal frame received")
                     await asyncio.sleep(.02)
@@ -293,4 +314,7 @@ class LivePreview:
                     self._publish(generation, status="unavailable", cells=(),
                                   message=f"Live preview stopped: {error}. Press Ctrl-P then r to retry or use Snapshots in Settings.")
         finally:
+            if checking is not None:
+                checking.cancel()
+                await asyncio.gather(checking, return_exceptions=True)
             await detach()

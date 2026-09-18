@@ -86,9 +86,40 @@ class MessageInput:
     def __init__(self, screen):
         self.screen = screen
         self.pending = deque()
+        self.mouse_pending = deque()
+        self.responsive_until = 0
         self.pasting = False
         self.tail = ""
         self.after_cr = False
+
+    def read_mouse(self):
+        event = self.mouse_pending.popleft() if self.mouse_pending else mouse_event()
+        if not event or event[0] != "wheel":
+            return event
+        kind, x, y, delta = event
+        self.responsive_until = time.monotonic() + .25
+        # A wheel burst needs one redraw, not one per notch. Stop at direction,
+        # position, or input changes so clicks and typing keep their exact order.
+        self.screen.timeout(0)
+        try:
+            for _ in range(63):
+                key = self.pending.popleft() if self.pending else self.screen.get_wch()
+                if key != curses.KEY_MOUSE:
+                    self.pending.appendleft(key)
+                    break
+                following = self.mouse_pending.popleft() if self.mouse_pending else mouse_event()
+                if (following and following[:3] == (kind, x, y)
+                        and following[3] * delta > 0):
+                    delta += following[3]
+                else:
+                    self.mouse_pending.appendleft(following)
+                    self.pending.appendleft(curses.KEY_MOUSE)
+                    break
+        except curses.error:
+            pass
+        finally:
+            self.screen.timeout(200)
+        return kind, x, y, delta
 
     def read_direct(self):
         key = self.read()
@@ -121,6 +152,9 @@ class MessageInput:
         return sequence
 
     def read(self, batch=False):
+        # Catch the terminal's scroll response promptly, then return to the
+        # inexpensive idle cadence instead of polling rapidly all the time.
+        self.screen.timeout(20 if time.monotonic() < self.responsive_until else 200)
         if self.pasting:
             return self.read_paste()
         key = self.pending.popleft() if self.pending else self.screen.get_wch()
@@ -462,6 +496,19 @@ def live_grid_lines(cells, columns, rows):
 def draw_live_grid(screen, top, cells, palette, columns, rows):
     for y, line in enumerate(live_grid_lines(cells, columns, rows)):
         draw_preview_line(screen, top + y, line, palette, columns + 2)
+
+
+class LiveGridCache:
+    """Reuse styling until the immutable terminal frame or viewport changes."""
+
+    def __init__(self):
+        self.cells, self.size, self.lines = None, None, []
+
+    def lines_for(self, cells, columns, rows):
+        if cells is not self.cells or self.size != (columns, rows):
+            self.lines = live_grid_lines(cells, columns, rows)
+            self.cells, self.size = cells, (columns, rows)
+        return self.lines
 
 
 class PreviewSelection:
@@ -1383,7 +1430,17 @@ def message_layout(message, height, width):
     return lines, positions, max(0, height - visible - 5), visible, line_width
 
 
-def draw_message_box(screen, row, message, active=False, can_send=None, activity=""):
+def draw_interaction_buttons(screen, interacting=False):
+    """Keep direct-input controls beside messaging, separate from view navigation."""
+    height, _ = screen.getmaxyx()
+    controls = [(24, " Finish interacting " if interacting else " Interact ", "interact")]
+    if interacting:
+        controls.append((45, " Alt+↑ ", "question"))
+    return [(height - 4, x, x + len(label), action) for x, label, action in controls
+            if draw_button(screen, height - 4, x, label, active=interacting)]
+
+
+def draw_message_box(screen, row, message, active=False, can_send=None, activity="", interact=False):
     height, width = screen.getmaxyx()
     preview, _, top, visible, line_width = message_layout(message, height, width)
     title = "Message orchestrator · " + (row["label"] if row else "General / new task")
@@ -1392,7 +1449,8 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
         title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
-             "│ [ Send ] [ x Clear ]  " + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
+             "│ [ Send ] [ x Clear ]  " + (" " * 12 if interact else "")
+             + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
@@ -1411,6 +1469,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
             pass
     draw_button(screen, height - 4, 3, "  Send  ", active=bool(message.strip()) if can_send is None else can_send)
     draw_button(screen, height - 4, 12, "  x Clear  ")
+    return draw_interaction_buttons(screen) if interact else []
 
 
 def compose(screen, args, row, inline=False, send_now=False, clear_now=False, initial_key=None, input_reader=None, drafts=None):
@@ -1446,8 +1505,9 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
         offset = max(0, cy - visible + 1)
         if inline:
             # The board redraws the background before each editor frame.
-            draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()),
-                             activity=getattr(args, "activity_label", ""))
+            message_actions = draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()),
+                                               activity=getattr(args, "activity_label", ""),
+                                               interact=getattr(args, "can_interact", False))
             content = []
         else:
             screen.erase()
@@ -1489,7 +1549,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
         if isinstance(key, RepeatedKey):
             key, count = key.key, key.count
         if key == curses.KEY_MOUSE:
-            event = mouse_event()
+            event = input_reader.read_mouse()
             if inline and event and event[0] == "wheel" and event[2] < box_top:
                 # Let the board scroll the region under the pointer without
                 # discarding the editor's cursor, draft, or follow-up focus.
@@ -1510,7 +1570,8 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
                 elif input_y <= y < input_y + visible:
                     target_y, target_x = offset + y - input_y, max(0, x - input_x)
                     cursor = min(range(len(positions)), key=lambda i: (abs(positions[i][0] - target_y), abs(positions[i][1] - target_x)))
-                elif not (1 <= x < width - 2 and box_top <= y < height - 2):
+                elif (any(y == line and left <= x < right for line, left, right, _ in message_actions)
+                      or not (1 <= x < width - 2 and box_top <= y < height - 2)):
                     try:
                         draft.save(message)
                     except OSError:
@@ -1760,6 +1821,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         curses.init_pair(10, curses.COLOR_CYAN, -1)
         curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
     preview_palette = PreviewPalette()
+    preview_cache = LiveGridCache()
     screen.timeout(200)
     selected, selected_id, refresh_at, rows, warnings = 0, None, 0, [], []
     all_rows, later_open = [], False
@@ -2002,12 +2064,6 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             context_actions += [("aside", "Return to active" if current["id"] in viewer.later else "Set aside"),
                                 ("workspace", "Open workspace ↗")]
         conversation = preview_result if not viewing_controller and preview_key == request else {}
-        if use_live and wanted_preview:
-            controls = [("interact", "Finish interacting" if interaction else "Interact")]
-            if interaction:
-                controls.append(("question", "Alt+↑"))
-            # Keep navigation last; these controls operate on the visible agent.
-            context_actions[-1:-1] = controls
         active_control = "info" if info else "role-" + (preview_role or conversation.get("role") or "")
         context_hits, title_y = draw_actions(screen, detail_y, width, context_actions, active_control,
                                            tabs=not viewing_controller and not utility_view)
@@ -2080,7 +2136,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             selection = None
         preview_lines = []
         if live_state and live_state.get("cells"):
-            preview_lines = live_grid_lines(live_state["cells"], width - 3, detail_height)
+            preview_lines = preview_cache.lines_for(live_state["cells"], width - 3, detail_height)
             for i, line in enumerate(preview_lines):
                 draw_preview_line(screen, title_y + 1 + i, line, preview_palette, width - 1)
         for i, (line, color, links) in enumerate(details[active_offset:active_offset + detail_height]):
@@ -2107,6 +2163,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             selection.draw(screen, title_y + 1, preview_palette, width - 3)
             hint = "release to copy" if selection.dragging else "preview frozen"
             put(title_y, f"Selection · {hint} · Esc or click to resume", 10, bold=True)
+        args.can_interact = bool(use_live and wanted_preview)
         try:
             path = draft_path(args, message_target)
             draft = cached_draft(drafts, path).text
@@ -2115,8 +2172,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 put(message_top + 1, "Type and use arrows / Enter to answer the visible prompt. Esc goes to the agent.")
                 put(message_top + 2, "Alt+↑ opens Codex's queued questions. Click Finish interacting to return to the board.")
                 put(message_top + 3, "Answers and approvals are your explicit input. Your message draft is preserved.")
+                actions += draw_interaction_buttons(screen, interacting=True)
             else:
-                draw_message_box(screen, message_target, draft, activity=args.activity_label)
+                actions += draw_message_box(screen, message_target, draft, activity=args.activity_label,
+                                            interact=args.can_interact)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
         if viewer.error:
@@ -2247,7 +2306,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                              if rows[i % len(rows)] and rows[i % len(rows)]["id"] not in viewer.later and rows[i % len(rows)]["color"] == 1), selected)
             general, utility_view = False, None
         elif key == curses.KEY_MOUSE:
-            event, queued_mouse = queued_mouse or mouse_event(), None
+            event, queued_mouse = queued_mouse or input_reader.read_mouse(), None
             if event:
                 kind, x, y, delta = event
                 shortcut_pending = False
