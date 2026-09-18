@@ -1362,14 +1362,21 @@ def message_layout(message, height, width):
     # Match the box interior: outer margins, borders, and one-cell side padding.
     line_width = max(1, width - 7)
     lines, positions = [""], []
-    for character in message:
-        positions.append((len(lines) - 1, len(lines[-1])))
-        if character == "\n":
+    for match in re.finditer(r"\n|[^\S\n]+|\S+", message):
+        token = match.group()
+        # Move whole words when they fit; keep every original character so cursor
+        # offsets and the sent draft are unchanged. Overlong tokens still split.
+        if (not token.isspace() and len(token) <= line_width
+                and len(lines[-1]) + len(token) > line_width):
             lines.append("")
-        else:
-            lines[-1] += character
-            if len(lines[-1]) >= line_width:
+        for character in token:
+            positions.append((len(lines) - 1, len(lines[-1])))
+            if character == "\n":
                 lines.append("")
+            else:
+                lines[-1] += character
+                if len(lines[-1]) >= line_width:
+                    lines.append("")
     positions.append((len(lines) - 1, len(lines[-1])))
     capacity = max(3, min(12, height // 3, height - 28))
     visible = min(capacity, max(3, len(lines)))

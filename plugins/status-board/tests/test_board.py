@@ -1375,6 +1375,36 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             first = next(call.args[2] for call in screen.addnstr.call_args_list if call.args[0] == top + 1)
             self.assertEqual(first, "│ " + "x" * interior + " │")
 
+    def test_message_wrap_keeps_words_together_and_preserves_spacing(self):
+        message = "one two three\n  four five"
+        lines, positions, *_ = board.message_layout(message, 38, 17)
+        self.assertEqual(lines, ["one two ", "three", "  four ", "five"])
+        self.assertEqual(positions[8], (1, 0))
+        self.assertEqual(positions[-1], (3, 4))
+        self.assertEqual("".join(lines), message.replace("\n", ""))
+
+    def test_message_wrap_splits_overlong_tokens_without_losing_characters(self):
+        message = "go https://example.com/long/path now"
+        lines, positions, _, _, interior = board.message_layout(message, 38, 17)
+        self.assertTrue(all(len(line) <= interior for line in lines))
+        self.assertEqual("".join(lines), message)
+        for index, character in enumerate(message):
+            row, column = positions[index]
+            self.assertEqual(lines[row][column], character)
+
+    def test_word_wrapping_reflows_with_stable_cursor_offsets(self):
+        message = "Please review these changes.\nKeep  the whitespace."
+        for width in (40, 20, 17, 60):
+            lines, positions, _, _, interior = board.message_layout(message, 38, width)
+            self.assertEqual(len(positions), len(message) + 1)
+            self.assertEqual(positions, sorted(positions))
+            self.assertTrue(all(len(line) <= interior for line in lines))
+            for index, character in enumerate(message):
+                row, column = positions[index]
+                if character != "\n":
+                    self.assertEqual(lines[row][column], character)
+            self.assertEqual("".join(lines), message.replace("\n", ""))
+
     def test_message_resize_reflows_without_changing_draft_or_cursor_identity(self):
         message = "x" * 150 + "\n" + "y" * 230
         for width in (320, 88, 200, 60, 320):
@@ -1405,6 +1435,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             ("abcdefghijklmnop", [up, up, down], 13),
             ("abcdefghijklmnop", [up, up, down, down], 16),
             ("abcdefghijklm", [up, up, down], 13),
+            # Whole-word wrapping leaves a shorter first visual line.
+            ("one two longer", [up], 6),
+            ("one two longer", [up, up, down], 8),
+            ("one two longer", [up, up, down, down], 14),
         ]
         for message, keys, expected in cases:
             with self.subTest(message=message, keys=keys), tempfile.TemporaryDirectory() as root:
