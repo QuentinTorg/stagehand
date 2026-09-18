@@ -918,7 +918,7 @@ def terminal_lines(output, width):
 
 def help_lines(width, warnings):
     text = ["Typing goes to the message box unless you explicitly choose Interact. Composer messages go only to the orchestrator.",
-            "Interact (Ctrl-P then e): answer the visible agent directly using typing, arrows, Enter, and Esc. Alt+↑ opens Codex questions. Ctrl-] returns to read-only viewing.",
+            "Interact (Ctrl-P then e): answer the visible agent directly using typing, arrows, Enter, and Esc. Alt+↑ opens Codex questions. Click Finish interacting to return to read-only viewing.",
             "Ctrl-P, then a key: run a board command. All navigation keys listed below require this prefix; mouse controls do not.",
             "Esc cancels a pending command or saves and unfocuses the composer. It does not enable bare-letter shortcuts.",
             "", "Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
@@ -2016,7 +2016,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             role_label = "Orchestrator" if viewing_controller else (preview_role or "Agent").replace("_", " ").title()
             title = f"{role_label} · {live_state['message']}"
             if interaction:
-                title = f"INTERACTING WITH {role_label.upper()} · keys go directly here · Ctrl-] returns"
+                title = f"INTERACTING WITH {role_label.upper()} · keys go directly here"
             color = 1 if live_state["status"] == "unavailable" else 10
             details = []
             if not live_state.get("cells"):
@@ -2095,7 +2095,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             if interaction:
                 put(message_top, "Direct agent input — not an orchestrator message", 10, bold=True)
                 put(message_top + 1, "Type and use arrows / Enter to answer the visible prompt. Esc goes to the agent.")
-                put(message_top + 2, "Alt+↑ opens Codex's queued questions. Ctrl-] or Finish interacting returns to the board.")
+                put(message_top + 2, "Alt+↑ opens Codex's queued questions. Click Finish interacting to return to the board.")
                 put(message_top + 3, "Answers and approvals are your explicit input. Your message draft is preserved.")
             else:
                 draw_message_box(screen, message_target, draft, activity=args.activity_label)
@@ -2108,7 +2108,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         elif notice:
             put(height - 2, notice, bold=True)
         try:
-            footer = ("Direct input · Ctrl-] returns to the board · Click a view to stop interacting" if interaction else
+            footer = ("Direct input · Click Finish interacting or another view to return to the board" if interaction else
                       "Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
                       if shortcut_pending else "Type to message · Enter sends · Ctrl-P shortcuts · Drag preview to copy")
             screen.addnstr(height - 1, 0, footer, width - 1, curses.A_DIM)
@@ -2146,18 +2146,13 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         except curses.error:
             key = -1
         if interaction and key not in (-1, curses.KEY_MOUSE, curses.KEY_RESIZE):
-            if key == "\x1d":
+            text = terminal_input(key)
+            if text is None:
+                notice = "Unsupported key; use the native agent pane for this shortcut."
+            elif not live.send_input(text, interaction[1]):
                 live.end_input()
                 interaction = None
-                notice = "Read-only preview. Typing messages the orchestrator again."
-            else:
-                text = terminal_input(key)
-                if text is None:
-                    notice = "Unsupported key; use the native agent pane for this shortcut."
-                elif not live.send_input(text, interaction[1]):
-                    live.end_input()
-                    interaction = None
-                    notice = "Input not queued: attachment changed or input buffer full. Check the agent before retrying."
+                notice = "Input not queued: attachment changed or input buffer full. Check the agent before retrying."
             continue
         if key == SHORTCUT_PREFIX:
             selection, shortcut_pending = None, not shortcut_pending

@@ -960,9 +960,9 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             board, "send_message"
         ) as send:
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, "q", board.curses.KEY_UP,
-                                                "\r", "\x1d", board.SHORTCUT_PREFIX, "q"],
+                                                "\r", "\x1d", board.curses.KEY_MOUSE, board.SHORTCUT_PREFIX, "q"],
                                       live=live, commands=False)
-        self.assertEqual([call.args for call in live.send_input.call_args_list], [("q", 5), ("\x1b[A", 5), ("\r", 5)])
+        self.assertEqual([call.args for call in live.send_input.call_args_list], [("q", 5), ("\x1b[A", 5), ("\r", 5), ("\x1d", 5)])
         live.end_input.assert_called()
         send.assert_not_called()
         self.assertIn("INTERACTING", " ".join(str(call) for call in screen.addnstr.call_args_list))

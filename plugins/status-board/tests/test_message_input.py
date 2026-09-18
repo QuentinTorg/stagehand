@@ -256,7 +256,7 @@ class Live:
     def send_input(self, text, epoch):
         with (root / "keys").open("a") as out: out.write(json.dumps(text) + "\\n")
         return True
-    def end_input(self): pass
+    def end_input(self): (root / "finished").touch()
     def close(self): pass
 board.LivePreview = Live
 def send(*args): raise AssertionError("Interaction must not send an orchestrator message")
@@ -290,7 +290,13 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=Fals
                 wait_for(lambda: len(path.read_text().splitlines()) == 3)
                 import json
                 self.assertEqual([json.loads(line) for line in path.read_text().splitlines()], ["\x1b[1;3A", "2", "\r"])
-                os.write(master, b"\x1d\x10q")
+                os.write(master, b"\x1d")
+                wait_for(lambda: len(path.read_text().splitlines()) == 4)
+                self.assertEqual(json.loads(path.read_text().splitlines()[-1]), "\x1d")
+                self.assertFalse((Path(root) / "finished").exists())
+                os.write(master, b"\x1b[<0;4;4M")
+                wait_for(lambda: (Path(root) / "finished").exists())
+                os.write(master, b"\x1b[<0;4;4m\x10q")
                 wait_for(lambda: b"\x1b[?2004l" in output)
                 process.wait(timeout=5)
                 self.assertEqual(process.returncode, 0)
