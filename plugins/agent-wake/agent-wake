@@ -54,7 +54,7 @@ def _config_dir() -> Path:
     if configured:
         return Path(configured)
     result = subprocess.run(
-        ["herdr", "plugin", "config-dir", PLUGIN_ID],
+        [agent_binding.herdr_binary(), "plugin", "config-dir", PLUGIN_ID],
         check=True,
         capture_output=True,
         text=True,
@@ -83,7 +83,7 @@ def _documents(directory: Path):
 
 
 def _herdr(*arguments: str) -> tuple[dict | None, str | None]:
-    binary = os.environ.get("HERDR_BIN_PATH", "herdr")
+    binary = agent_binding.herdr_binary()
     try:
         result = subprocess.run(
             [binary, *arguments],
@@ -120,6 +120,24 @@ def _status(agent: dict) -> str:
 def _configured_consumers() -> list[dict]:
     entries = _config().get("consumers", [])
     return [entry for entry in entries if isinstance(entry, dict) and entry.get("root")]
+
+
+def _session_consumers() -> list[dict]:
+    # Plugin configuration is shared by Herdr sessions; pane IDs are not.
+    # Never reconcile another session's watches using this hook's inventory.
+    consumers = []
+    for entry in _configured_consumers():
+        target = entry.get("target")
+        if isinstance(target, dict):
+            try:
+                binding = agent_binding.load(target["binding"])
+            except (ValueError, KeyError) as error:
+                print(f"agent-wake: {entry['root']}: {error}", file=sys.stderr)
+                continue
+            if binding["socket"] != os.environ.get("HERDR_SOCKET_PATH"):
+                continue
+        consumers.append(entry)
+    return consumers
 
 
 def _configure(args) -> int:
@@ -309,6 +327,7 @@ def _confirm_source(watch: dict) -> dict | None:
     time.sleep(0.2)
     payload, error = _herdr("agent", "get", watch["pane_id"])
     if error:
+        print(f"agent-wake: cannot inspect {watch['pane_id']}: {error}", file=sys.stderr)
         return None
     agent = _agent(payload)
     if _status(agent) not in ({"working"} | SETTLED):
@@ -480,8 +499,13 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
             _atomic_json(path, wake)
 
 
-def _flush() -> int:
-    for entry in _configured_consumers():
+def _flush(state_root=None) -> int:
+    consumers = _session_consumers()
+    if state_root is not None:
+        consumers = [entry for entry in consumers if Path(entry["root"]).resolve() == Path(state_root).resolve()]
+        if not consumers:
+            raise SystemExit("wake state directory is not configured for the current Herdr session")
+    for entry in consumers:
         state_root = Path(entry["root"]).resolve()
         if state_root.is_dir():
             # Recover a stop missed during a hook/server interruption. This is
@@ -493,13 +517,15 @@ def _flush() -> int:
                 payload, error = _herdr("agent", "get", watch["pane_id"])
                 if not error:
                     _record_event_for(state_root, _agent(payload))
+                else:
+                    print(f"agent-wake: cannot recover {watch['pane_id']}: {error}", file=sys.stderr)
             _notify_consumer(state_root, entry.get("target", ""))
     return 0
 
 
 def _hook() -> int:
     event = _event()
-    for entry in _configured_consumers():
+    for entry in _session_consumers():
         state_root = Path(entry["root"]).resolve()
         if state_root.is_dir():
             _record_event_for(state_root, event)
@@ -549,7 +575,9 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--state-root", required=True)
     status.set_defaults(run=_status_command)
     commands.add_parser("hook").set_defaults(run=lambda _args: _hook())
-    commands.add_parser("flush").set_defaults(run=lambda _args: _flush())
+    flush = commands.add_parser("flush")
+    flush.add_argument("--state-root", help="Recover only this configured consumer in the current Herdr session")
+    flush.set_defaults(run=lambda args: _flush(args.state_root))
     return parser
 
 

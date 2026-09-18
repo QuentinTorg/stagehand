@@ -6,6 +6,16 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import shutil
+
+
+def herdr_binary():
+    # A running server can retain a replaced executable and export a nonexistent
+    # "(deleted)" path. Recover only the binary; inherit the same session routing.
+    configured = os.environ.get("HERDR_BIN_PATH")
+    if configured and (os.path.exists(configured) or shutil.which(configured)):
+        return configured
+    return shutil.which("herdr") or configured or "herdr"
 
 
 class ControllerUnavailable(ValueError):
@@ -20,7 +30,7 @@ def native_session(agent):
 
 
 def process_identity(agent):
-    result = subprocess.run([os.environ.get("HERDR_BIN_PATH", "herdr"), "pane", "process-info", "--pane", agent["pane_id"]],
+    result = subprocess.run([herdr_binary(), "pane", "process-info", "--pane", agent["pane_id"]],
                             capture_output=True, text=True, check=True, timeout=5)
     info = json.loads(result.stdout)["result"]["process_info"]
     group = info.get("foreground_process_group_id")
@@ -123,7 +133,7 @@ if __name__ == "__main__":
     try:
         if os.environ.get("HERDR_ENV") != "1" or not args.output.is_absolute():
             raise ValueError("Binding requires Herdr and an absolute output path")
-        result = subprocess.run([os.environ.get("HERDR_BIN_PATH", "herdr"), "agent", "get", args.pane],
+        result = subprocess.run([herdr_binary(), "agent", "get", args.pane],
                                 capture_output=True, text=True, check=True, timeout=5)
         agent = json.loads(result.stdout)["result"]["agent"]
         if agent.get("pane_id") != args.pane:

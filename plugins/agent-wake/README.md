@@ -37,7 +37,7 @@ The controller receives `HERDR_AGENT_WAKE` followed by a JSON array containing t
 - `ack --state-root <root> --wake <id>` consumes that notice, not the persistent subscription.
 - `cancel --state-root <root> --watch <id>` removes the subscription and its queued notices.
 - `status --state-root <root>` lists registrations and the durable inbox.
-- `flush` performs one recovery snapshot and delivery attempt for configured consumers.
+- `flush` performs one recovery snapshot and delivery attempt. Use `flush --state-root <root>` to recover only one configured consumer.
 
 Repeated registration of the same identity is idempotent. A changed mode or native session requires cancellation and registration after the controller reconciles ownership. Cancel before task cleanup or role retirement.
 
@@ -50,6 +50,8 @@ Each watch retains at most one notified-but-unacknowledged wake plus one coalesc
 Herdr startup runs a bounded recovery flush. A turn entirely missed while hooks were disabled cannot be reconstructed from lifecycle alone; consumers should reconcile on restart and requested status. Session identity is checked when Herdr exposes it. Human typing can still race with terminal prompt delivery; the consumer must preserve human text separately from an appended wake.
 
 The relay does not install a timer, launch an agent, approve a permission request, or require a worker skill. It depends on Herdr recognizing the agent's runtime state.
+
+Hooks and recovery skip controllers bound to a different Herdr socket; use controller bindings when sharing the plugin across sessions. Run a targeted flush from the intended session's environment. A missing inherited `HERDR_BIN_PATH` (for example, an old server exporting a replaced executable's ` (deleted)` path) falls back to the installed `herdr` on `PATH` without changing the session socket. Existing executables and failed or timed-out commands are not retried through another binary. Worker lookup failures appear in the plugin's stderr log and leave the watch available for recovery.
 
 ## Tests
 
