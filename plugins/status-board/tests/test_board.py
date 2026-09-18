@@ -956,7 +956,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         live.available = True
         live.update.return_value = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
         live.begin_input.return_value = 5
-        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)), patch.object(
+        with patch.object(board, "mouse_event", return_value=("select", 25, 34, 0)), patch.object(
             board, "send_message"
         ) as send:
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, "q", board.curses.KEY_UP,
@@ -976,7 +976,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         active = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
         live.update.side_effect = [active, active, dict(active, status="paused", input_epoch=6)] + [active] * 10
         live.begin_input.return_value = 5
-        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)):
+        with patch.object(board, "mouse_event", return_value=("select", 25, 34, 0)):
             screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, board.SHORTCUT_PREFIX, "q"],
                                       live=live, commands=False)
         live.send_input.assert_not_called()
@@ -1358,6 +1358,32 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn("Details", rendered)
         self.assertLess(rendered.index("Task purpose remains available."), rendered.index("Please clarify the boundary case."))
         self.assertEqual(compose.call_args.args[2]["id"], row["id"])
+
+    def test_interaction_controls_share_message_button_row(self):
+        for width in (60, 140):
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, width)
+            self.assertEqual(board.draw_message_box(screen, None, "draft", interact=True),
+                             [(34, 24, 34, "interact")])
+            self.assertEqual(board.draw_interaction_buttons(screen, interacting=True),
+                             [(34, 24, 44, "interact"), (34, 45, 52, "question")])
+            self.assertEqual(board.draw_message_box(screen, None, "draft"), [])
+
+    def test_composer_interact_click_saves_draft_and_forwards_without_sending(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(tasks=Path(root) / "tasks", offline=False, can_interact=True)
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, 80)
+            board.save_draft(board.draft_path(args, None), "unsent draft")
+            screen.get_wch.side_effect = [board.curses.KEY_MOUSE]
+            event = ("select", 25, 34, 0)
+            with patch.object(board.curses, "curs_set"), patch.object(
+                board, "mouse_event", return_value=event
+            ), patch.object(board, "send_message") as send:
+                result = finish_editor(screen, args, None, inline=True)
+            self.assertEqual(result, ("Draft saved; nothing sent.", event))
+            self.assertEqual(board.draft_path(args, None).read_text(), "unsent draft")
+            send.assert_not_called()
 
     def test_message_wrap_matches_full_box_interior_and_preview(self):
         for width in (60, 88, 128, 200, 320):
