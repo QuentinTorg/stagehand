@@ -91,6 +91,37 @@ class LinkTests(unittest.TestCase):
         linked.refresh()
         self.assertEqual(output.getvalue(), "")
 
+    def test_pr_cells_expose_each_host_target_without_forcing_solid_underline(self):
+        screen, output = Mock(), io.StringIO()
+        screen.getmaxyx.return_value = (20, 80)
+        linked = LinkedScreen(screen, output)
+        urls = ["https://github.com/team/a/pull/1", "https://github.carnegierobotics.com/team/b/pull/2"]
+        text, spans = board.pr_cell({"prs": urls + ["https://github.com/team/c/pull/3", "https://github.com/team/c/pull/4"]}, 10)
+        board.draw_pr_links(linked, 2, 10, text, spans, selected=True)
+        linked.refresh()
+        rendered = output.getvalue()
+        for url in urls:
+            self.assertIn(osc(url), rendered)
+        self.assertEqual(len(linked.links[2]), 2)
+        self.assertTrue(all(run[3].reverse and not run[3].underline for run in linked.links[2]))
+        self.assertNotIn("+2", rendered)  # Overflow is an in-board control, not a URL.
+        linked.erase()
+        linked.refresh()
+        screen.redrawln.assert_called_with(2, 1)
+
+    def test_wrapped_detail_pr_links_keep_their_native_targets(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (40, 60)
+        linked = LinkedScreen(screen, io.StringIO())
+        row = {"action": "", "color": 3, "objective": "", "prs": [
+            "https://github.com/team/long-repository-name/pull/1",
+            "https://github.carnegierobotics.com/team/another-repository/pull/2"]}
+        for y, (line, _, spans) in enumerate(board.detail_lines(row, 40)):
+            if spans:
+                board.draw_pr_links(linked, y, 1, line, spans)
+        self.assertEqual({run[3].hyperlink for runs in linked.links.values() for run in runs}, set(row["prs"]))
+        self.assertTrue(all(not run[3].reverse for runs in linked.links.values() for run in runs))
+
 
 @unittest.skipIf(pyte is None, "Install board requirements")
 class GridLinkTests(unittest.TestCase):

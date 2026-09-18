@@ -1028,6 +1028,25 @@ def pr_cell(row, width):
     return text, spans
 
 
+def draw_pr_links(screen, y, x, text, spans, selected=False):
+    """Expose real URLs to the viewing client, not just local click targets."""
+    runs = []
+    for left, right, url in spans:
+        label = text[left:right]
+        try:
+            screen.addnstr(y, x + left, label, right - left,
+                           curses.A_UNDERLINE | (curses.A_REVERSE if selected else 0))
+        except curses.error:
+            continue
+        if safe_link(url):
+            # Let the host render link affordances instead of baking in a solid
+            # underline. Keep a plain-curses fallback and the selected-row style.
+            runs.append((x + left, label, sum(map(cell_width, label)),
+                         TerminalStyle(reverse=selected, hyperlink=url)))
+    if isinstance(screen, LinkedScreen):
+        screen.preview_row(y, runs)
+
+
 def task_stage(row):
     if row.get("runtime_overlay"):
         return row["summary"]
@@ -1948,13 +1967,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 if row["prs"]:
                     pr_x = 5 + pr_column(*layout)
                     text, spans = pr_cell(row, pr_width)
-                    for left, right, url in spans:
-                        try:
-                            style = curses.A_UNDERLINE | (curses.A_REVERSE if i == selected else 0)
-                            screen.addnstr(y, pr_x + left, text[left:right], right - left, style)
-                            table_links.setdefault(y, []).append((pr_x + left, pr_x + right, url))
-                        except curses.error:
-                            pass
+                    draw_pr_links(screen, y, pr_x, text, spans, selected=i == selected)
+                    table_links[y] = [(pr_x + left, pr_x + right, url) for left, right, url in spans]
             draw_task_frame(screen, width, visible, selected, len(rows),
                             (f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}"
                              if rows else "Workspaces · no tasks"),
@@ -2073,11 +2087,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 if draw_button(screen, y, 1, label, active=enabled):
                     actions.append((y, 1, 1 + len(label), "setting-" + setting))
             detail_links[y] = [(left + 1, right + 1, url) for left, right, url in links]
-            for left, right, _ in links:
-                try:
-                    screen.addnstr(y, left + 1, line[left:right], right - left, curses.A_UNDERLINE)
-                except curses.error:
-                    pass
+            if links:
+                draw_pr_links(screen, y, 1, line, links)
             if wanted_preview:
                 preview_lines.append(line if isinstance(line, StyledText) else
                                      StyledText(line, [TerminalStyle()] * len(line)))
