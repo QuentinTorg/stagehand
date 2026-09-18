@@ -1155,6 +1155,23 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         for text in ("Open orchestrator", "General / new task", "What would you like to work on?"):
             self.assertIn(text, output)
 
+    def test_empty_board_can_select_tasks_by_click_or_keyboard(self):
+        for keys in ([-1, board.curses.KEY_MOUSE, ord("q")], [-1, ord("t"), ord("q")]):
+            executor, pending = Mock(), Future()
+            pending.set_result(([], [], {"status": "unknown"}))
+            executor.submit.return_value = pending
+            with patch.object(board, "mouse_event", return_value=("select", 4, 1, 0)), patch.object(
+                board, "draw_actions", wraps=board.draw_actions
+            ) as actions:
+                screen = self.run_display(executor, keys)
+            tabs = [call.args[4] for call in actions.call_args_list if call.args[1] == 1]
+            self.assertEqual(tabs[0], "controller")
+            self.assertEqual(tabs[-1], "task")
+            output = " ".join(str(call) for call in screen.addnstr.call_args_list)
+            self.assertIn("No tasks yet", output)
+            self.assertNotIn("Expand Later", output)
+            self.assertNotIn("rows 1–0", output)
+
     def test_navigation_uses_exact_workspace_id(self):
         args = SimpleNamespace(offline=False)
         row = board.task_summary(self.task(), 0, None, None, 5)

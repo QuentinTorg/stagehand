@@ -1658,7 +1658,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
     editor, editor_task = None, None
     refresh_started = None
     detail_offset, detail_task = 0, None
-    general, info, utility_view = False, True, None
+    general, info, utility_view = None, True, None
     controller_offset = None
     preview_role, preview_offset = None, None
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
@@ -1743,7 +1743,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
 
         selected = min(selected, max(0, len(rows) - 1))
         current = rows[selected] if rows else None
-        viewing_controller = general or not all_rows
+        # An empty board defaults to setup/conversation, but never overrides a
+        # tab the user explicitly selected (including after the last task ends).
+        viewing_controller = not all_rows if general is None else general
         message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
         if editor is not None and editor_task != selected_id:
@@ -1858,7 +1860,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                         except curses.error:
                             pass
             draw_task_frame(screen, width, visible, selected, len(rows),
-                            f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}",
+                            (f"Workspaces · rows {offset + 1}–{min(len(rows), offset + visible)} of {len(rows)}"
+                             if rows else "Workspaces · no tasks"),
                             automatic=requested_rows is None and requested_name is None)
             auto_x = resize_controls(width)[2]
             actions.append((6 + visible, auto_x, auto_x + 6, "auto-size"))
@@ -1876,7 +1879,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             context_actions = ([] if controller_offset is None else [("latest", "Jump to latest")])
             context_actions.append(("open-controller", "Open orchestrator ↗"))
         elif current is None:
-            context_actions = [("later", "Collapse Later" if later_open else "Expand Later")]
+            context_actions = [("later", "Collapse Later" if later_open else "Expand Later")] if all_rows else []
         else:
             context_actions = [("info", "Details")]
             context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
@@ -1925,8 +1928,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             color = 1 if controller["status"] in {"blocked", "unavailable"} else 10
         elif current is None:
             details = [(line, 0, []) for line in textwrap.wrap(
-                "Set-aside tasks keep their workspace and status. Expand Later to select one.", width - 4)]
-            title, color = "Later", 10
+                ("Set-aside tasks keep their workspace and status. Expand Later to select one." if all_rows else
+                 "Message the orchestrator below to start a task, or open the Orchestrator tab for its conversation."), width - 4)]
+            title, color = "Later" if all_rows else "No tasks yet", 10
         elif info:
             details = detail_lines(current, width, info=True)
             title, color = current["label"], 10
