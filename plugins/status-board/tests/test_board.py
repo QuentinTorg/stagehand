@@ -1193,6 +1193,23 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         for text in ("Open orchestrator", "General / new task", "What would you like to work on?"):
             self.assertIn(text, output)
 
+    def test_empty_board_can_select_tasks_by_click_or_keyboard(self):
+        for keys in ([-1, board.curses.KEY_MOUSE, ord("q")], [-1, ord("t"), ord("q")]):
+            executor, pending = Mock(), Future()
+            pending.set_result(([], [], {"status": "unknown"}))
+            executor.submit.return_value = pending
+            with patch.object(board, "mouse_event", return_value=("select", 4, 1, 0)), patch.object(
+                board, "draw_actions", wraps=board.draw_actions
+            ) as actions:
+                screen = self.run_display(executor, keys)
+            tabs = [call.args[4] for call in actions.call_args_list if call.args[1] == 1]
+            self.assertEqual(tabs[0], "controller")
+            self.assertEqual(tabs[-1], "task")
+            output = " ".join(str(call) for call in screen.addnstr.call_args_list)
+            self.assertIn("No tasks yet", output)
+            self.assertNotIn("Expand Later", output)
+            self.assertNotIn("rows 1–0", output)
+
     def test_navigation_uses_exact_workspace_id(self):
         args = SimpleNamespace(offline=False)
         row = board.task_summary(self.task(), 0, None, None, 5)
@@ -1509,6 +1526,50 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         line = board.table_line(row, 140, 9, 4, 6)
         self.assertIn("Ready   You   #123", line)
         self.assertEqual(line.index("#123"), board.pr_column(140, 9, 4, 6))
+
+    def test_wide_columns_use_spare_space_without_truncating_fitting_content(self):
+        for workspace, status in ((100, 60), (35, 160), (160, 35)):
+            row = {"label": "W" * workspace, "stage": "S" * status, "roles": "You", "pr": "#123"}
+            layout = (240, 9, 4, status, workspace)
+            line = board.table_line(row, *layout)
+            self.assertIn(row["label"], line)
+            self.assertIn(row["stage"], line)
+            self.assertNotIn("…", line)
+            self.assertEqual(board.pr_column(*layout) + 9, 240)
+            self.assertLessEqual(len(line), 240)
+
+    def test_manual_columns_clamp_to_pane_and_keep_links_aligned(self):
+        row = {"label": "W" * 100, "stage": "S" * 100, "roles": "You", "pr": "#123"}
+        for width in (52, 80, 140, 300):
+            for requested in (-100, 24, 90, 1000):
+                layout = (width, 9, 4, 100, 100, requested)
+                name, status, _ = board.columns(*layout)
+                line = board.table_line(row, *layout)
+                self.assertLessEqual(len(line), width)
+                self.assertEqual(line[board.pr_column(*layout):], "#123")
+                if status:
+                    self.assertGreaterEqual(name, 24)
+                    self.assertGreaterEqual(status, 16)
+
+    def test_workspace_column_drag_updates_during_motion_and_auto_restores(self):
+        executor, pending = Mock(), Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(label="W" * 70, summary="S" * 65, color=2)
+        row["saved_display"].update(summary=row["summary"], color=2)
+        pending.set_result(([row], [], {"status": "idle"}))
+        executor.submit.return_value = pending
+        width = 180
+        initial = 5 + board.columns(width - 8, 9, len(board.task_next(row)), 65, 70)[0]
+        auto_x = board.resize_controls(width)[2]
+        events = [("select", initial, 4, 0), ("motion", 105, 4, 0),
+                  ("release", 105, 4, 0), ("select", auto_x + 1, 7, 0)]
+        with patch.object(board, "mouse_event", side_effect=events):
+            screen = self.run_display(executor, [-1, *([board.curses.KEY_MOUSE] * 4), ord("q")], (60, width))
+        dividers = [call.args[1] for call in screen.addnstr.call_args_list
+                    if call.args[0] == 4 and call.args[2] == "↔"]
+        self.assertIn(105, dividers)
+        self.assertGreaterEqual(dividers.count(105), 2)  # Motion paints before release.
+        self.assertEqual(dividers[-1], initial)
 
     def test_pr_overflow_is_explicit_and_never_links_partial_ids(self):
         row = {"prs": [f"https://github.com/team/repo/pull/{number}" for number in (123456, 234567, 345678, 456789)]}
