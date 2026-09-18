@@ -127,6 +127,65 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.update(("new", "workspace"), (80, 20))["cells"], ())
         self.assertEqual(view.scroll_delta, 0)
 
+    def test_input_requires_explicit_consent_and_never_survives_attachment_changes(self):
+        view = terminal.LivePreview()
+        view.available = False
+        self.assertIsNone(view.begin_input())
+        view._publish(0, status="live")
+        self.assertFalse(view.send_input("y\r", 0))
+        epoch = view.begin_input()
+        self.assertTrue(view.send_input("hello", epoch))
+        self.assertFalse(view.send_input("x" * 65536, epoch))
+        self.assertEqual(view.pending_input, "hello")
+        view.end_input()
+        self.assertEqual(view.pending_input, "")
+        self.assertFalse(view.send_input("y", epoch))
+        for change in (lambda: view._publish(view.generation, status="paused"),
+                       lambda: view._publish(view.generation, status="unavailable"),
+                       lambda: view.update(("reviewer", "workspace"), (80, 20)), view.retry):
+            view._publish(view.generation, status="live")
+            old = view.begin_input()
+            self.assertTrue(view.send_input("answer\r", old))
+            change()
+            self.assertEqual(view.pending_input, "")
+            view._publish(view.generation, status="live")
+            self.assertFalse(view.send_input("answer\r", old))
+
+    async def test_input_reaches_only_current_attachment_and_is_not_replayed(self):
+        view = terminal.LivePreview()
+        view.viewer, view.available = "viewer", False
+        state = snapshot()
+        child = Mock()
+        child.stdout, child.stderr = asyncio.StreamReader(), asyncio.StreamReader()
+        child.stdout.feed_data((json.dumps(frame()) + "\n").encode())
+        child.stdin.drain = AsyncMock()
+        child.stdin.close.side_effect = child.stdout.feed_eof
+        child.wait = AsyncMock(return_value=0)
+        with patch.object(terminal, "read_snapshot", AsyncMock(side_effect=lambda: state)), patch.object(
+            terminal.asyncio, "create_subprocess_exec", AsyncMock(return_value=child)
+        ):
+            view.update(("author", "workspace"), (20, 5))
+            runner = asyncio.create_task(view._run())
+            try:
+                for _ in range(100):
+                    if view.state["status"] == "live":
+                        break
+                    await asyncio.sleep(.02)
+                epoch = view.begin_input()
+                self.assertIsNotNone(epoch)
+                self.assertTrue(view.send_input("\x1b[1;3A", epoch))
+                self.assertTrue(view.send_input("answer\r", epoch))
+                await asyncio.sleep(.1)
+                commands = [json.loads(call.args[0]) for call in child.stdin.write.call_args_list]
+                self.assertEqual(commands, [{"type": "terminal.input", "text": "\x1b[1;3Aanswer\r"}])
+                self.assertTrue(view.send_input("do not send", epoch))
+                view.update(None, (20, 5))
+                await asyncio.sleep(.1)
+                child.stdin.write.assert_called_once()
+            finally:
+                view.stopping.set()
+                await runner
+
     def test_bound_controller_preview_accepts_restored_unnamed_session(self):
         value = snapshot()
         agent = value["agents"][0]

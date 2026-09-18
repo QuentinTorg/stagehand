@@ -910,6 +910,40 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn(board.CONTROLLER_BINDING, targets)
         self.assertIsNone(targets[-1])
 
+    def test_interaction_routes_keys_until_explicit_exit_not_to_composer(self):
+        executor, live = Mock(), Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "blocked"}))
+        executor.submit.return_value = ready
+        live.available = True
+        live.update.return_value = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
+        live.begin_input.return_value = 5
+        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)), patch.object(
+            board, "send_message"
+        ) as send:
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, "q", board.curses.KEY_UP,
+                                                "\r", "\x1d", board.SHORTCUT_PREFIX, "q"],
+                                      live=live, commands=False)
+        self.assertEqual([call.args for call in live.send_input.call_args_list], [("q", 5), ("\x1b[A", 5), ("\r", 5)])
+        live.end_input.assert_called()
+        send.assert_not_called()
+        self.assertIn("INTERACTING", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
+    def test_interaction_stops_when_preview_loses_focus(self):
+        executor, live = Mock(), Mock()
+        ready = Future()
+        ready.set_result(([], [], {"status": "blocked"}))
+        executor.submit.return_value = ready
+        live.available = True
+        active = {"status": "live", "message": "Live", "cells": (), "input_epoch": 5}
+        live.update.side_effect = [active, active, dict(active, status="paused", input_epoch=6)] + [active] * 10
+        live.begin_input.return_value = 5
+        with patch.object(board, "mouse_event", return_value=("select", 3, 3, 0)):
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, -1, board.SHORTCUT_PREFIX, "q"],
+                                      live=live, commands=False)
+        live.send_input.assert_not_called()
+        self.assertIn("Interaction ended", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
     def test_live_target_never_guesses_unassigned_role_or_workspace(self):
         row = {"agent_names": {"author": "a", "reviewer": "r"}, "workspace_id": "work", "next": "reviewer"}
         self.assertEqual(board.live_target(row, None), ("r", "work"))
