@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show saved task progress and route human messages to the orchestrator."""
+"""Show saved task progress and message the selected agent or orchestrator."""
 
 import argparse
 import base64
@@ -570,12 +570,24 @@ def copy_preview_text(text):
     return "Copy requested · Esc or click to resume · Shift-drag if clipboard is unavailable"
 
 
+def assigned_roles(names):
+    """Keep familiar tabs ordered, without excluding other task-assigned roles."""
+    names = {role: name for role, name in mapping(names).items()
+             if isinstance(role, str) and isinstance(name, str) and name.strip()}
+    return [role for role in ROLES if role in names] + sorted(set(names) - set(ROLES))
+
+
+def conversation_role(row, role=None):
+    roles = assigned_roles(row.get("agent_names", {}) if row else {})
+    return role or (row.get("next") if row and row.get("next") in roles else next(iter(roles), None))
+
+
 def live_target(current, role, controller=False):
     if controller:
         return CONTROLLER_BINDING
     names = current.get("agent_names", {}) if current else {}
-    roles = [name for name in ROLES if names.get(name)]
-    role = role or (current.get("next") if current and current.get("next") in roles else next(iter(roles), None))
+    roles = assigned_roles(names)
+    role = conversation_role(current, role)
     if role not in roles or not current.get("workspace_id"):
         return None
     return names[role], current["workspace_id"]
@@ -700,7 +712,7 @@ def task_summary(task, modified, workspaces, agents, now):
     summary = clean(state.get("summary"))
     details = summary or stage.replace("-", " ")
     expected = state.get("next_role")
-    if stage in STATES and expected not in (*ROLES, "orchestrator"):
+    if stage in STATES and expected not in (*ROLES, *assigned_roles(task.get("agents")), "orchestrator"):
         expected = None
     if stage not in STATES and not expected:
         expected = mapping(task.get("event_recovery")).get("expected_role")
@@ -712,7 +724,7 @@ def task_summary(task, modified, workspaces, agents, now):
     if next_actor == "human":
         next_actor = "you"
     role_text, activity, runtime_states, runtime_ids = [], {}, {}, {}
-    for role in ROLES:
+    for role in assigned_roles(task.get("agents")):
         identity = mapping(task.get("agents")).get(role)
         if not identity:
             continue
@@ -865,10 +877,10 @@ def controller_snapshot(offline=False):
 
 def worker_snapshot(row, role=None, offline=False):
     names = row.get("agent_names", {})
-    roles = [candidate for candidate in ROLES if names.get(candidate)]
+    roles = assigned_roles(names)
     if role is not None and role not in roles:
         return {"role": role, "status": "unavailable", "output": "This task no longer has that agent role. Open Details to check its ownership."}
-    role = role if role in roles else row.get("next") if row.get("next") in roles else next(iter(roles), None)
+    role = conversation_role(row, role)
     preview = {"role": role, "status": "unavailable", "output": "No managed agent is available for this workspace."}
     if offline or os.environ.get("HERDR_ENV") != "1":
         return dict(preview, status="offline", output="Recent conversation is unavailable in offline mode.")
@@ -898,7 +910,7 @@ def activity_label(activity, interval, animate=True, now=None):
     if status == "working":
         frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         return (frames[int(now * 5) % len(frames)] + " " if animate else "") + "Working"
-    return {"idle": "Ready", "done": "Ready", "blocked": "Blocked · open orchestrator",
+    return {"idle": "Ready", "done": "Ready", "blocked": "Blocked · use Interact",
             "offline": "Offline", "unavailable": "Unavailable"}.get(status, "Checking status")
 
 
@@ -964,18 +976,18 @@ def terminal_lines(output, width):
 
 
 def help_lines(width, warnings):
-    text = ["Typing goes to the message box unless you explicitly choose Interact. Composer messages go only to the orchestrator.",
+    text = ["Typing messages the selected agent role. Details and Orchestrator message the orchestrator; the box names its recipient.",
             "Interact (Ctrl-P then e): answer the visible agent directly using typing, arrows, Enter, and Esc. Alt+↑ opens Codex questions. Click Finish interacting to return to read-only viewing.",
             "Ctrl-P, then a key: run a board command. All navigation keys listed below require this prefix; mouse controls do not.",
             "Esc cancels a pending command or saves and unfocuses the composer. It does not enable bare-letter shortcuts.",
-            "", "Tasks: select a workspace for recent conversation; choose Author/Reviewer when available.",
+            "", "Tasks: select a workspace, then an assigned role (Author, Reviewer, Worker, or another role) for its conversation.",
             "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
             "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
             "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
-            "Clear removes only the current draft. Task and general drafts stay separate.",
+            "Clear removes only the current draft. Each task/recipient and general chat has a separate draft.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
             "Drag the Workspaces bottom border for height or the Workspace/Status header divider for column widths. Auto resets both; sizing lasts for this board session.",
@@ -999,7 +1011,7 @@ def settings_layout(settings, width):
          "Allow Enter / Send during an active turn. Enable only for agents that accept mid-turn input. "
          "Blocked, unknown, or unavailable agents still reject messages."),
         ("animate_activity", "2 Animation", "On" if settings["animate_activity"] else "Off",
-         "Show rotating dots while the orchestrator is working. This indicates activity, not completion progress; "
+         "Show rotating dots while the message recipient is working. This indicates activity, not completion progress; "
          "stale observations stop the animation."),
         ("live_preview", "3 Preview", "Live" if settings["live_preview"] else "Snapshots",
          "Live resizes the selected agent to the preview while this pane is focused; leaving releases it. "
@@ -1205,7 +1217,13 @@ def clicked_row(x, y, width, offset, visible, count, expanded=None):
 def draft_path(args, row):
     if row is None:
         return args.tasks.parent / "board-drafts" / "orchestrator.txt"
-    identity = hashlib.sha256(row["id"].encode()).hexdigest()
+    key = row["id"]
+    if row.get("message_role"):
+        # Preserve existing orchestrator drafts; direct recipients get separate
+        # files so changing tabs or reassigning a role cannot redirect a draft.
+        key = json.dumps([key, row.get("workspace_id"), row["message_role"],
+                          row.get("agent_names", {}).get(row["message_role"])])
+    identity = hashlib.sha256(key.encode()).hexdigest()
     return args.tasks.parent / "board-drafts" / (identity + ".txt")
 
 
@@ -1373,35 +1391,63 @@ class ViewerState:
         return active + ([None] + (later if expanded else []) if later else [])
 
 
+def message_recipient(row):
+    return clean(row["message_role"].replace("_", " ")) if row and row.get("message_role") else "orchestrator"
+
+
+def message_route(row, role=None):
+    if row is None or role is None:
+        return row
+    return dict(row, message_role=role)
+
+
+def message_identity(row):
+    if not row or not row.get("message_role"):
+        return controller_identity()
+    role = row["message_role"]
+    expected = row.get("runtime_ids", {}).get(role)
+    if not expected or not expected[1] or not expected[2]:
+        raise ValueError("No verified agent is assigned to this role")
+    agent = json.loads(herdr_call("agent", "get", expected[1]))["result"]["agent"]
+    actual = [agent.get("name"), agent.get("pane_id"), agent.get("terminal_id"),
+              mapping(agent.get("agent_session")).get("value")]
+    if (actual != expected or not row.get("workspace_id")
+            or agent.get("workspace_id") != row["workspace_id"]
+            or row.get("agent_names", {}).get(role) != actual[0]):
+        raise ValueError("Agent changed since this conversation was selected")
+    return agent
+
+
 def send_message(args, row, message):
     if args.offline or os.environ.get("HERDR_ENV") != "1":
         return False, "Sending requires a live Herdr session. Draft kept."
     # The controller already owns the task record; send identity, not a duplicate brief.
     prompt = message
-    if row is not None:
+    recipient = message_recipient(row)
+    if row is not None and not row.get("message_role"):
         target = row['workspace_id'] or f"task: {row['id']}"
         prompt = f"Human message about {row['label']} ({target}):\n\n{message}"
     command = [os.environ.get("HERDR_BIN_PATH", "herdr"), "agent"]
     try:
-        agent = controller_identity()
+        agent = message_identity(row)
         status = agent.get("agent_status")
         if status == "blocked":
-            return False, "Orchestrator is blocked. Open its native session; draft kept."
+            return False, f"{recipient.capitalize()} is blocked. Use Interact or open its native session; draft kept."
         if status == "working" and not getattr(args, "send_while_working", False):
-            return False, "Orchestrator is working. Enable Send while working in Settings, or wait. Draft kept."
+            return False, f"{recipient.capitalize()} is working. Enable Send while working in Settings, or wait. Draft kept."
         if status not in {"idle", "done", "working"}:
-            return False, "Orchestrator status is uncertain. Nothing sent; draft kept."
+            return False, f"{recipient.capitalize()} status is uncertain. Nothing sent; draft kept."
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        return False, "Cannot verify the orchestrator. Nothing sent; draft kept."
+        return False, f"Cannot verify the {recipient}. Nothing sent; draft kept."
     try:
         # No automatic retry: a timeout may occur after Herdr has delivered the input.
         result = subprocess.run(command + ["prompt", agent["pane_id"], prompt],
                                 capture_output=True, text=True, timeout=10, check=True)
         if json.loads(result.stdout)["result"]["type"] == "agent_prompted":
-            return True, "Delivered to orchestrator (not yet processed)."
+            return True, f"Delivered to {recipient} (not yet processed)."
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         pass
-    return False, "Delivery unconfirmed. Check orchestrator before retrying; draft kept."
+    return False, f"Delivery unconfirmed. Check {recipient} before retrying; draft kept."
 
 
 def message_layout(message, height, width):
@@ -1443,7 +1489,7 @@ def draw_interaction_buttons(screen, interacting=False):
 def draw_message_box(screen, row, message, active=False, can_send=None, activity="", interact=False):
     height, width = screen.getmaxyx()
     preview, _, top, visible, line_width = message_layout(message, height, width)
-    title = "Message orchestrator · " + (row["label"] if row else "General / new task")
+    title = f"Message {message_recipient(row)} · " + (row["label"] if row else "General / new task")
     if activity:
         # Keep live state visible even when the workspace label must be shortened.
         title = clipped(title, max(1, width - 10 - len(activity))) + " · " + activity
@@ -1453,7 +1499,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
              + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
-        lines[1] = "│ " + ("Tell the orchestrator what you need for this workspace…" if row else "Ask a question, finish setup, or start a new task…")
+        lines[1] = "│ " + (f"Tell the {message_recipient(row)} what you need…" if row else "Ask a question, finish setup, or start a new task…")
     box_width = max(4, width - 3)
     heading = clipped(title, max(1, box_width - 4))
     lines[0] = "┌ " + heading + " " + "─" * max(0, box_width - len(heading) - 4) + "┐"
@@ -1511,7 +1557,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             content = []
         else:
             screen.erase()
-            content = [(0, "MESSAGE ORCHESTRATOR"), (1, "About: " + (row["label"] if row else "General / new task")),
+            content = [(0, "MESSAGE " + message_recipient(row).upper()), (1, "About: " + (row["label"] if row else "General / new task")),
                        (2, "Repository: " + (row["repository"] if row else "Not task-specific"))]
         content += [(height - 2, note), (height - 1, " Type to message · Ctrl-P then a key for board commands" if inline else " [ Send ]  [ Back ]")]
         for y, text in content:
@@ -1602,7 +1648,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             try:
                 screen.move(height - 2, 0)
                 screen.clrtoeol()
-                screen.addnstr(height - 2, 1, "Sending to orchestrator…", max(0, width - 2))
+                screen.addnstr(height - 2, 1, f"Sending to {message_recipient(row)}…", max(0, width - 2))
                 screen.refresh()
             except curses.error:
                 pass
@@ -1927,17 +1973,24 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         # An empty board defaults to setup/conversation, but never overrides a
         # tab the user explicitly selected (including after the last task ends).
         viewing_controller = not all_rows if general is None else general
-        message_target = None if viewing_controller else current
         selected_id = current["id"] if current else None
-        if editor is not None and editor_task != selected_id:
-            # Disappearing tasks retain their cached drafts and save deadlines;
-            # never redirect an editor's text into the newly selected workspace.
-            editor.close()
-            editor = None
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
             info = True
+        message_role = (conversation_role(current, preview_role)
+                        if current and not viewing_controller and not info and not utility_view else None)
+        message_target = None if viewing_controller else message_route(current, message_role)
+        message_key = (draft_path(args, message_target),
+                       tuple(current.get("runtime_ids", {}).get(message_role, ())) if message_role else ())
+        if editor is not None and editor_task != message_key:
+            # A changed role/session must not inherit the previous recipient's
+            # active editor. Cached drafts retain their normal save deadlines.
+            editor.close()
+            editor = None
+        if message_role:
+            recipient_activity = dict(activity, status=current.get("runtime_states", {}).get(message_role, "unavailable"))
+            args.activity_label = activity_label(recipient_activity, args.interval, viewer.settings["animate_activity"])
 
         # A slow inventory must not delay a requested conversation. Keep at most
         # one preview read in flight and discard its display when selection changes.
@@ -2059,7 +2112,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             context_actions = [("later", "Collapse Later" if later_open else "Expand Later")] if all_rows else []
         else:
             context_actions = [("info", "Details")]
-            context_actions += [("role-" + role, role.replace("_", " ").title()) for role in ROLES
+            context_actions += [("role-" + role, clean(role.replace("_", " ").title())) for role in assigned_roles(current.get("agent_names"))
                                 if current.get("agent_names", {}).get(role)]
             context_actions += [("aside", "Return to active" if current["id"] in viewer.later else "Set aside"),
                                 ("workspace", "Open workspace ↗")]
@@ -2168,7 +2221,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             path = draft_path(args, message_target)
             draft = cached_draft(drafts, path).text
             if interaction:
-                put(message_top, "Direct agent input — not an orchestrator message", 10, bold=True)
+                put(message_top, "Direct terminal input — not a composed message", 10, bold=True)
                 put(message_top + 1, "Type and use arrows / Enter to answer the visible prompt. Esc goes to the agent.")
                 put(message_top + 2, "Alt+↑ opens Codex's queued questions. Click Finish interacting to return to the board.")
                 put(message_top + 3, "Answers and approvals are your explicit input. Your message draft is preserved.")
@@ -2239,7 +2292,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             if isinstance(key, InsertText) or (not command and key not in ("\x1b", 27)):
                 selection = None
                 editor = compose(screen, args, message_target, inline=True, initial_key=key, input_reader=input_reader, drafts=drafts)
-                editor_task = selected_id
+                editor_task = message_key
                 continue
             # Existing navigation is reachable only after an explicit prefix.
             key = ord(key) if isinstance(key, str) else key
@@ -2277,7 +2330,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             action = "info"
         elif key == ord("m"):
             editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
-            editor_task = selected_id
+            editor_task = message_key
         elif key == ord("e") and use_live and wanted_preview:
             action = "interact"
         elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("j"), ord("k"), curses.KEY_PPAGE, curses.KEY_NPAGE, ord("["), ord("]")):
@@ -2319,7 +2372,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                         else:
                             selection = None
                             editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
-                            editor_task = selected_id
+                            editor_task = message_key
                     continue
                 if kind in {"select", "wheel"}:
                     selection = None
@@ -2361,7 +2414,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                         editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts,
                                          send_now=y == height - 4 and 3 <= x <= 10,
                                          clear_now=y == height - 4 and 12 <= x <= 22)
-                        editor_task = selected_id
+                        editor_task = message_key
                 elif kind == "select":
                     index = clicked_row(x, y, width, offset, visible, len(rows)) if show_tasks else None
                     if index is not None:

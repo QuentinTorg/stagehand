@@ -86,22 +86,24 @@ Choose **Settings → Preview: Snapshots** to leave source dimensions untouched.
 
 Preferences persist in private `board-state.json` beside the task directory, separate from message drafts. A changed task summary, status, next action, scope, PR linkage, or observed agent activity returns a task to the main list with a notice. Viewing a task, renaming a workspace, and merely rewriting YAML do not. Activity detection uses board refreshes, not a new worker protocol; a whole turn missed between refreshes or while the board is closed requires a changed saved task result to resurface it.
 
-## Message the orchestrator
+## Message an agent
 
-Outside explicit interaction mode, start typing to write in the message box, or focus it with a plain click in preview text or the box itself. Dragging preview text still selects it. The selected task and conversation keep refreshing while you write. Enter or Send submits and leaves the composer ready for a follow-up; Ctrl-J inserts a newline (Ctrl-G also sends). Esc or clicking another task keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. The board adds only the workspace name and Herdr workspace ID (task ID only if no workspace exists), then sends your exact text to the verified bound controller pane. The composer never contacts a worker directly or treats delivery as workflow progress.
+The box names its recipient. An agent-role tab (Author, Reviewer, Worker, or any other assigned role) sends your exact message directly to that agent. **Details** routes task-related messages to the orchestrator with the workspace name and ID; **Orchestrator** sends general messages without a task header. Missing or changed recipients leave the draft unsent, never reroute it. Lifecycle hooks continue to wake the orchestrator; delivery itself is not workflow progress.
+
+Outside explicit interaction mode, start typing or click the preview text or message box. Dragging preview text still selects it. Enter or Send submits and leaves the composer ready for a follow-up; Ctrl-J inserts a newline (Ctrl-G also sends). Esc or clicking another view keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. Use **Interact** for native questions and permission dialogs, not ordinary messages.
 
 Pastes and repeated editing keys are processed in batches. Bracketed pastes preserve newlines without sending or triggering shortcuts; press Enter afterward to send. Terminals that do not support bracketed paste cannot distinguish pasted Enter from a typed Enter.
 
 Draft text stays in memory while editing and saves after about 200 ms without changes, or about once a second during continuous typing. Sending, leaving the editor, and closing the board save immediately. Cursor-only movement does not write to disk. An abrupt process or machine failure can lose the most recent unsaved edits.
 
-Drafts are saved per task privately under `board-drafts/` beside the configured task directory and restored when you reopen the composer. Clicking away or switching tasks never sends; **x Clear** discards only the selected task's draft. Escape leaves editing but does not close the board. Successful delivery clears the draft. Working orchestrators accept messages only when **Send while working** is enabled; blocked, unknown, or missing orchestrators leave the draft unsent. Unconfirmed delivery keeps it too: inspect the orchestrator before retrying to avoid duplicate requests. There is no automatic retry or queue. Avoid typing simultaneously in the orchestrator terminal while sending from the board, since both use its interactive input.
+Drafts are saved per task and recipient privately under `board-drafts/` beside the task directory; existing task drafts remain addressed to the orchestrator. Switching views never sends; **x Clear** discards only the current draft. Successful delivery clears it. Working agents accept messages only when **Send while working** is enabled; blocked, unknown, or missing agents leave the draft unsent. Unconfirmed delivery keeps it too: inspect the recipient before retrying to avoid duplicates. There is no automatic retry or queue. Avoid typing simultaneously in the recipient's native terminal while sending from the board.
 
 ## Settings and activity
 
 Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
-- **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the orchestrator working. Turn it off for a static Working label. The indicator is visible in both task and orchestrator views, including while typing. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
+- **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the message recipient working. Turn it off for a static Working label. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
 
 - **Preview** (default Live): use a focus-scoped live attachment, or Snapshots to avoid resizing the source. This never changes messaging permissions.
 

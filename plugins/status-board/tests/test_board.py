@@ -1819,6 +1819,116 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertEqual(command[1:4], ["agent", "prompt", "control:p1"])
         self.assertEqual(command[-1], f"Human message about {row['label']} (w1):\n\n{message}")
 
+    def direct_recipient(self, role, status="idle"):
+        agent = {"name": "task-" + role, "workspace_id": "w1", "pane_id": "w1:p2",
+                 "terminal_id": "terminal", "agent_session": {"value": "session"}, "agent_status": status}
+        task = self.task()
+        task["agents"] = {role: agent["name"]}
+        row = board.task_summary(task, 0, None, [agent], 5)
+        return board.message_route(row, role), agent
+
+    def test_all_assigned_roles_receive_exact_messages_without_controller_relay(self):
+        args = SimpleNamespace(offline=False)
+        message = 'Please investigate first.\nDo not implement: "scope".'
+        for role in ("author", "reviewer", "worker", "workspace_agent", "investigator"):
+            with self.subTest(role=role):
+                row, agent = self.direct_recipient(role)
+                self.assertIn(role, board.assigned_roles(row["agent_names"]))
+                self.assertEqual(board.live_target(row, role), (agent["name"], "w1"))
+                response = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+                with patch.dict(os.environ, HERDR_ENV="1"), patch.object(
+                    board, "herdr_call", return_value=board.json.dumps({"result": {"agent": agent}})
+                ) as lookup, patch.object(board.subprocess, "run", return_value=response) as run, patch.object(
+                    board, "controller_identity"
+                ) as controller:
+                    success, note = board.send_message(args, row, message)
+                self.assertTrue(success)
+                self.assertIn(board.message_recipient(row), note)
+                lookup.assert_called_once_with("agent", "get", "w1:p2")
+                self.assertEqual(run.call_args.args[0][1:], ["agent", "prompt", "w1:p2", message])
+                controller.assert_not_called()
+
+    def test_direct_messaging_rejects_changed_identity_or_missing_role(self):
+        row, agent = self.direct_recipient("worker")
+        variants = [dict(agent, **{field: "replacement"})
+                    for field in ("name", "workspace_id", "pane_id", "terminal_id")]
+        variants.append(dict(agent, agent_session={"value": "replacement"}))
+        for changed in variants:
+            with patch.dict(os.environ, HERDR_ENV="1"), patch.object(
+                board, "herdr_call", return_value=board.json.dumps({"result": {"agent": changed}})
+            ), patch.object(board.subprocess, "run") as send, patch.object(board, "controller_identity") as controller:
+                self.assertFalse(board.send_message(SimpleNamespace(offline=False), row, "hello")[0])
+                send.assert_not_called()
+                controller.assert_not_called()
+        with patch.dict(os.environ, HERDR_ENV="1"), patch.object(board, "herdr_call") as lookup:
+            row["runtime_ids"] = {}
+            self.assertFalse(board.send_message(SimpleNamespace(offline=False), row, "hello")[0])
+            lookup.assert_not_called()
+
+    def test_direct_messaging_preserves_working_setting_and_blocked_dialogs(self):
+        for enabled in (False, True):
+            for status in ("idle", "done", "working", "blocked", "unknown"):
+                row, agent = self.direct_recipient("worker", status)
+                response = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+                with patch.dict(os.environ, HERDR_ENV="1"), patch.object(
+                    board, "herdr_call", return_value=board.json.dumps({"result": {"agent": agent}})
+                ), patch.object(board.subprocess, "run", return_value=response) as send:
+                    success, note = board.send_message(SimpleNamespace(offline=False, send_while_working=enabled), row, "hello")
+                expected = status in {"idle", "done"} or status == "working" and enabled
+                self.assertEqual(success, expected)
+                self.assertEqual(send.call_count, int(expected))
+                if status == "blocked":
+                    self.assertIn("Interact", note)
+
+    def test_direct_delivery_failure_preserves_draft_without_retry(self):
+        row, agent = self.direct_recipient("worker")
+        with tempfile.TemporaryDirectory() as root:
+            args = SimpleNamespace(offline=False, tasks=Path(root) / "tasks")
+            screen = Mock()
+            screen.getmaxyx.return_value = (38, 100)
+            board.save_draft(board.draft_path(args, row), "unsent")
+            screen.get_wch.side_effect = ["\r", "\x1b"]
+            with patch.dict(os.environ, HERDR_ENV="1"), patch.object(board.curses, "curs_set"), patch.object(
+                board, "herdr_call", return_value=board.json.dumps({"result": {"agent": agent}})
+            ), patch.object(board.subprocess, "run", side_effect=board.subprocess.TimeoutExpired("herdr", 10)) as send:
+                finish_editor(screen, args, row, inline=True)
+            send.assert_called_once()
+            self.assertEqual(board.draft_path(args, row).read_text(), "unsent")
+
+    def test_direct_drafts_are_separate_from_each_other_and_existing_task_draft(self):
+        args = SimpleNamespace(tasks=Path("/control/tasks"))
+        row, _ = self.direct_recipient("worker")
+        paths = {board.draft_path(args, None), board.draft_path(args, board.message_route(row, "worker")),
+                 board.draft_path(args, dict(row, message_role=None)),
+                 board.draft_path(args, board.message_route(row, "reviewer")),
+                 board.draft_path(args, dict(row, workspace_id="w2")),
+                 board.draft_path(args, dict(row, agent_names={"worker": "other"}))}
+        self.assertEqual(len(paths), 6)
+        original = board.hashlib.sha256(row["id"].encode()).hexdigest() + ".txt"
+        self.assertEqual(board.draft_path(args, dict(row, message_role=None)).name, original)
+
+    def test_role_tab_messages_worker_or_custom_role_and_details_messages_controller(self):
+        for role in ("worker", "investigator"):
+            with self.subTest(role=role):
+                row, _ = self.direct_recipient(role, "working")
+                row.pop("message_role")
+                executor, live = Mock(), Mock()
+                ready = Future()
+                ready.set_result(([row], [], {"status": "idle"}))
+                executor.submit.return_value = ready
+                live.available = True
+                live.update.return_value = {"status": "live", "message": "Live", "cells": ()}
+                with patch.object(board, "mouse_event", return_value=("select", 16, 8, 0)), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, "a", "i", "d", "q"],
+                                              live=live, commands=False,
+                                              editor_keys=["\r", board.SHORTCUT_PREFIX, "\r", board.SHORTCUT_PREFIX])
+                self.assertEqual([(call.args[1].get("message_role"), call.args[2])
+                                  for call in send.call_args_list], [(role, "a"), (None, "d")])
+                headings = [call.args[2] for call in screen.addnstr.call_args_list if len(call.args) > 2]
+                self.assertTrue(any(f"Message {role}" in text and "Working" in text for text in headings))
+
     def test_general_message_has_no_task_context_and_its_own_draft(self):
         args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
         row = board.task_summary(self.task(), 0, None, None, 5)
