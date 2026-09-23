@@ -219,6 +219,44 @@ class MessageInputTests(unittest.TestCase):
         self.assertTrue(all(len(chunk) <= 8192 for chunk in chunks))
         self.assertEqual(len(chunks), 3)
 
+    def test_safe_paste_keeps_unmarked_newlines_until_explicit_send(self):
+        for submit in ("\x07", "button"):
+            with self.subTest(submit=submit), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=True, safe_paste=True)
+                reader, _ = self.reader([*"first\rsecond\nthird", curses.KEY_ENTER, board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 100)
+                with patch.object(board.curses, "curs_set"), patch.object(board, "send_message") as send:
+                    for _ in board.compose(reader.screen, args, None, input_reader=reader):
+                        pass
+                send.assert_not_called()
+                expected = "first\nsecond\nthird\n"
+                self.assertEqual(board.draft_path(args, None).read_text(), expected)
+                reader, _ = self.reader([board.SHORTCUT_PREFIX] if submit == "button" else [submit, board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 100)
+                with patch.object(board.curses, "curs_set"), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    for _ in board.compose(reader.screen, args, None, input_reader=reader, send_now=submit == "button"):
+                        pass
+                send.assert_called_once_with(args, None, expected)
+
+    def test_default_enter_sends_and_safe_mode_is_visible_in_composer(self):
+        self.assertFalse(board.VIEWER_DEFAULTS["safe_paste"])
+        for safe in (False, True):
+            with self.subTest(safe=safe), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=True, safe_paste=safe)
+                board.save_draft(board.draft_path(args, None), "hello")
+                reader, _ = self.reader(["\r", board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 140)
+                with patch.object(board.curses, "curs_set"), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    for _ in board.compose(reader.screen, args, None, inline=True, input_reader=reader):
+                        pass
+                self.assertEqual(send.call_count, int(not safe))
+                text = " ".join(str(call) for call in reader.screen.addnstr.call_args_list)
+                self.assertIn(board.message_keys(safe), text)
+
     def test_real_terminal_paste_is_batched_and_only_explicit_enter_sends(self):
         # Isolate the terminal and mock delivery: no live agent receives test text.
         source = '''

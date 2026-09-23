@@ -92,7 +92,7 @@ The box names its recipient. An agent-role tab (Author, Reviewer, Worker, or any
 
 Outside explicit interaction mode, start typing or click the preview text or message box. Dragging preview text still selects it. Enter or Send submits and leaves the composer ready for a follow-up; Ctrl-J inserts a newline (Ctrl-G also sends). Esc or clicking another view keeps the draft. Arrow keys, Home/End, Backspace, and Delete edit text. Use **Interact** for native questions and permission dialogs, not ordinary messages.
 
-Pastes and repeated editing keys are processed in batches. Bracketed pastes preserve newlines without sending or triggering shortcuts; press Enter afterward to send. Terminals that do not support bracketed paste cannot distinguish pasted Enter from a typed Enter.
+Pastes and repeated editing keys are processed in batches. Bracketed pastes preserve newlines without sending or triggering shortcuts; press Enter afterward to send. Clients that strip paste markers cannot distinguish pasted Enter from a typed Enter; enable **Safe paste** for those clients.
 
 Draft text stays in memory while editing and saves after about 200 ms without changes, or about once a second during continuous typing. Sending, leaving the editor, and closing the board save immediately. Cursor-only movement does not write to disk. An abrupt process or machine failure can lose the most recent unsaved edits.
 
@@ -100,12 +100,13 @@ Drafts are saved per task and recipient privately under `board-drafts/` beside t
 
 ## Settings and activity
 
-Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
+Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3 / 4** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
 - **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the message recipient working. Turn it off for a static Working label. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
 
 - **Preview** (default Live): use a focus-scoped live attachment, or Snapshots to avoid resizing the source. This never changes messaging permissions.
+- **Safe paste** (default off): Enter inserts a newline instead of sending, protecting against unmarked pasted newlines. Use **Send** or **Ctrl-G** to submit. Marked pastes are protected in either mode. This affects only the message composer, not Interact's native terminal input.
 
 Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; Shift+Enter is not used as a busy-send override because terminals do not consistently distinguish it from Enter.
 
@@ -113,7 +114,7 @@ Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; S
 
 White baselines join view tabs on their existing rows; navigation buttons remain detached. Preview failures show an error instead of an indefinite loading message.
 
-The message box uses the pane's full interior width and grows from three to at most twelve text rows, using less height in short panes. Longer messages scroll around the cursor; Enter still sends and Ctrl-J inserts a newline. Send/Clear stay at the bottom as the editor grows upward.
+The message box uses the pane's full interior width and grows from three to at most twelve text rows, using less height in short panes. Longer messages scroll around the cursor; the input hint reflects the selected Enter behavior. Send/Clear stay at the bottom as the editor grows upward.
 
 Filled buttons and board PR links are clickable; source-colored or underlined text in terminal previews is not a board navigation control. Cyan marks the active view and Send when a draft has text. Magenta marks navigation away from the board; **Open workspace ↗** and **Open orchestrator ↗** sit at the right edge of their menus. Other controls are neutral; workflow colors are limited to dots, counts, and human-action alerts. Live mode preserves terminal layout; snapshot mode collapses decorative rules and repeated blank lines. Neither generates summaries.
 

@@ -36,7 +36,7 @@ LEGACY_WORKING = {"active", "queued", "initializing", "planning", "implementing"
                   "implementation-ready", "resolving", "reviewing", "finalizing", "publishing-review",
                   "delegated-working"}
 ROLES = ("author", "reviewer", "worker", "workspace_agent")
-VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True}
+VIEWER_DEFAULTS = {"send_while_working": False, "animate_activity": True, "live_preview": True, "safe_paste": False}
 SHORTCUT_PREFIX = "\x10"  # Ctrl-P leaves Herdr's own Ctrl-B prefix untouched.
 SHORTCUT_REQUEST = object()
 CONTROLLER_BINDING = None
@@ -996,7 +996,7 @@ def help_lines(width, warnings):
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
             "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
-            "Enter: send. Ctrl-J: newline. Esc or click away: save without sending.",
+            "Enter: send (newline with Safe paste enabled). Ctrl-G or Send: submit. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Each task/recipient and general chat has a separate draft.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
@@ -1028,12 +1028,16 @@ def settings_layout(settings, width):
          "Read-only unless you choose Interact to send keys directly. Snapshots leave its size unchanged. "
          "Live requires Herdr 0.9.0+ and pyte; without pyte, snapshots are used. "
          "Ctrl-P then r retries a stopped attachment without taking over another viewer."),
+        ("safe_paste", "4 Safe paste", "On" if settings["safe_paste"] else "Off",
+         "Enter inserts a newline; submit with Send or Ctrl-G. Prevents pasted newlines from sending "
+         "when a client strips paste markers. Off keeps Enter-to-send; marked pastes stay protected in either mode. "
+         "Does not change Interact's native terminal input."),
     ]
     content_width = max(1, min(width - 4, 120))
     labels = [f"  {label}: {value}  " for _, label, value, _ in items]
     control_width = max(map(len, labels))
     beside = content_width - control_width - 3 >= 40
-    intro = "Click a control or use Ctrl-P then 1 / 2 / 3. Esc returns. Saved for this workspace."
+    intro = "Click a control or use Ctrl-P then 1 / 2 / 3 / 4. Esc returns. Saved for this workspace."
     lines = [(line, 0, []) for line in textwrap.wrap(intro, content_width)] + [("", 0, [])]
     controls = {}
     for (key, _, _, description), label in zip(items, labels):
@@ -1496,7 +1500,11 @@ def draw_interaction_buttons(screen, interacting=False):
             if draw_button(screen, height - 4, x, label, active=interacting)]
 
 
-def draw_message_box(screen, row, message, active=False, can_send=None, activity="", interact=False):
+def message_keys(safe_paste=False):
+    return "Enter newline · Ctrl-G sends" if safe_paste else "Enter sends · Ctrl-J newline"
+
+
+def draw_message_box(screen, row, message, active=False, can_send=None, activity="", interact=False, safe_paste=False):
     height, width = screen.getmaxyx()
     preview, _, top, visible, line_width = message_layout(message, height, width)
     title = f"Message {message_recipient(row)} · " + (row["label"] if row else "General / new task")
@@ -1506,7 +1514,7 @@ def draw_message_box(screen, row, message, active=False, can_send=None, activity
     lines = ["┌ " + clipped(title, max(1, width - 8)) + " ",
              *["│ " + (clean(preview[i]) if i < len(preview) and not active else "") for i in range(visible)],
              "│ [ Send ] [ x Clear ]  " + (" " * 12 if interact else "")
-             + ("Enter sends · Ctrl-J newline · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
+             + (message_keys(safe_paste) + " · Esc saves" if active else "Type a message · Ctrl-P shortcuts"),
              "└" + "─" * max(0, width - 4) + "┘"]
     if not message and not active:
         lines[1] = "│ " + (f"Tell the {message_recipient(row)} what you need…" if row else "Ask a question, finish setup, or start a new task…")
@@ -1542,7 +1550,7 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             return "Draft cleared; nothing sent."
         except OSError:
             return "Cannot clear saved draft; nothing sent."
-    cursor, note = len(message), "Enter sends · Ctrl-J newline · Ctrl-P shortcuts · Esc saves"
+    cursor, note = len(message), message_keys(getattr(args, "safe_paste", False)) + " · Ctrl-P shortcuts · Esc saves"
     while True:
         draft.update(message)
         try:
@@ -1563,7 +1571,8 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
             # The board redraws the background before each editor frame.
             message_actions = draw_message_box(screen, row, message, active=True, can_send=bool(message.strip()),
                                                activity=getattr(args, "activity_label", ""),
-                                               interact=getattr(args, "can_interact", False))
+                                               interact=getattr(args, "can_interact", False),
+                                               safe_paste=getattr(args, "safe_paste", False))
             content = []
         else:
             screen.erase()
@@ -1646,6 +1655,10 @@ def compose(screen, args, row, inline=False, send_now=False, clear_now=False, in
                 continue
             curses.curs_set(0)
             return SHORTCUT_REQUEST if key == SHORTCUT_PREFIX else "Draft saved. Type to continue."
+        # Unmarked pasted CR and a physical Enter are indistinguishable. The
+        # opt-in mode keeps both as text; explicit Send/Ctrl-G still submits.
+        if getattr(args, "safe_paste", False) and key in ("\r", curses.KEY_ENTER):
+            key = "\n"
         if key in ("\r", curses.KEY_ENTER, "\x07"):
             if not message.strip():
                 note = "Write a message before sending."
@@ -1929,6 +1942,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         screen.erase()
         preview_palette.begin_frame()
         args.send_while_working = viewer.settings["send_while_working"]
+        args.safe_paste = viewer.settings["safe_paste"]
         args.activity_label = activity_label(activity, args.interval, viewer.settings["animate_activity"])
         use_live = bool(live and live.available and not args.offline and viewer.settings["live_preview"])
 
@@ -2238,7 +2252,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 actions += draw_interaction_buttons(screen, interacting=True)
             else:
                 actions += draw_message_box(screen, message_target, draft, activity=args.activity_label,
-                                            interact=args.can_interact)
+                                            interact=args.can_interact, safe_paste=args.safe_paste)
         except OSError:
             put(height - 7, "Cannot read saved draft.", 1)
         if viewer.error:
@@ -2250,7 +2264,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         try:
             footer = ("Direct input · Click Finish interacting or another view to return to the board" if interaction else
                       "Command: t Tasks · c Orchestrator · s Settings · ? Help · q Close · Esc cancel"
-                      if shortcut_pending else "Type to message · Enter sends · Ctrl-P shortcuts · Drag preview to copy")
+                      if shortcut_pending else "Type to message · " + message_keys(args.safe_paste) + " · Ctrl-P shortcuts · Drag preview to copy")
             screen.addnstr(height - 1, 0, footer, width - 1, curses.A_DIM)
         except curses.error:
             pass
@@ -2328,8 +2342,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 live.retry()
         elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
             action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
-        elif utility_view == "settings" and key in (ord("1"), ord("2"), ord("3")):
-            action = "setting-" + {ord("1"): "send_while_working", ord("2"): "animate_activity", ord("3"): "live_preview"}[key]
+        elif utility_view == "settings" and key in (ord("1"), ord("2"), ord("3"), ord("4")):
+            action = "setting-" + {ord("1"): "send_while_working", ord("2"): "animate_activity", ord("3"): "live_preview", ord("4"): "safe_paste"}[key]
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:

@@ -159,8 +159,10 @@ class BoardTests(unittest.TestCase):
             self.assertFalse(viewer.settings["send_while_working"])
             viewer.toggle_setting("send_while_working")
             viewer.toggle_setting("animate_activity")
+            self.assertFalse(viewer.settings["safe_paste"])
+            viewer.toggle_setting("safe_paste")
             restored = board.ViewerState(tasks)
-            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False, "live_preview": True})
+            self.assertEqual(restored.settings, {"send_while_working": True, "animate_activity": False, "live_preview": True, "safe_paste": True})
             self.assertIn(row["id"], restored.later)
             restored.toggle(row)
             self.assertEqual(board.ViewerState(tasks).settings, restored.settings)
@@ -173,9 +175,10 @@ class BoardTests(unittest.TestCase):
                 executor = Mock()
                 executor.submit.return_value = Future()
                 with patch.object(board, "ViewerState", return_value=viewer), patch.object(board, "send_message") as send:
-                    screen = self.run_display(executor, [ord("s"), ord("1"), ord("2"), 27, ord("q")], size)
+                    screen = self.run_display(executor, [ord("s"), ord("1"), ord("2"), ord("4"), 27, ord("q")], size)
                 send.assert_not_called()
                 self.assertTrue(board.ViewerState(Path(root) / "tasks").settings["send_while_working"])
+                self.assertTrue(board.ViewerState(Path(root) / "tasks").settings["safe_paste"])
                 text = " ".join(str(call) for call in screen.addnstr.call_args_list)
                 self.assertIn("Send while working: On", text)
                 self.assertIn("Animation: Off", text)
@@ -185,11 +188,11 @@ class BoardTests(unittest.TestCase):
                     self.assertLessEqual(x + min(len(value), count), size[1], call)
 
     def test_settings_pair_controls_with_wrapped_descriptions(self):
-        settings = {"send_while_working": False, "animate_activity": True, "live_preview": True}
+        settings = dict(board.VIEWER_DEFAULTS)
         for width in (60, 80, 88, 120, 240):
             lines, controls = board.settings_layout(settings, width)
             self.assertEqual([key for _, key, _ in controls.values()], list(settings))
-            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True])
+            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True, False])
             self.assertEqual(len({len(label) for label, _, _ in controls.values()}), 1)
             for index, (label, _, _) in controls.items():
                 if width >= 80:
