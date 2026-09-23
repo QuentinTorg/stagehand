@@ -89,6 +89,7 @@ class MessageInput:
         self.mouse_pending = deque()
         self.responsive_until = 0
         self.pasting = False
+        self.paste_prefix = ""
         self.tail = ""
         self.after_cr = False
 
@@ -157,27 +158,12 @@ class MessageInput:
         self.screen.timeout(20 if time.monotonic() < self.responsive_until else 200)
         if self.pasting:
             return self.read_paste()
+        if self.paste_prefix:
+            return self.read_paste_start()
         key = self.pending.popleft() if self.pending else self.screen.get_wch()
         if key == "\x1b":
-            # Curses has no portable bracketed-paste event. Recognize its start
-            # while preserving ordinary Escape and any following keystrokes.
-            prefix = []
-            self.screen.timeout(30)
-            try:
-                for expected in "[200~":
-                    value = self.pending.popleft() if self.pending else self.screen.get_wch()
-                    prefix.append(value)
-                    if value != expected:
-                        break
-                else:
-                    self.pasting = True
-                    self.screen.keypad(False)
-                    return self.read_paste()
-            except curses.error:
-                pass
-            finally:
-                self.screen.timeout(200)
-            self.pending.extendleft(reversed(prefix))
+            self.paste_prefix = key
+            return self.read_paste_start()
         elif batch and isinstance(key, str) and (key.isprintable() or key == "\n"):
             characters = [key]
             self.screen.timeout(0)
@@ -210,6 +196,30 @@ class MessageInput:
                 self.screen.timeout(200)
             return RepeatedKey(key, count)
         return key
+
+    def read_paste_start(self):
+        # Once a paste marker begins, retain it across transport stalls rather
+        # than exposing its payload (including Enter) as ordinary key presses.
+        opener = "\x1b[200~"
+        self.screen.timeout(30)
+        try:
+            while len(self.paste_prefix) < len(opener):
+                value = self.pending.popleft() if self.pending else self.screen.get_wch()
+                if value != opener[len(self.paste_prefix)]:
+                    self.pending.extendleft(reversed([*self.paste_prefix[1:], value]))
+                    self.paste_prefix = ""
+                    return "\x1b"
+                self.paste_prefix += value
+            self.paste_prefix, self.pasting = "", True
+            self.screen.keypad(False)
+            return self.read_paste()
+        except curses.error:
+            if self.paste_prefix == "\x1b":
+                self.paste_prefix = ""
+                return "\x1b"
+            return InsertText("")
+        finally:
+            self.screen.timeout(200)
 
     def read_paste(self):
         end, characters = "\x1b[201~", []

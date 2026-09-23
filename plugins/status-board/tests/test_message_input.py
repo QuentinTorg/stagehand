@@ -114,10 +114,30 @@ class MessageInputTests(unittest.TestCase):
         self.assertEqual(reader.read(), "\r")
         self.assertEqual(reader.screen.keypad.call_args.args, (True,))
 
+    def test_fragmented_paste_opener_never_exposes_payload_as_commands(self):
+        opener = "\x1b[200~"
+        for split in range(2, len(opener)):
+            with self.subTest(split=split):
+                reader, keys = self.reader(opener[:split])
+                self.assertEqual(reader.read(), board.InsertText(""))
+                # A stalled transport must not turn a partial paste marker into
+                # ordinary typing, where the payload's CR would send a message.
+                self.assertEqual(reader.read(), board.InsertText(""))
+                keys.extend(opener[split:] + "first\r\nsecond\r\x1b[201~\r")
+                self.assertEqual(reader.read(), board.InsertText("first\nsecond\n"))
+                self.assertEqual(reader.read(), "\r")
+
     def test_escape_does_not_discard_following_typing(self):
         reader, _ = self.reader("\x1bqhello")
         self.assertEqual(reader.read(), "\x1b")
         self.assertEqual(reader.read(batch=True), board.InsertText("qhello"))
+
+    def test_partial_paste_prefix_preserves_nonpaste_input(self):
+        reader, keys = self.reader("\x1b[2")
+        self.assertEqual(reader.read(), board.InsertText(""))
+        keys.extend("~next")
+        self.assertEqual(reader.read(), "\x1b")
+        self.assertEqual(reader.read(batch=True), board.InsertText("[2~next"))
 
     def test_repeat_batches_preserve_mixed_edit_and_command_order(self):
         keys = [curses.KEY_LEFT] * 100 + [curses.KEY_DC] * 20 + list("new") + ["\x7f"] * 5 + ["\r"]
@@ -208,6 +228,9 @@ from types import SimpleNamespace
 sys.path.insert(0, sys.argv[1])
 import board
 root = Path(sys.argv[2])
+def run(screen):
+    curses.set_escdelay(20)
+    board.display(screen, SimpleNamespace(tasks=root / "tasks", offline=True, interval=5))
 board.board_snapshot = lambda *args: ([], [], {"status": "idle"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Ready"}
 saves = 0
@@ -222,7 +245,7 @@ def send(args, row, text):
     original_save(root / "sent", text)
     return True, "Delivered"
 board.send_message = send
-curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True, interval=5))
+curses.wrapper(run)
 '''
         with tempfile.TemporaryDirectory() as root:
             master, slave = pty.openpty()
@@ -247,7 +270,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True
             try:
                 wait_for(lambda: b"\x1b[?2004h" in output)
                 text = "café ☃ " * 400
-                os.write(master, ("\x1b[200~" + text + "\r\nnext\x07\x10\x1b[20").encode())
+                os.write(master, b"\x1b[20")
+                # Force the opener to cross both curses' Escape deadline and
+                # the parser's read timeout, as a fragmented remote paste can.
+                delayed_until = time.monotonic() + .15
+                wait_for(lambda: time.monotonic() >= delayed_until)
+                os.write(master, ("0~" + text + "\r\nnext\x07\x10\x1b[20").encode())
                 expected = text + "\nnext"
                 wait_for(lambda: draft_is(expected) and saves.exists())
                 self.assertFalse(sent.exists())
