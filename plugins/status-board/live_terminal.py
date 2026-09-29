@@ -6,7 +6,7 @@ import json
 import os
 import threading
 import time
-from collections import namedtuple
+from collections import deque, namedtuple
 import agent_binding
 from preview_links import LinkStream
 
@@ -113,7 +113,8 @@ class LivePreview:
         self.available = pyte is not None and os.environ.get("HERDR_ENV") == "1" and bool(os.environ.get("HERDR_PANE_ID"))
         self.viewer = os.environ.get("HERDR_PANE_ID")
         self.lock, self.stopping = threading.Lock(), threading.Event()
-        self.target, self.size, self.generation, self.scroll_delta = None, (1, 1), 0, 0
+        self.target, self.size, self.generation = None, (1, 1), 0
+        self.pending_scroll = deque(maxlen=64)
         self.state = {"status": "paused", "message": "Select a conversation", "cells": ()}
         self.thread = None
         self.input_epoch, self.interacting, self.pending_input = 0, None, ""
@@ -142,12 +143,13 @@ class LivePreview:
     def _invalidate_input(self):
         self.input_epoch += 1
         self.interacting, self.pending_input = None, ""
+        self.pending_scroll.clear()
 
     def update(self, target, size):
         with self.lock:
             if target != self.target:
                 self._invalidate_input()
-                self.target, self.scroll_delta = target, 0
+                self.target = target
                 self.generation += 1
                 self.state = {"status": "connecting", "message": "Connecting…", "cells": ()}
             self.size = size
@@ -162,9 +164,20 @@ class LivePreview:
             self._invalidate_input()
             self.generation += 1
 
-    def scroll(self, delta):
+    def scroll(self, delta, position=None):
         with self.lock:
-            self.scroll_delta = max(-1000, min(1000, self.scroll_delta + delta))
+            if not delta or self.state["status"] != "live":
+                return
+            # Full-screen applications hit-test wheel events. Keyboard navigation
+            # uses the center rather than a corner that may contain a header.
+            if position is None:
+                position = (self.size[0] // 2, self.size[1] // 2)
+            if self.pending_scroll:
+                previous, previous_position = self.pending_scroll[-1]
+                if previous_position == position and (previous < 0) == (delta < 0):
+                    self.pending_scroll.pop()
+                    delta += previous
+            self.pending_scroll.append((max(-1000, min(1000, delta)), position))
 
     def close(self):
         self.stopping.set()
@@ -208,7 +221,6 @@ class LivePreview:
             while not self.stopping.is_set():
                 with self.lock:
                     generation, target, size = self.generation, self.target, self.size
-                    scroll, self.scroll_delta = self.scroll_delta, 0
                 try:
                     if generation != active_generation:
                         if checking is not None:
@@ -265,11 +277,21 @@ class LivePreview:
                         if size != sent_size:
                             await command({"type": "terminal.resize", "cols": size[0], "rows": size[1]})
                             sent_size = size
-                        if scroll:
-                            # Mouse navigation remains local; only explicit
-                            # interaction mode may forward human keystrokes.
-                            await command({"type": "terminal.scroll", "direction": "up" if scroll < 0 else "down",
-                                           "lines": abs(scroll), "source": "wheel", "column": 0, "row": 0})
+                        with self.lock:
+                            scrolled = False
+                            if generation == self.generation and self.state["status"] == "live":
+                                while self.pending_scroll:
+                                    delta, (column, row) = self.pending_scroll.popleft()
+                                    # Clamp to the dimensions sent to Herdr if a
+                                    # resize occurred while the wheel was queued.
+                                    value = {"type": "terminal.scroll", "direction": "up" if delta < 0 else "down",
+                                             "lines": abs(delta), "source": "wheel",
+                                             "column": max(0, min(size[0] - 1, column)),
+                                             "row": max(0, min(size[1] - 1, row))}
+                                    process.stdin.write((json.dumps(value) + "\n").encode())
+                                    scrolled = True
+                        if scrolled:
+                            await asyncio.wait_for(process.stdin.drain(), .5)
                         with self.lock:
                             text, self.pending_input = self.pending_input, ""
                             if (text and generation == self.generation

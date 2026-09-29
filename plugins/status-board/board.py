@@ -2417,8 +2417,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 if kind == "wheel":
                     if show_tasks and 3 <= y <= 6 + visible:
                         selected = max(0, min(len(rows) - 1, selected + delta))
-                    elif live_state is not None and title_y < y < message_top:
-                        live.scroll(delta)
+                    elif (live_state is not None and 1 <= x < width - 2
+                          and title_y < y <= title_y + detail_height):
+                        live.scroll(delta, (x - 1, y - title_y - 1))
                     elif viewing_controller and not utility_view:
                         controller_offset = max(0, active_offset + delta)
                     elif not utility_view and not info:

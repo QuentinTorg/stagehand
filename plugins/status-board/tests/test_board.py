@@ -942,7 +942,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.run_display(executor, ["d", board.SHORTCUT_PREFIX, "q"], live=live, commands=False,
                              editor_keys=[board.curses.KEY_LEFT, board.curses.KEY_MOUSE, "X", "\r",
                                           board.curses.KEY_MOUSE, *"followup", "\r", "\x1b"])
-        self.assertEqual([call.args for call in live.scroll.call_args_list], [(-3,), (3,)])
+        self.assertEqual([call.args for call in live.scroll.call_args_list], [(-3, (9, 5)), (3, (9, 5))])
         self.assertEqual([call.args[2] for call in send.call_args_list], ["Xd", "followup"])
 
     def test_live_views_release_on_details_and_do_not_poll_snapshots(self):

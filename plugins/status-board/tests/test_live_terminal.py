@@ -123,9 +123,31 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         view.available = False
         view.state = {"cells": ("old",), "status": "live"}
         view.scroll(100000)
-        self.assertEqual(view.scroll_delta, 1000)
+        self.assertEqual(list(view.pending_scroll), [(1000, (0, 0))])
         self.assertEqual(view.update(("new", "workspace"), (80, 20))["cells"], ())
-        self.assertEqual(view.scroll_delta, 0)
+        self.assertFalse(view.pending_scroll)
+
+    def test_scroll_queue_preserves_hit_targets_and_direction_and_is_bounded(self):
+        view = terminal.LivePreview()
+        view.available = False
+        view.update(("author", "workspace"), (80, 20))
+        view.scroll(-3)
+        self.assertFalse(view.pending_scroll)
+        view._publish(view.generation, status="live")
+        view.scroll(-3)
+        view.scroll(-2)
+        view.scroll(-3, (8, 4))
+        view.scroll(3, (8, 4))
+        self.assertEqual(list(view.pending_scroll), [(-5, (40, 10)), (-3, (8, 4)), (3, (8, 4))])
+        for column in range(100):
+            view.scroll(-3, (column, 2))
+        self.assertEqual(len(view.pending_scroll), 64)
+        for invalidate in (view.retry, lambda: view._publish(view.generation, status="paused"),
+                           lambda: view._publish(view.generation, status="unavailable")):
+            view._publish(view.generation, status="live")
+            view.scroll(-3)
+            invalidate()
+            self.assertFalse(view.pending_scroll)
 
     async def test_slow_inventory_does_not_block_frames_scroll_or_input(self):
         view = terminal.LivePreview()
@@ -168,6 +190,9 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 epoch = view.begin_input()
                 self.assertIsNotNone(epoch)
                 view.scroll(-3)
+                view.scroll(-2, (6, 3))
+                view.scroll(2, (999, -1))
+                view.update(("author", "workspace"), (12, 4))
                 self.assertTrue(view.send_input("hello", epoch))
                 # Sixty incremental edits must all survive, without sixty
                 # scheduled sleeps or immutable copies of the whole grid.
@@ -177,7 +202,14 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 await until(lambda: sum(cell.data == "x" for row in view.state["cells"] for cell in row) == 60)
                 commands = [json.loads(call.args[0]) for call in child.stdin.write.call_args_list]
                 self.assertIn({"type": "terminal.input", "text": "hello"}, commands)
-                self.assertTrue(any(c.get("type") == "terminal.scroll" and c["lines"] == 3 for c in commands))
+                scrolls = [c for c in commands if c.get("type") == "terminal.scroll"]
+                self.assertEqual(scrolls, [
+                    {"type": "terminal.scroll", "direction": "up", "lines": 3, "source": "wheel", "column": 10, "row": 2},
+                    {"type": "terminal.scroll", "direction": "up", "lines": 2, "source": "wheel", "column": 6, "row": 3},
+                    {"type": "terminal.scroll", "direction": "down", "lines": 2, "source": "wheel", "column": 11, "row": 0},
+                ])
+                self.assertLess(commands.index({"type": "terminal.resize", "cols": 12, "rows": 4}),
+                                commands.index(scrolls[0]))
                 self.assertLess(sum("cells" in call.kwargs for call in publish.call_args_list), 60)
                 # A switch cancels the pending identity query and releases the
                 # old attachment rather than adopting a stale query result.
