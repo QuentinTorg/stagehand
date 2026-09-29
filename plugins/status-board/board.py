@@ -996,7 +996,7 @@ def help_lines(width, warnings):
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
             "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
-            "Enter: send (newline with Safe paste enabled). Ctrl-G or Send: submit. Ctrl-J: newline. Esc or click away: save without sending.",
+            "Enter: send by default; enable Enter inserts newline for newline instead. Ctrl-G or Send: submit. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Each task/recipient and general chat has a separate draft.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
             "l or click Later: expand/collapse set-aside tasks. Enter also toggles the selected Later row.",
@@ -1028,9 +1028,9 @@ def settings_layout(settings, width):
          "Read-only unless you choose Interact to send keys directly. Snapshots leave its size unchanged. "
          "Live requires Herdr 0.9.0+ and pyte; without pyte, snapshots are used. "
          "Ctrl-P then r retries a stopped attachment without taking over another viewer."),
-        ("safe_paste", "4 Safe paste", "On" if settings["safe_paste"] else "Off",
-         "Enter inserts a newline; submit with Send or Ctrl-G. Prevents pasted newlines from sending "
-         "when a client strips paste markers. Off keeps Enter-to-send; marked pastes stay protected in either mode. "
+        ("safe_paste", "4 Enter inserts newline", "On" if settings["safe_paste"] else "Off",
+         "Pasted newlines are protected when the terminal provides paste markers, even with this setting off. "
+         "Enable this fallback for clients that strip them: Enter inserts a newline; Send or Ctrl-G submits. "
          "Does not change Interact's native terminal input."),
     ]
     content_width = max(1, min(width - 4, 120))

@@ -203,6 +203,15 @@ class BoardTests(unittest.TestCase):
                     self.assertTrue(lines[index + 1][0].startswith("  "))
             self.assertTrue(all(len(line) <= width - 4 for line, _, _ in lines))
 
+    def test_newline_setting_explains_existing_paste_protection(self):
+        lines, controls = board.settings_layout(dict(board.VIEWER_DEFAULTS), 120)
+        label, _, enabled = next(control for control in controls.values() if control[1] == "safe_paste")
+        self.assertIn("Enter inserts newline", label)
+        self.assertFalse(enabled)
+        description = " ".join(" ".join(line.split()) for line, _, _ in lines)
+        self.assertIn("paste markers, even with this setting off", description)
+        self.assertIn("Send or Ctrl-G submits", description)
+
     def test_settings_click_targets_follow_scrolling(self):
         with tempfile.TemporaryDirectory() as root:
             viewer = board.ViewerState(Path(root) / "tasks")
