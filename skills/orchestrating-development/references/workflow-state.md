@@ -66,4 +66,4 @@ Reconcile old or contradictory status against the latest request, result, and ne
 
 ## Cleanup
 
-Cleanup is independent of task status. After the [recoverability audit](safety-and-escalation.md#cleanup), cancel only that task's watches and remove its owned linked worktree/workspace. Archive its record in the sibling archive directory, normally `.orchestrator/archive`, without adding a cleanup workflow state. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.
+Cleanup is independent of task status. Follow [Workspace Safety](safety-and-escalation.md#cleanup) for removal or standalone closure and cancel only that task's watches. Once cleanup succeeds, archive its record in the sibling archive directory, normally `.orchestrator/archive`, without adding a cleanup workflow state. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.

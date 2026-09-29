@@ -80,4 +80,4 @@ The board renders saved progress. With it available, chat should report results 
 
 If the board is unavailable or a text inventory is requested, show `Workspace | Stage | Agents | PR`, with 🔴 needs you, 🟡 in progress, and 🟢 orchestration complete. Describe current work and who acts next, not review counters. End with **Needs your attention**, one concrete action per workspace, or `None.`
 
-After a verified merge or explicit cleanup request, apply the safety reference, cancel that task's watches, remove only its owned linked worktree/workspace, and archive its record outside the active task directory.
+After a verified merge or explicit cleanup request, apply the safety reference for the workspace type, cancel that task's watches, and archive its record outside the active task directory once cleanup succeeds.

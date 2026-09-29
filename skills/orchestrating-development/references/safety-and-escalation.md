@@ -14,7 +14,7 @@ Compare requested work with active tasks for shared contracts, files, generated 
 
 ## Herdr worktree groups
 
-Closing a non-linked primary workspace can terminate its entire repository group, including unrelated linked workspaces. Use `herdr worktree create` directly from the verified canonical parent/checkout and record the returned task workspace. Never create a provisional parent or use `herdr workspace close` for task provisioning or cleanup. Do not bypass this through pane/tab closure that would close a parent.
+Closing a non-linked primary workspace can terminate its entire repository group, including unrelated linked workspaces. Never close a primary workspace with child worktrees as part of task cleanup, including indirectly through pane/tab closure. Use `herdr worktree create` directly from the verified canonical parent/checkout and record the returned task workspace; do not create a provisional parent.
 
 If an accidental duplicate parent appears, preserve it and ask; do not assume it closes independently. After an unexpected group closure, stop topology changes, inventory surviving worktrees and exact session identities, and prefer genuine session resume over silent replacement.
 
@@ -28,9 +28,11 @@ Repeated unproductive fixes, incompatible conclusions, unexplained head changes,
 
 ## Cleanup
 
-A request to clean up a uniquely identified task, workspace, or review workspace authorizes guarded removal of its recorded linked worktree/workspace. A verified merge also makes it eligible. Neither authorizes primary-workspace closure, PR closure, branch deletion, or data loss.
+A cleanup request may identify one task or a group. Identify and audit matching owned workspaces, honor exclusions, and clean up eligible ones without requiring the human to enumerate them or repeat authorization. A verified merge also makes a task eligible. Neither authorizes primary-workspace closure, PR closure, branch deletion, or data loss.
 
-Before removal, verify ownership, exact linked workspace, recoverability, and absence of active work or stateful processes. An idle terminal alone proves none of these. For meta-repositories audit separately:
+For a linked worktree, remove the worktree and workspace together; if removal is blocked, keep both visible. A requested standalone workspace closure may use `herdr workspace close` after verifying it is not a primary/group workspace and has no active work or unsaved process state. Do not delete its underlying directory.
+
+Before removal, verify ownership, exact workspace, recoverability, and absence of active work or stateful processes. An idle terminal alone proves none of these. Distinguish valuable local work from disposable generated artifacts; report concrete blockers with a recommended next action rather than asking for generic cleanup approval again. For meta-repositories audit separately:
 
 1. **Initialized submodules:** no internal tracked/untracked changes; target commits durably recoverable through recorded remote branches, PRs, merges, or explicit references; non-targets at expected pins.
 2. **Containing repository:** no changes except a recorded target gitlink difference whose pointer update is `not-planned` and whose child passed the first audit. Preserve planned or ambiguous pointer updates.
