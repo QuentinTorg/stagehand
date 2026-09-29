@@ -114,10 +114,30 @@ class MessageInputTests(unittest.TestCase):
         self.assertEqual(reader.read(), "\r")
         self.assertEqual(reader.screen.keypad.call_args.args, (True,))
 
+    def test_fragmented_paste_opener_never_exposes_payload_as_commands(self):
+        opener = "\x1b[200~"
+        for split in range(2, len(opener)):
+            with self.subTest(split=split):
+                reader, keys = self.reader(opener[:split])
+                self.assertEqual(reader.read(), board.InsertText(""))
+                # A stalled transport must not turn a partial paste marker into
+                # ordinary typing, where the payload's CR would send a message.
+                self.assertEqual(reader.read(), board.InsertText(""))
+                keys.extend(opener[split:] + "first\r\nsecond\r\x1b[201~\r")
+                self.assertEqual(reader.read(), board.InsertText("first\nsecond\n"))
+                self.assertEqual(reader.read(), "\r")
+
     def test_escape_does_not_discard_following_typing(self):
         reader, _ = self.reader("\x1bqhello")
         self.assertEqual(reader.read(), "\x1b")
         self.assertEqual(reader.read(batch=True), board.InsertText("qhello"))
+
+    def test_partial_paste_prefix_preserves_nonpaste_input(self):
+        reader, keys = self.reader("\x1b[2")
+        self.assertEqual(reader.read(), board.InsertText(""))
+        keys.extend("~next")
+        self.assertEqual(reader.read(), "\x1b")
+        self.assertEqual(reader.read(batch=True), board.InsertText("[2~next"))
 
     def test_repeat_batches_preserve_mixed_edit_and_command_order(self):
         keys = [curses.KEY_LEFT] * 100 + [curses.KEY_DC] * 20 + list("new") + ["\x7f"] * 5 + ["\r"]
@@ -199,6 +219,44 @@ class MessageInputTests(unittest.TestCase):
         self.assertTrue(all(len(chunk) <= 8192 for chunk in chunks))
         self.assertEqual(len(chunks), 3)
 
+    def test_safe_paste_keeps_unmarked_newlines_until_explicit_send(self):
+        for submit in ("\x07", "button"):
+            with self.subTest(submit=submit), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=True, safe_paste=True)
+                reader, _ = self.reader([*"first\rsecond\nthird", curses.KEY_ENTER, board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 100)
+                with patch.object(board.curses, "curs_set"), patch.object(board, "send_message") as send:
+                    for _ in board.compose(reader.screen, args, None, input_reader=reader):
+                        pass
+                send.assert_not_called()
+                expected = "first\nsecond\nthird\n"
+                self.assertEqual(board.draft_path(args, None).read_text(), expected)
+                reader, _ = self.reader([board.SHORTCUT_PREFIX] if submit == "button" else [submit, board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 100)
+                with patch.object(board.curses, "curs_set"), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    for _ in board.compose(reader.screen, args, None, input_reader=reader, send_now=submit == "button"):
+                        pass
+                send.assert_called_once_with(args, None, expected)
+
+    def test_default_enter_sends_and_safe_mode_is_visible_in_composer(self):
+        self.assertFalse(board.VIEWER_DEFAULTS["safe_paste"])
+        for safe in (False, True):
+            with self.subTest(safe=safe), tempfile.TemporaryDirectory() as root:
+                args = SimpleNamespace(tasks=Path(root) / "tasks", offline=True, safe_paste=safe)
+                board.save_draft(board.draft_path(args, None), "hello")
+                reader, _ = self.reader(["\r", board.SHORTCUT_PREFIX])
+                reader.screen.getmaxyx.return_value = (38, 140)
+                with patch.object(board.curses, "curs_set"), patch.object(
+                    board, "send_message", return_value=(True, "Delivered")
+                ) as send:
+                    for _ in board.compose(reader.screen, args, None, inline=True, input_reader=reader):
+                        pass
+                self.assertEqual(send.call_count, int(not safe))
+                text = " ".join(str(call) for call in reader.screen.addnstr.call_args_list)
+                self.assertIn(board.message_keys(safe), text)
+
     def test_real_terminal_paste_is_batched_and_only_explicit_enter_sends(self):
         # Isolate the terminal and mock delivery: no live agent receives test text.
         source = '''
@@ -208,6 +266,9 @@ from types import SimpleNamespace
 sys.path.insert(0, sys.argv[1])
 import board
 root = Path(sys.argv[2])
+def run(screen):
+    curses.set_escdelay(20)
+    board.display(screen, SimpleNamespace(tasks=root / "tasks", offline=True, interval=5))
 board.board_snapshot = lambda *args: ([], [], {"status": "idle"})
 board.controller_snapshot = lambda *args: {"status": "idle", "output": "Ready"}
 saves = 0
@@ -222,7 +283,7 @@ def send(args, row, text):
     original_save(root / "sent", text)
     return True, "Delivered"
 board.send_message = send
-curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True, interval=5))
+curses.wrapper(run)
 '''
         with tempfile.TemporaryDirectory() as root:
             master, slave = pty.openpty()
@@ -247,7 +308,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=root / "tasks", offline=True
             try:
                 wait_for(lambda: b"\x1b[?2004h" in output)
                 text = "café ☃ " * 400
-                os.write(master, ("\x1b[200~" + text + "\r\nnext\x07\x10\x1b[20").encode())
+                os.write(master, b"\x1b[20")
+                # Force the opener to cross both curses' Escape deadline and
+                # the parser's read timeout, as a fragmented remote paste can.
+                delayed_until = time.monotonic() + .15
+                wait_for(lambda: time.monotonic() >= delayed_until)
+                os.write(master, ("0~" + text + "\r\nnext\x07\x10\x1b[20").encode())
                 expected = text + "\nnext"
                 wait_for(lambda: draft_is(expected) and saves.exists())
                 self.assertFalse(sent.exists())

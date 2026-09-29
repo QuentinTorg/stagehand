@@ -7,7 +7,7 @@ Stagehand coordinates; [Skilldex](https://github.com/QuentinTorg/skilldex) suppl
 | `orchestrating-development` | Coordinator | Task ownership, workspace setup, handoffs, progress, human decisions, and recoverable state |
 | Herdr skill | Coordinator | Installed CLI and runtime semantics |
 | Agent Wake Relay | Herdr runtime | Persistent identity-bound watches and durable, bounded wake delivery |
-| Status board | Human | Saved progress, live activity, task navigation, and messages to the coordinator |
+| Status board | Human | Saved progress, live activity, task navigation, and messages to the selected agent or coordinator |
 | `preparing-pull-requests` | Author, then authorized reviewer | Intent-bearing draft, then evidence-based finalization |
 | `reviewing-code` | Independent reviewer | Complete phased review grounded in intent and surrounding code |
 | `resolving-findings` | Original author | Selected in-scope repairs and proportionate verification |
