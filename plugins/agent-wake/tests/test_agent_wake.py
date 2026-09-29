@@ -86,6 +86,9 @@ class WakePluginTest(unittest.TestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        starter = mock.patch.object(wake, "_ensure_timer")
+        self.start_timer = starter.start()
+        self.addCleanup(starter.stop)
 
     def arm(self, *extra):
         args = wake._parser().parse_args(
@@ -323,6 +326,12 @@ class PersistentWakeTest(WakePluginTest):
         self.addCleanup(sleeper.stop)
 
     def herdr(self, *args):
+        if args == ("plugin", "list", "--json"):
+            return {"result": {"plugins": [{"plugin_id": wake.PLUGIN_ID,
+                                             "plugin_root": str(SCRIPT.parent),
+                                             "enabled": getattr(self, "plugin_enabled", True)}]}}, None
+        if args == ("api", "snapshot"):
+            return {"result": {"snapshot": {"agents": [self.source.copy(), *getattr(self, "other_sources", [])]}}}, None
         if args == ("pane", "process-info", "--pane", "w2:p1"):
             return {"result": {"process_info": {"pane_id": "w2:p1", "shell_pid": 1,
                     "foreground_process_group_id": self.process_group}}}, None
@@ -370,6 +379,211 @@ class PersistentWakeTest(WakePluginTest):
         self.assertTrue(remaining[0]["notified"])
         self.assertNotEqual(first["id"], remaining[0]["id"])
         self.assertEqual(2, len(self.prompts))
+
+    def start_reminder_test(self):
+        self.now = 1000
+        clock = mock.patch.object(wake.time, "time", side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.arm("--persistent")
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.prompts.clear()
+
+    def test_reminders_only_after_fifteen_minutes_and_repeat_without_backlog(self):
+        self.start_reminder_test()
+        self.assertEqual(wake._next_reminder(self.state_root), 1900)
+        self.now = 1899
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(self.prompts, [])
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.prompts), 1)
+        self.assertEqual(json.loads(self.prompts[0].split(' ', 1)[1])[0]["kind"], "still-working")
+        # An unacknowledged notice does not accumulate another reminder.
+        self.now = 2800
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.documents("inbox")), 1)
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.now = 10000  # Suspended/restarted well beyond several deadlines.
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(wake._next_reminder(self.state_root), 10900)
+
+    def test_stop_block_cancel_and_restart_reset_deadline(self):
+        self.start_reminder_test()
+        for status in ("idle", "blocked", "done"):
+            self.now += 60
+            self.source["agent_status"] = status
+            self.emit(status)
+            self.assertIsNone(wake._next_reminder(self.state_root))
+            for notice in self.documents("inbox"):
+                self.command("ack", "--wake", notice["id"])
+            self.source["agent_status"] = "working"
+            self.emit("working")
+            self.assertEqual(wake._next_reminder(self.state_root), self.now + 900)
+            self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.command("cancel", "--watch", self.documents("watches")[0]["id"])
+        self.assertIsNone(wake._next_reminder(self.state_root))
+
+    def test_duplicate_working_hooks_and_recovery_do_not_postpone_checkin(self):
+        self.start_reminder_test()
+        self.now = 1700
+        self.emit("working")
+        self.command("flush")
+        self.assertEqual(wake._next_reminder(self.state_root), 1900)
+        self.assertEqual(self.prompts, [])
+        self.start_timer.assert_called()
+
+    def test_new_turn_observed_at_deadline_gets_its_own_interval(self):
+        self.source["state_change_seq"] = 1
+        self.start_reminder_test()
+        self.source["state_change_seq"] = 3
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(wake._next_reminder(self.state_root), 2800)
+
+    def test_missing_or_replaced_or_no_longer_working_source_gets_no_reminder(self):
+        for change in ({"agent_status": "idle"}, {"agent_status": "unknown"},
+                       {"agent_session": {"kind": "id", "value": "replacement"}},
+                       {"pane_id": "unrelated"}):
+            with self.subTest(change=change):
+                original = self.source.copy()
+                self.start_reminder_test()
+                self.source.update(change)
+                self.now = 1900
+                wake._remind(self.state_root, self.now)
+                self.assertEqual(self.prompts, [])
+                self.assertIsNone(wake._next_reminder(self.state_root))
+                self.command("cancel", "--watch", self.documents("watches")[0]["id"])
+                self.source = original
+
+    def test_busy_deferred_reminder_is_dropped_if_source_stops_without_hook(self):
+        self.start_reminder_test()
+        self.target_status = "working"
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(self.documents("inbox")[0]["kind"], "still-working")
+        self.source["agent_status"] = "idle"
+        self.target_status = "idle"
+        wake._notify_consumer(self.state_root, "controller_agent")
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(self.documents("inbox"), [])
+
+    def test_busy_deferred_reminder_is_superseded_by_stop_hook(self):
+        self.start_reminder_test()
+        self.target_status = "working"
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.source["agent_status"] = "done"
+        self.emit("done")
+        self.assertNotIn("kind", self.documents("inbox")[0])
+        self.target_status = "idle"
+        wake._notify_consumer(self.state_root, "controller_agent")
+        self.assertEqual(len(self.prompts), 1)
+        self.assertIn('"status":"done"', self.prompts[0])
+
+    def test_reminders_batch_sources_for_one_controller(self):
+        self.start_reminder_test()
+        watch = self.documents("watches")[0].copy()
+        watch.update(id="b" * 32, key="another-task", pane_id="w3:p1", workspace_id="w3", agent_name="other")
+        self.other_sources = [dict(self.source, pane_id="w3:p1", workspace_id="w3", name="other")]
+        wake._atomic_json(self.state_root / "watches" / f"{watch['id']}.json", watch)
+        self.now = 1900
+        # Delivery validates both sources a second time.
+        original = self.herdr
+        def herdr(*args):
+            if args == ("agent", "get", "w3:p1"):
+                return {"result": {"agent": self.other_sources[0]}}, None
+            return original(*args)
+        with mock.patch.object(wake, "_herdr", side_effect=herdr):
+            wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.prompts), 1)
+        self.assertEqual(len(json.loads(self.prompts[0].split(' ', 1)[1])), 2)
+
+    def test_disabled_plugin_or_setting_and_foreign_session_never_prompt(self):
+        self.start_reminder_test()
+        self.now = 1900
+        self.plugin_enabled = False
+        self.assertFalse(wake._remind(self.state_root, self.now))
+        self.plugin_enabled = True
+        self.command("configure", "--target", "controller_agent", "--reminder-minutes", "0")
+        self.assertFalse(wake._remind(self.state_root, self.now))
+        with mock.patch.dict(os.environ, HERDR_SOCKET_PATH="/session-a.sock"):
+            self.command("configure", "--target", "controller_agent", "--reminder-minutes", "15")
+        with mock.patch.dict(os.environ, HERDR_SOCKET_PATH="/session-b.sock"):
+            self.assertFalse(wake._remind(self.state_root, self.now))
+        self.assertEqual(self.prompts, [])
+
+    def test_staggered_workers_respect_controller_cooldown(self):
+        self.start_reminder_test()
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        watch = self.documents("watches")[0]
+        # Another worker becomes due shortly after the previous batched check-in.
+        watch.update(id="b" * 32, key="another-task", reminder_due=1950)
+        wake._atomic_json(self.state_root / "watches" / f"{watch['id']}.json", watch)
+        self.now = 1950
+        with mock.patch.object(wake, "_herdr") as api:
+            wake._remind(self.state_root, self.now)
+        api.assert_not_called()
+        self.assertEqual(wake._next_reminder(self.state_root), 2800)
+        self.now = 2800
+        wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(len(json.loads(self.prompts[-1].split(' ', 1)[1])), 2)
+
+    def test_failed_reminder_delivery_keeps_retry_budget(self):
+        self.start_reminder_test()
+        self.prompt_fails = True
+        for _ in range(6):
+            self.now += 900
+            wake._remind(self.state_root, self.now)
+        self.assertEqual(len(self.prompts), wake.MAX_NOTIFY_ATTEMPTS)
+        self.assertEqual(len(self.documents("inbox")), 1)
+        self.assertEqual(self.documents("inbox")[0]["attempts"], wake.MAX_NOTIFY_ATTEMPTS)
+
+    def test_configurable_interval_and_idle_check_does_not_call_herdr(self):
+        self.command("configure", "--target", "controller_agent", "--reminder-minutes", "20")
+        self.start_reminder_test()
+        self.assertEqual(wake._next_reminder(self.state_root), 2200)
+        self.command("configure", "--target", "controller_agent")
+        self.assertEqual(wake._reminder_interval(self.state_root), 1200)
+        self.source["agent_status"] = "done"
+        self.emit("done")
+        self.prompts.clear()
+        with mock.patch.object(wake, "_herdr") as api:
+            self.assertFalse(wake._remind(self.state_root, 10000))
+        api.assert_not_called()
+        self.assertEqual(self.prompts, [])
+
+    def test_source_new_turn_before_delivery_drops_old_reminder(self):
+        self.source["state_change_seq"] = 1
+        self.start_reminder_test()
+        self.target_status = "working"
+        self.now = 1900
+        wake._remind(self.state_root, self.now)
+        self.source["state_change_seq"] = 3
+        self.target_status = "idle"
+        wake._notify_consumer(self.state_root, "controller_agent")
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(self.documents("inbox"), [])
+
+    def test_server_failure_exits_without_creating_reminder(self):
+        self.start_reminder_test()
+        self.now = 1900
+        original = self.herdr
+        def herdr(*args):
+            return (None, "server unavailable") if args == ("api", "snapshot") else original(*args)
+        with mock.patch.object(wake, "_herdr", side_effect=herdr), mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+            self.assertFalse(wake._remind(self.state_root, self.now))
+        self.assertIn("server unavailable", log.getvalue())
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(self.documents("inbox"), [])
 
     def test_acknowledged_start_is_not_renotified_by_flush(self):
         self.arm("--persistent")

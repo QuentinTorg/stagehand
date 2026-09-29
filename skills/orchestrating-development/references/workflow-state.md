@@ -39,6 +39,8 @@ The plugin observes starts/resumes and stops and queues `HERDR_AGENT_WAKE` notic
 
 On `working`, reconcile activity with what you already know; do not dispatch again, interrupt, or seek renewed approval merely because a notice arrived. It does not identify who submitted input. A routine start needs no full transcript read or human-facing reply. On a stop, inspect the role's latest answer and relevant artifacts and save the reconciled outcome/next action. In either case, `ack --state-root <root> --wake <wake-id>` after handling it. A blocked notice prompts inspection of the actual permission or question, never automatic approval. No worker JSON or callbacks are required.
 
+A `kind: still-working` reminder is a periodic opportunity to check progress, not evidence of a stall or a requirement to act. Inspect recent work if useful; long builds and elapsed time alone do not justify interruption, promotion, or broader scope. Existing model policy and human authority still apply. Acknowledge it normally; do not start your own polling loop. The [relay](../../../plugins/agent-wake/README.md#working-reminders) schedules these only for active workers.
+
 A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or stale notices must not repeat work, publication, or finalization. Human text may arrive with a wake appended by terminal input; preserve the human request separately and give it authority over conflicting stale observations.
 
 ## Reconciliation and recovery
@@ -64,4 +66,4 @@ Reconcile old or contradictory status against the latest request, result, and ne
 
 ## Cleanup
 
-Cleanup is independent of task status. After the [recoverability audit](safety-and-escalation.md#cleanup), cancel only that task's watches and remove its owned linked worktree/workspace. Archive its record in the sibling archive directory, normally `.orchestrator/archive`, without adding a cleanup workflow state. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.
+Cleanup is independent of task status. Follow [Workspace Safety](safety-and-escalation.md#cleanup) for removal or standalone closure and cancel only that task's watches. Once cleanup succeeds, archive its record in the sibling archive directory, normally `.orchestrator/archive`, without adding a cleanup workflow state. Archive legacy cleaned records too. Normal status and recovery inspect active records only; historical recovery may consult the archive.

@@ -26,7 +26,8 @@ The defaults below manage human-selected workstreams. Explicit project delegatio
 - By default, the human chooses tasks and approves implementation plans with the author. Initial development authorization includes ordinary feature-branch publication and an intent-bearing draft PR.
 - Direct human instructions to a worker are sufficient authority within their stated scope. Workers need no coordinator acknowledgment, scope-revision message, or event before proceeding. Reconcile your record afterward.
 - Preserve human intent and non-goals; implementation plans may evolve within them. Ask about consequential ambiguity, scope expansion, conflicting work, or risk—not routine implementation choices.
-- Do not implement product work, enable auto-merge, push primary branches, force-push, bypass policy, or answer permission dialogs. Merging, reviewer finalization, and external-review publication require explicit human authorization for that action or a covering delegation.
+- Do not implement product work, enable auto-merge, push primary branches, force-push without authorization, bypass policy, or answer permission dialogs. Merging into primary branches, reviewer finalization, and external-review publication require explicit human authorization for that action or a covering delegation.
+- Refresh existing PR branches in place; merging their base into them is not landing a PR. Use `--force-with-lease` for authorized feature-branch rewrites. Ask rather than replacing PRs to avoid a branch-update restriction.
 - Start only requested work or work necessary within an explicitly delegated project. Human authorization controls parallelism; there is no fixed task cap. Warn about overlapping repositories, contracts, paths, and shared build state.
 - Reuse one workspace per cohesive task, even across related submodules or PRs. Continue or promote an existing investigation when its purpose becomes implementation or review; isolate independent work.
 - Use one persistent author and independent reviewer for development, or one worker for other modes. No speculative helpers or recursive delegation.
@@ -79,4 +80,4 @@ The board renders saved progress. With it available, chat should report results 
 
 If the board is unavailable or a text inventory is requested, show `Workspace | Stage | Agents | PR`, with 🔴 needs you, 🟡 in progress, and 🟢 orchestration complete. Describe current work and who acts next, not review counters. End with **Needs your attention**, one concrete action per workspace, or `None.`
 
-After a verified merge or explicit cleanup request, apply the safety reference, cancel that task's watches, remove only its owned linked worktree/workspace, and archive its record outside the active task directory.
+After a verified merge or explicit cleanup request, apply the safety reference for the workspace type, cancel that task's watches, and archive its record outside the active task directory once cleanup succeeds.

@@ -1,6 +1,6 @@
 # Agent Wake Relay
 
-Wake a controller when a registered Herdr agent starts/resumes or stops working—without polling agents or asking workers to send callbacks. Useful for coding, review, research, or human-led conversations that a coordinator should follow.
+Wake a controller when a registered Herdr agent starts/resumes or stops working, with periodic check-ins during continued work. Workers send no callbacks. Useful for coding, review, research, or human-led conversations that a coordinator should follow.
 
 The relay matches the source workspace, pane, agent name, and available native session identity. It queues a durable notice, defers delivery while the controller is busy, coalesces pending turns, and bounds notification retries. It never interprets output, approves commands, or decides that a task succeeded.
 
@@ -49,9 +49,21 @@ Each watch retains at most one notified-but-unacknowledged wake plus one coalesc
 
 Herdr startup runs a bounded recovery flush. A turn entirely missed while hooks were disabled cannot be reconstructed from lifecycle alone; consumers should reconcile on restart and requested status. Session identity is checked when Herdr exposes it. Human typing can still race with terminal prompt delivery; the consumer must preserve human text separately from an appended wake.
 
-The relay does not install a timer, launch an agent, approve a permission request, or require a worker skill. It depends on Herdr recognizing the agent's runtime state.
+The relay never launches an agent, approves a permission request, or requires a worker skill. It depends on Herdr recognizing the agent's runtime state.
 
 Hooks and recovery skip controllers bound to a different Herdr socket; use controller bindings when sharing the plugin across sessions. Run a targeted flush from the intended session's environment. A missing inherited `HERDR_BIN_PATH` (for example, an old server exporting a replaced executable's ` (deleted)` path) falls back to the installed `herdr` on `PATH` without changing the session socket. Existing executables and failed or timed-out commands are not retried through another binary. Worker lookup failures appear in the plugin's stderr log and leave the watch available for recovery.
+
+## Working reminders
+
+Persistent watches default to a **15-minute** check-in while the source stays `working`. The normal `HERDR_AGENT_WAKE` notice adds `"kind":"still-working"`. This is activity information, not a stall verdict or permission to interrupt, promote, or assign more work. Workers need no additional instructions.
+
+- Only working agents have a deadline. Idle, done, blocked, and cancelled watches stop their timers. Returning to work starts a fresh interval; duplicate hooks do not postpone it.
+- Due agents are batched per controller, with at least one interval between reminder deliveries. Busy controllers defer delivery; a source that stops or changes identity before delivery gets no stale reminder. An outstanding wake suppresses further reminders for that watch until acknowledged.
+- A small Python sleeper starts on demand per consumer/server. Between deadlines it checks local schedule files, not Herdr or an LLM; it exits within five seconds after the last stop/cancel hook. No active work means no timer process or periodic prompts. The dashboard need not be open.
+- File locks prevent duplicate workers. Saved deadlines survive restart; missed intervals produce at most one check-in, never a catch-up burst. Startup `flush` and subsequent lifecycle hooks recover the timer. Missing source identity stops its schedule; a future verified working observation can restart it.
+- The worker stops if its Herdr socket is replaced. At the next deadline it also checks that this plugin remains enabled and linked to the same source, and exits on API failure. Inspect `<state-root>/timer.log` and use a targeted `flush` to recover; it does not retry indefinitely.
+
+Set `--reminder-minutes N` when running `configure` with the existing target and state root; `0` disables reminders without disabling lifecycle wakes. Omission preserves an existing setting, otherwise defaults to 15. Existing bound consumers need no re-registration: run `flush --state-root <root>` after updating. Legacy `--target` consumers must rerun `configure` from their intended Herdr session to record the socket before timers can start.
 
 ## Tests
 

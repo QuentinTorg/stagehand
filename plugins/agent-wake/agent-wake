@@ -26,6 +26,8 @@ SETTLED = {"idle", "done", "blocked"}
 TARGET_READY = {"idle", "done"}
 MAX_NOTIFY_ATTEMPTS = 3
 BUSY_RECHECK_SECONDS = 0.5
+REMINDER_SECONDS = 15 * 60
+TIMER_CHECK_SECONDS = 5
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -127,6 +129,8 @@ def _session_consumers() -> list[dict]:
     # Never reconcile another session's watches using this hook's inventory.
     consumers = []
     for entry in _configured_consumers():
+        if entry.get("socket") and entry["socket"] != os.environ.get("HERDR_SOCKET_PATH"):
+            continue
         target = entry.get("target")
         if isinstance(target, dict):
             try:
@@ -151,7 +155,13 @@ def _configure(args) -> int:
         for item in config.get("consumers", [])
         if isinstance(item, dict) and item.get("root") != root
     ]
-    entry = {"root": root, "target": args.target}
+    previous = next((item for item in config.get("consumers", [])
+                     if isinstance(item, dict) and item.get("root") == root), {})
+    interval = (previous.get("reminder_seconds", REMINDER_SECONDS) if args.reminder_minutes is None
+                else args.reminder_minutes * 60)
+    entry = {"root": root, "target": args.target, "reminder_seconds": interval}
+    if os.environ.get("HERDR_SOCKET_PATH"):
+        entry["socket"] = os.environ["HERDR_SOCKET_PATH"]
     if args.target_binding:
         path = str(Path(args.target_binding).resolve())
         agent_binding.load(path)
@@ -236,6 +246,7 @@ def _arm(args) -> int:
         # Reconcile now instead of waiting for an event that already happened.
         _record_event_for(state_root, source)
         _notify_consumer(state_root, target)
+        _ensure_timer(state_root)
     print(json.dumps(_json_file(state_root / "watches" / f"{watch['id']}.json", watch), sort_keys=True))
     return 0
 
@@ -374,6 +385,13 @@ def _record_event_for(state_root: Path, event: dict) -> None:
             if not persistent and current not in SETTLED:
                 continue
             if persistent:
+                now = time.time()
+                interval = _reminder_interval(state_root)
+                if current == "working" and interval:
+                    if watch.get("last_status") != "working" or not watch.get("reminder_due"):
+                        watch["reminder_due"] = now + interval
+                else:
+                    watch.pop("reminder_due", None)
                 # An already idle pane is not a result. A working hook can arrive
                 # after its stop hook, so it also supplies evidence of a fast turn.
                 if current != "working" and status != "working" and not watch.get("observed_working"):
@@ -444,6 +462,17 @@ def _consumer_agent(target):
 def _notify_consumer(state_root: Path, configured_target) -> None:
     with _locked(state_root) as root:
         inbox = _documents(root / "inbox")
+        # A reminder deferred behind a busy controller may outlive the work.
+        # Validate again at delivery; it must never wake an idle system on stale evidence.
+        for path, wake in inbox:
+            if wake and not wake.get("notified") and wake.get("kind") == "still-working":
+                watch = _json_file(root / "watches" / f"{wake['watch_id']}.json", {})
+                source = _confirm_source(watch) if watch.get("state") == "armed" else None
+                changed_turn = (source and wake.get("state_change_seq") is not None
+                                and source.get("state_change_seq") != wake["state_change_seq"])
+                if not _reminder_interval(root) or not source or _status(source) != "working" or changed_turn:
+                    path.unlink()
+        inbox = _documents(root / "inbox")
         delivered = {wake.get("watch_id", wake["id"]) for _, wake in inbox
                      if wake and wake.get("notified")}
         pending = [
@@ -451,6 +480,7 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
             for path, wake in inbox
             if wake and not wake.get("notified") and wake.get("attempts", 0) < MAX_NOTIFY_ATTEMPTS
             and wake.get("watch_id", wake["id"]) not in delivered
+            and (wake.get("kind") != "still-working" or time.time() >= _reminder_cooldown(root))
         ]
         if not pending:
             return
@@ -478,6 +508,7 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
                 "workspace": wake.get("workspace_label") or wake["workspace_id"],
                 "pane": wake["pane_id"],
                 "status": wake["status"],
+                **({"kind": "still-working"} if wake.get("kind") == "still-working" else {}),
             }
             for _, wake in pending
         ]
@@ -488,6 +519,8 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
             and isinstance(response, dict)
             and (response.get("result") or {}).get("type") == "agent_prompted"
         )
+        if accepted and any(wake.get("kind") == "still-working" for _, wake in pending):
+            _atomic_json(root / "reminders.json", {"notified_at": time.time()})
         for path, wake in pending:
             if accepted:
                 wake["notified"] = True
@@ -520,6 +553,7 @@ def _flush(state_root=None) -> int:
                 else:
                     print(f"agent-wake: cannot recover {watch['pane_id']}: {error}", file=sys.stderr)
             _notify_consumer(state_root, entry.get("target", ""))
+            _ensure_timer(state_root)
     return 0
 
 
@@ -530,7 +564,161 @@ def _hook() -> int:
         if state_root.is_dir():
             _record_event_for(state_root, event)
             _notify_consumer(state_root, entry.get("target", ""))
+            _ensure_timer(state_root)
     return 0
+
+
+def _reminder_consumer(state_root):
+    return next((entry for entry in _session_consumers()
+                 if Path(entry["root"]).resolve() == state_root.resolve()), None)
+
+
+def _reminder_interval(state_root):
+    entry = _reminder_consumer(state_root)
+    value = entry.get("reminder_seconds", REMINDER_SECONDS) if entry else 0
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _next_reminder(root):
+    deadlines = [watch["reminder_due"] for _, watch in _documents(root / "watches")
+                 if watch and watch.get("persistent") and watch.get("state") == "armed"
+                 and watch.get("last_status") == "working" and watch.get("reminder_due")]
+    return max(min(deadlines), _reminder_cooldown(root)) if deadlines else None
+
+
+def _reminder_cooldown(root):
+    # Staggered workers must not turn one check-in interval into many LLM wakes.
+    sent = _json_file(root / "reminders.json", {}).get("notified_at")
+    return sent + _reminder_interval(root) if sent is not None else 0
+
+
+def _remind(state_root, now):
+    """One bounded check of due sources, followed by one batched delivery."""
+    entry = _reminder_consumer(state_root)
+    interval = _reminder_interval(state_root)
+    if not entry or not interval:
+        return False
+    with _locked(state_root):
+        due = _next_reminder(state_root)
+        if due is None:
+            return False
+        if due > now:
+            return True
+    # Detached workers must stop after disable/uninstall, not merely stop seeing hooks.
+    payload, error = _herdr("plugin", "list", "--json")
+    plugins = (payload or {}).get("result", {}).get("plugins", [])
+    if error or not any(p.get("plugin_id") == PLUGIN_ID and p.get("enabled")
+                        and Path(p.get("plugin_root", "")).resolve() == Path(__file__).resolve().parent
+                        for p in plugins):
+        return False
+    payload, error = _herdr("api", "snapshot")
+    if error:
+        print(f"agent-wake: reminder inventory failed: {error}", file=sys.stderr)
+        return False
+    agents = (payload or {}).get("result", {}).get("snapshot", {}).get("agents", [])
+    with _locked(state_root) as root:
+        for path, watch in _documents(root / "watches"):
+            if (not watch or not watch.get("persistent") or watch.get("state") != "armed"
+                    or not watch.get("reminder_due") or watch["reminder_due"] > now):
+                continue
+            matches = [agent for agent in agents if _same_source(watch, agent)]
+            if len(matches) != 1 or _status(matches[0]) != "working":
+                watch.pop("reminder_due", None)
+                _atomic_json(path, watch)
+                continue
+            sequence = matches[0].get("state_change_seq")
+            if isinstance(sequence, int) and sequence != watch.get("last_state_change_seq", sequence):
+                # A turn may stop and restart between missed hooks. Do not count
+                # the previous turn's elapsed time against this one.
+                watch["last_state_change_seq"] = sequence
+                watch["reminder_due"] = now + interval
+                _atomic_json(path, watch)
+                continue
+            # Skip missed intervals after suspension/restart. An outstanding wake
+            # already invites inspection, so never accumulate reminders behind it.
+            watch["reminder_due"] = now + interval
+            _atomic_json(path, watch)
+            if any(w and w.get("watch_id", w.get("id")) == watch["id"]
+                   for _, w in _documents(root / "inbox")):
+                continue
+            notice = {key: watch[key] for key in ("key", "metadata", "workspace_id", "workspace_label",
+                                                  "pane_id", "agent_name")}
+            notice.update(id=uuid.uuid4().hex, version=1, watch_id=watch["id"], kind="still-working",
+                          status="working", observed_at=now, state_change_seq=matches[0].get("state_change_seq"),
+                          notified=False, attempts=0, last_error=None)
+            _atomic_json(root / "inbox" / f"{notice['id']}.json", notice)
+    _notify_consumer(state_root, entry["target"])
+    return True
+
+
+def _socket_identity():
+    path = os.environ.get("HERDR_SOCKET_PATH")
+    if not path:
+        return None
+    try:
+        stat = os.stat(path)
+        return f"{stat.st_dev}-{stat.st_ino}"
+    except OSError:
+        return None
+
+
+def _ensure_timer(state_root):
+    """Start at most one sleeper per consumer/server, only while work is active."""
+    entry = _reminder_consumer(state_root)
+    identity = _socket_identity()
+    # Legacy name-only consumers must configure again to record their socket.
+    if (not entry or not identity or not _reminder_interval(state_root)
+            or not (entry.get("socket") or isinstance(entry.get("target"), dict))):
+        return
+    with _locked(state_root) as root:
+        if _next_reminder(root) is None:
+            return
+        with (root / f"timer-{identity}.lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            # Pass the lock itself, not a PID file: concurrent hooks cannot launch
+            # duplicates, and a dead worker releases ownership automatically.
+            with (root / "timer.log").open("a") as log:
+                subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "timer",
+                                  "--state-root", str(root), "--lock-fd", str(lock.fileno()),
+                                  "--socket-identity", identity],
+                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                 start_new_session=True, pass_fds=(lock.fileno(),),
+                                 # CLI registration may lack plugin-hook context;
+                                 # resolve once so the sleeper's reads stay local.
+                                 env=dict(os.environ, HERDR_PLUGIN_CONFIG_DIR=str(_config_dir())))
+
+
+def _timer(args):
+    root = Path(args.state_root).resolve()
+    with os.fdopen(args.lock_fd, "a") as lock:
+        while root.is_dir():
+            with _locked(root):
+                due = _next_reminder(root)
+                if (_socket_identity() != args.socket_identity or due is None
+                        or not _reminder_interval(root)):
+                    # Release under the state lock: a concurrent start hook then
+                    # either wakes this worker's next loop or starts its successor.
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    return 0
+            now = time.time()
+            if due <= now:
+                if not _remind(root, now):
+                    return 0
+            else:
+                # Only read local schedule files while sleeping. No Herdr/LLM
+                # polling; stop within five seconds of the final stop/cancel hook.
+                time.sleep(min(TIMER_CHECK_SECONDS, due - now))
+    return 0
+
+
+def _minutes(value):
+    minutes = int(value)
+    if minutes < 0:
+        raise argparse.ArgumentTypeError("reminder minutes must be nonnegative (0 disables)")
+    return minutes
 
 
 def _status_command(args) -> int:
@@ -547,6 +735,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     configure = commands.add_parser("configure")
     configure.add_argument("--state-root", required=True)
+    configure.add_argument("--reminder-minutes", type=_minutes,
+                           help="Working-agent check-in interval; default 15, 0 disables")
     target = configure.add_mutually_exclusive_group(required=True)
     target.add_argument("--target", help="Legacy live agent name or pane")
     target.add_argument("--target-binding", help="Explicit saved controller binding shared with a board")
@@ -578,6 +768,11 @@ def _parser() -> argparse.ArgumentParser:
     flush = commands.add_parser("flush")
     flush.add_argument("--state-root", help="Recover only this configured consumer in the current Herdr session")
     flush.set_defaults(run=lambda args: _flush(args.state_root))
+    timer = commands.add_parser("timer", help=argparse.SUPPRESS)
+    timer.add_argument("--state-root", required=True)
+    timer.add_argument("--lock-fd", type=int, required=True)
+    timer.add_argument("--socket-identity", required=True)
+    timer.set_defaults(run=_timer)
     return parser
 
 
