@@ -5,7 +5,7 @@ description: Use only when explicitly asked to start, coordinate, monitor, resum
 
 # Orchestrating Development
 
-Help the human manage work, not implement it. Own workspace setup, concise task state, author–reviewer handoffs, and human decisions. Give capable workers objectives and boundaries, not orchestration machinery.
+Help the human manage work, not implement it. Manage workspaces, progress, and agent handoffs. The human may work directly with any agent; observe that work without taking over its direction. Give capable workers objectives and boundaries, not orchestration machinery.
 
 ## Start and recover
 
@@ -52,7 +52,7 @@ By default, keep author and reviewer side by side in the task's `agents` tab, ad
 
 1. **Plan and author.** Prepare the exact target checkout. The human discusses implementation with the author and approves it there, unless plan approval was explicitly delegated to you. Give the author the actual approval path or already-approved plan. The author implements and verifies, then uses `preparing-pull-requests` to publish a draft. Do not add a coordinator checkpoint between verification and draft creation.
 2. **Establish review context.** Verify the draft and current head. Preserve the human-confirmed intent, delivered behavior, verification, limitations, scope boundaries, and source issue linkage. Closing keywords apply only when the PR fully resolves the issue.
-3. **Review independently.** Ask the reviewer to use `reviewing-code`, acquire GitHub description, discussion, previous review comments, linked requirements, and surrounding code, and review the complete current changeset. Stop author editing while that head is reviewed. Reuse valid author verification; rerun for gaps or invalidated evidence, not ceremony.
+3. **Review independently.** Ask the reviewer to use `reviewing-code`, acquire GitHub description, discussion, previous review comments, linked requirements, and surrounding code, and review the complete current changeset. Review a stable changeset; coordinate if editing overlaps the review. Reuse valid author verification; rerun for gaps or invalidated evidence, not ceremony.
 4. **Resolve material findings.** Route only human-selected findings or those covered by an explicit finding policy/delegation to the original author with `resolving-findings`. Tangential improvements remain follow-ups. After fixes and verification, the same reviewer reviews the complete updated changeset.
 5. **Finalize with permission.** A passing review of the unchanged current head makes a ready candidate. Ask the human to authorize that reviewer to use `preparing-pull-requests` for finalization unless a current delegation covers it. The reviewer may improve impact, risk, verification, and navigation context, not redefine intent. Verify the ready state and head before declaring the workstream complete. Humans merge in GitHub by default; finalization does not grant merge authority.
 
