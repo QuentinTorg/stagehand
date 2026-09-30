@@ -1019,7 +1019,7 @@ def settings_layout(settings, width):
     items = [
         ("send_while_working", "1 Send while working", "On" if settings["send_while_working"] else "Off",
          "Allow Enter / Send during an active turn. Enable only for agents that accept mid-turn input. "
-         "Blocked, unknown, or unavailable agents still reject messages."),
+         "Blocked or unavailable agents reject messages. Unknown status allows a send; Herdr validates delivery."),
         ("animate_activity", "2 Animation", "On" if settings["animate_activity"] else "Off",
          "Show rotating dots while the message recipient is working. This indicates activity, not completion progress; "
          "stale observations stop the animation."),
@@ -1449,7 +1449,8 @@ def send_message(args, row, message):
             return False, f"{recipient.capitalize()} is blocked. Use Interact or open its native session; draft kept."
         if status == "working" and not getattr(args, "send_while_working", False):
             return False, f"{recipient.capitalize()} is working. Enable Send while working in Settings, or wait. Draft kept."
-        if status not in {"idle", "done", "working"}:
+        # Codex can remain unknown after a response; Herdr validates this explicit send.
+        if status not in {"idle", "done", "working", "unknown"}:
             return False, f"{recipient.capitalize()} status is uncertain. Nothing sent; draft kept."
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return False, f"Cannot verify the {recipient}. Nothing sent; draft kept."

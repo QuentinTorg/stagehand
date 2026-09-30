@@ -595,6 +595,57 @@ class PersistentWakeTest(WakePluginTest):
         self.assertEqual([], self.documents("inbox"))
         self.assertEqual(1, len(self.prompts))
 
+    def test_unknown_after_activity_is_a_hint_not_completion(self):
+        self.arm("--persistent")
+        self.target_status = "unknown"
+        self.turn("unknown")
+        notice = self.documents("inbox")[0]
+        self.assertEqual(notice["status"], "unknown")
+        self.assertEqual(notice["kind"], "state-uncertain")
+        self.assertNotIn("settled_at", notice)
+        self.assertNotIn("reminder_due", self.documents("watches")[0])
+        self.assertIn('"kind":"state-uncertain"', self.prompts[0])
+        self.command("ack", "--wake", notice["id"])
+        self.emit("unknown")
+        wake._flush()
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual(1, len(self.prompts))
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.assertEqual(2, len(self.prompts))
+
+    def test_initial_unknown_does_not_invent_activity(self):
+        self.source["agent_status"] = "unknown"
+        self.arm("--persistent")
+        self.emit("unknown")
+        wake._flush()
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual([], self.prompts)
+
+    def test_delayed_working_hook_recovers_another_ambiguous_turn(self):
+        self.arm("--persistent")
+        self.source["state_change_seq"] = 10
+        self.turn("unknown")
+        self.command("ack", "--wake", self.documents("inbox")[0]["id"])
+        self.source["state_change_seq"] = 12
+        self.emit("working")
+        notice = self.documents("inbox")[0]
+        self.assertEqual(notice["kind"], "state-uncertain")
+        self.assertNotIn("settled_at", notice)
+        self.assertEqual(2, len(self.prompts))
+
+    def test_one_shot_unknown_does_not_consume_completion_watch(self):
+        self.arm()
+        self.source["agent_status"] = "working"
+        self.emit("working")
+        self.source["agent_status"] = "unknown"
+        self.emit("unknown")
+        self.assertEqual([], self.documents("inbox"))
+        self.assertEqual("armed", self.documents("watches")[0]["state"])
+        self.source["agent_status"] = "done"
+        self.emit("done")
+        self.assertEqual("done", self.documents("inbox")[0]["status"])
+
     def test_resuming_after_block_notifies_working(self):
         self.arm("--persistent")
         self.turn("blocked")

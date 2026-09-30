@@ -5,13 +5,13 @@ description: Use only when explicitly asked to start, coordinate, monitor, resum
 
 # Orchestrating Development
 
-Help the human manage work, not implement it. Own workspace setup, concise task state, author–reviewer handoffs, and human decisions. Give capable workers objectives and boundaries, not orchestration machinery.
+Help the human manage work, not implement it. Manage workspaces, progress, and agent handoffs. The human may work directly with any agent; observe that work without taking over its direction. Give capable workers objectives and boundaries, not orchestration machinery.
 
 ## Start and recover
 
 Load the workspace `AGENTS.md`, its required local configuration, and the Herdr skill. Use the [controller binding](references/installation.md#controller-binding) to connect this human-designated agent to the board and wake relay. Reuse a bound session; a different controller requires an authorized handover. Agent names are optional. Do not guess repository locations.
 
-Herdr's in-pane guard requires verified caller identity, not merely environment variables. Daemon-backed tools can lack `HERDR_ENV` even when the agent frontend is attached. Before control calls, recover missing Herdr variables only from a frontend uniquely matched to your exact native conversation/session ID. Never fabricate context, borrow another agent's environment, or infer ownership from UI focus. If that match cannot be verified, ask the human; do not rebind or restart a healthy controller/dashboard to repair tool context.
+Daemon-backed tools can lack Herdr context even when the agent frontend is attached. Recover it from a frontend verified as this agent's, using its native session ID or an exact pane identified by the human. Do not borrow another agent's context or infer identity from UI focus; ask the human if identity remains unresolved. An explicit human designation as the replacement orchestrator authorizes updating a stale controller binding.
 
 If prerequisites are missing, use [Installation](references/installation.md) to explain and offer the remaining setup. Missing optional UI must not block otherwise safe work.
 
@@ -38,7 +38,7 @@ Before provisioning or cleanup, read [Workspace Safety](references/safety-and-es
 
 Choose the agent, model, and supported options using local policy and [Agent Selection](references/agent-selection.md). Keep each prompt to the objective, exact checkout/branch, relevant issue or PR, constraints, and expected result. Do not send this skill, private configuration, task-record schemas, routing IDs, or notification instructions.
 
-Distinguish coordinator recommendations from human requirements; never attribute your additions to the human.
+Keep cross-task coordination and author–reviewer handoffs with the orchestrator unless the human requests direct communication. Sequence overlapping edits instead of asking workers to negotiate ownership. Prefix dispatched messages with the sender's role and task; distinguish relayed human instructions from coordinator guidance, and never attribute your additions to the human.
 
 The startup assets are short assignment examples, not repeated headers:
 
@@ -52,7 +52,7 @@ By default, keep author and reviewer side by side in the task's `agents` tab, ad
 
 1. **Plan and author.** Prepare the exact target checkout. The human discusses implementation with the author and approves it there, unless plan approval was explicitly delegated to you. Give the author the actual approval path or already-approved plan. The author implements and verifies, then uses `preparing-pull-requests` to publish a draft. Do not add a coordinator checkpoint between verification and draft creation.
 2. **Establish review context.** Verify the draft and current head. Preserve the human-confirmed intent, delivered behavior, verification, limitations, scope boundaries, and source issue linkage. Closing keywords apply only when the PR fully resolves the issue.
-3. **Review independently.** Ask the reviewer to use `reviewing-code`, acquire GitHub description, discussion, previous review comments, linked requirements, and surrounding code, and review the complete current changeset. Stop author editing while that head is reviewed. Reuse valid author verification; rerun for gaps or invalidated evidence, not ceremony.
+3. **Review independently.** Ask the reviewer to use `reviewing-code`, acquire GitHub description, discussion, previous review comments, linked requirements, and surrounding code, and review the complete current changeset. Review a stable changeset; coordinate if editing overlaps the review. Reuse valid author verification; rerun for gaps or invalidated evidence, not ceremony.
 4. **Resolve material findings.** Route only human-selected findings or those covered by an explicit finding policy/delegation to the original author with `resolving-findings`. Tangential improvements remain follow-ups. After fixes and verification, the same reviewer reviews the complete updated changeset.
 5. **Finalize with permission.** A passing review of the unchanged current head makes a ready candidate. Ask the human to authorize that reviewer to use `preparing-pull-requests` for finalization unless a current delegation covers it. The reviewer may improve impact, risk, verification, and navigation context, not redefine intent. Verify the ready state and head before declaring the workstream complete. Humans merge in GitHub by default; finalization does not grant merge authority.
 
