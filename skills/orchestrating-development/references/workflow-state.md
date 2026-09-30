@@ -43,6 +43,8 @@ A `kind: still-working` reminder is a periodic opportunity to check progress, no
 
 A wake is a hint, not an event ledger: several turns may coalesce. Duplicate or stale notices must not repeat work, publication, or finalization. Human text may arrive with a wake appended by terminal input; preserve the human request separately and give it authority over conflicting stale observations.
 
+A `kind: state-uncertain` notice means Herdr lost certainty after observed activity, not that the worker stopped or completed. Inspect its latest answer and artifacts to reconcile; do not interrupt or redispatch based on `unknown` alone.
+
 ## Reconciliation and recovery
 
 At startup, use `status --state-root <root>` and `flush` to inspect pending wakes and recover observed transitions. Confirm the saved binding resolves to this controller session. Reconcile watches against current role identities; cancel stale ones and register replacements. Do not attach unrelated human-created agents.

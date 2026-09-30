@@ -24,6 +24,8 @@ import agent_binding
 PLUGIN_ID = "quentintorg.agent-wake"
 SETTLED = {"idle", "done", "blocked"}
 TARGET_READY = {"idle", "done"}
+# Unknown Codex status is ambiguous, not necessarily busy; prompt delivery remains validated.
+TARGET_SENDABLE = TARGET_READY | {"unknown"}
 MAX_NOTIFY_ATTEMPTS = 3
 BUSY_RECHECK_SECONDS = 0.5
 REMINDER_SECONDS = 15 * 60
@@ -341,7 +343,7 @@ def _confirm_source(watch: dict) -> dict | None:
         print(f"agent-wake: cannot inspect {watch['pane_id']}: {error}", file=sys.stderr)
         return None
     agent = _agent(payload)
-    if _status(agent) not in ({"working"} | SETTLED):
+    if _status(agent) not in ({"working"} | SETTLED | ({"unknown"} if watch.get("persistent") else set())):
         return None
     if watch.get("persistent"):
         return agent if _same_source(watch, agent) else None
@@ -359,7 +361,7 @@ def _confirm_source(watch: dict) -> dict | None:
 def _record_event_for(state_root: Path, event: dict) -> None:
     pane_id = _event_value(event, "pane_id")
     status = str(_event_value(event, "agent_status") or _event_value(event, "status") or "")
-    if not pane_id or status not in ({"working"} | SETTLED):
+    if not pane_id or status not in ({"working", "unknown"} | SETTLED):
         return
     with _locked(state_root) as root:
         matches = [
@@ -371,6 +373,8 @@ def _record_event_for(state_root: Path, event: dict) -> None:
             persistent = watch.get("persistent", False)
             if not persistent:
                 # One-shot callers still request only a completed turn.
+                if status == "unknown":
+                    continue
                 if status == "working":
                     watch["observed_working"] = True
                     watch["updated_at"] = time.time()
@@ -399,10 +403,9 @@ def _record_event_for(state_root: Path, event: dict) -> None:
                 normalized = "idle" if current in TARGET_READY else current
                 sequence = source.get("state_change_seq")
                 if normalized == watch.get("last_status"):
-                    # A newer settled snapshot after a delayed working hook can
-                    # represent another complete turn. Focus-only idle/done
-                    # changes and duplicate working snapshots are not new work.
-                    missed_turn = (current in SETTLED and status == "working"
+                    # A delayed working hook can reveal activity between identical
+                    # snapshots, including ambiguous ones. Focus changes cannot.
+                    missed_turn = (current in (SETTLED | {"unknown"}) and status == "working"
                                    and isinstance(sequence, int)
                                    and sequence > watch.get("last_state_change_seq", sequence))
                     if not missed_turn:
@@ -438,6 +441,8 @@ def _record_event_for(state_root: Path, event: dict) -> None:
             }
             if current in SETTLED:
                 wake["settled_at"] = now
+            elif current == "unknown":
+                wake["kind"] = "state-uncertain"
             # Persist the notice before consuming the observed transition. A
             # crash may repeat a hint, but must not silently lose the result.
             _atomic_json(root / "inbox" / f"{wake['id']}.json", wake)
@@ -491,12 +496,12 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
                 wake["last_error"] = error
                 _atomic_json(path, wake)
             return
-        if _status(agent) not in TARGET_READY:
+        if _status(agent) not in TARGET_SENDABLE:
             # Close the narrow race where the target settles just before this
             # inbox write; longer work remains queued for its later status hook.
             time.sleep(BUSY_RECHECK_SECONDS)
             agent, error = _consumer_agent(target)
-            if error or _status(agent) not in TARGET_READY:
+            if error or _status(agent) not in TARGET_SENDABLE:
                 return
         if isinstance(target, dict):
             target = agent["pane_id"]
@@ -508,7 +513,7 @@ def _notify_consumer(state_root: Path, configured_target) -> None:
                 "workspace": wake.get("workspace_label") or wake["workspace_id"],
                 "pane": wake["pane_id"],
                 "status": wake["status"],
-                **({"kind": "still-working"} if wake.get("kind") == "still-working" else {}),
+                **({"kind": wake["kind"]} if wake.get("kind") else {}),
             }
             for _, wake in pending
         ]

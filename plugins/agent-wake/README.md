@@ -31,6 +31,8 @@ After the source agent is running, register it before sending work:
 
 A persistent watch reports `working` and subsequent idle/done/blocked transitions, including turns started directly by a human. It remains active until cancelled. Omit `--persistent` for a backward-compatible, stop-only one-shot watch.
 
+After observed activity, an `unknown` transition produces a `kind: state-uncertain` hint for reconciliation, not completion. Duplicate unknown snapshots do not repeat it. Unknown controllers allow validated prompt delivery; working or blocked controllers still defer. One-shot completion watches ignore unknown states.
+
 The controller receives `HERDR_AGENT_WAKE` followed by a JSON array containing the wake ID, key, metadata, workspace, pane, and observed status. The worker does not generate this message.
 
 - A `working` notice is activity, not a request to dispatch, evidence of approval, or proof of who submitted input. Reconcile already-known activity without interrupting the worker. A stop may mean a question, permission request, findings, or success; inspect current evidence.

@@ -277,7 +277,7 @@ class BoardTests(unittest.TestCase):
                         board.subprocess, "run", side_effect=[response, delivered]
                     ) as run:
                         success, _ = board.send_message(args, None, "One note")
-                    expected = workspace == "control" and (status == "idle" or status == "working" and enabled)
+                    expected = workspace == "control" and (status in {"idle", "unknown"} or status == "working" and enabled)
                     self.assertEqual(success, expected)
                     self.assertEqual(run.call_count, 2 if expected else 1)
 
@@ -1886,7 +1886,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                     board, "herdr_call", return_value=board.json.dumps({"result": {"agent": agent}})
                 ), patch.object(board.subprocess, "run", return_value=response) as send:
                     success, note = board.send_message(SimpleNamespace(offline=False, send_while_working=enabled), row, "hello")
-                expected = status in {"idle", "done"} or status == "working" and enabled
+                expected = status in {"idle", "done", "unknown"} or status == "working" and enabled
                 self.assertEqual(success, expected)
                 self.assertEqual(send.call_count, int(expected))
                 if status == "blocked":
@@ -1977,6 +1977,20 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertFalse(success)
         self.assertIn("Check orchestrator before retrying", note)
         self.assertEqual(run.call_count, 2)
+
+    def test_unknown_controller_uses_validated_send_and_keeps_failure_unconfirmed(self):
+        args = SimpleNamespace(offline=False, tasks=Path("/control/tasks"))
+        reply = SimpleNamespace(stdout=self.controller_reply(agent_status="unknown"))
+        accepted = SimpleNamespace(stdout=board.json.dumps({"result": {"type": "agent_prompted"}}))
+        for result in (accepted, board.subprocess.CalledProcessError(1, "herdr")):
+            with patch.dict(board.os.environ, HERDR_ENV="1"), patch.object(
+                board.subprocess, "run", side_effect=[reply, result]
+            ) as run:
+                success, note = board.send_message(args, None, "hello")
+            self.assertEqual(success, result is accepted)
+            self.assertEqual(run.call_count, 2)
+            if not success:
+                self.assertIn("draft kept", note)
 
     def test_private_draft_survives_reopen_without_touching_task_records(self):
         with tempfile.TemporaryDirectory() as root:
