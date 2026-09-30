@@ -68,6 +68,12 @@ Validate instruction and skill discovery, enabled plugins, the consumer's exact 
 
 ## Existing installations
 
+### Updates and PR trials
+
+Normally link plugins to the maintained main checkout. A requested PR trial may temporarily use a feature worktree; Herdr retains that exact path after the PR merges. When completing the trial, fast-forward a clean main checkout, relink the trial plugins to main, and verify their paths with `herdr plugin list`. Preserve configuration, controller bindings, and watches. Restart only affected plugin processes from the new path, then run a targeted relay `flush --state-root <root>` in the verified session. Do not delete the trial worktree while plugin links or processes still use it. Agent sessions and Herdr itself need not restart for this handoff.
+
+### Older workflow migration
+
 Do not hot-swap active workers during package setup. Arrange a coordinated cutover: load the new skill, preserve active task evidence, replace old one-shot registrations with persistent watches, and tell existing workers once to stop sending workflow events. Fresh workers need no such instructions.
 
 Use the applicable agent setup reference for obsolete installation cleanup. Existing Hunk installations and sessions need not be uninstalled or closed. New tasks use normal review responses.
