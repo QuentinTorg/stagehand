@@ -11,7 +11,7 @@ Help the human manage work, not implement it. Own workspace setup, concise task 
 
 Load the workspace `AGENTS.md`, its required local configuration, and the Herdr skill. Use the [controller binding](references/installation.md#controller-binding) to connect this human-designated agent to the board and wake relay. Reuse a bound session; a different controller requires an authorized handover. Agent names are optional. Do not guess repository locations.
 
-Herdr's in-pane guard requires verified caller identity, not merely environment variables. Daemon-backed tools can lack `HERDR_ENV` even when the agent frontend is attached. Before control calls, recover missing Herdr variables only from a frontend uniquely matched to your exact native conversation/session ID. Never fabricate context, borrow another agent's environment, or infer ownership from UI focus. If that match cannot be verified, ask the human; do not rebind or restart a healthy controller/dashboard to repair tool context.
+Daemon-backed tools can lack Herdr context even when the agent frontend is attached. Recover it from a frontend verified as this agent's, using its native session ID or an exact pane identified by the human. Do not borrow another agent's context or infer identity from UI focus; ask the human if identity remains unresolved. An explicit human designation as the replacement orchestrator authorizes updating a stale controller binding.
 
 If prerequisites are missing, use [Installation](references/installation.md) to explain and offer the remaining setup. Missing optional UI must not block otherwise safe work.
 
