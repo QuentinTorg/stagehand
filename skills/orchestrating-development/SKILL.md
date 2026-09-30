@@ -38,7 +38,7 @@ Before provisioning or cleanup, read [Workspace Safety](references/safety-and-es
 
 Choose the agent, model, and supported options using local policy and [Agent Selection](references/agent-selection.md). Keep each prompt to the objective, exact checkout/branch, relevant issue or PR, constraints, and expected result. Do not send this skill, private configuration, task-record schemas, routing IDs, or notification instructions.
 
-Distinguish coordinator recommendations from human requirements; never attribute your additions to the human.
+Keep cross-task coordination and author–reviewer handoffs with the orchestrator unless the human requests direct communication. Sequence overlapping edits instead of asking workers to negotiate ownership. Prefix dispatched messages with the sender's role and task; distinguish relayed human instructions from coordinator guidance, and never attribute your additions to the human.
 
 The startup assets are short assignment examples, not repeated headers:
 
