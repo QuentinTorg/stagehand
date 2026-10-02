@@ -28,6 +28,7 @@ from live_terminal import LivePreview
 from preview_links import LinkedScreen, safe_link
 import agent_binding
 import resume
+import reporting
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -841,9 +842,18 @@ def snapshot(directory, offline=False, include_controller=False):
             try:
                 owner = agent_binding.resolve(CONTROLLER_BINDING, agents)
                 status = clean(owner.get("agent_status")) or "unknown"
+                reporting.sync(directory, tasks, agents, owner)
+                reporting.decorate(directory, tasks, agents, owner, rows)
             except ValueError as error:
                 warnings.append(str(error))
-        return rows, warnings, {"status": status, "observed_at": time.monotonic()}
+            except (OSError, KeyError, TypeError, subprocess.SubprocessError, SystemExit) as error:
+                warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
+        try:
+            reporter_config = reporting.configuration(directory)
+        except (OSError, ValueError) as error:
+            reporter_config = dict(reporting.DEFAULTS)
+            warnings.append(f"Reporter configuration: {clean(error)}")
+        return rows, warnings, {"status": status, "observed_at": time.monotonic(), "reporter": reporter_config}
     return rows, warnings
 
 
@@ -1033,15 +1043,31 @@ def settings_layout(settings, width):
          "Enable this fallback for clients that strip them: Enter inserts a newline; Send or Ctrl-G submits. "
          "Does not change Interact's native terminal input."),
     ]
+    config = settings.get("reporter", reporting.DEFAULTS)
+    items.extend([
+        ("reporter", "5 Status reporting", "Background" if config["enabled"] else "Orchestrator",
+         "Optional read-only observer in its own directory and separate tab. Enabling launches one agent "
+         "with the settings below; workers and coordinator are never messaged by it. Disabling restores "
+         "ordinary status and cancels only reporter watches, leaving its tab available."),
+        ("reporter-kind", "6 Reporter harness", config["kind"], "Herdr agent kind. Change while reporting is off."),
+        ("reporter-model", "7 Reporter model", config["model"] or "Native arguments",
+         "Codex model. For another harness, clear Model and Reasoning and use its native arguments."),
+        ("reporter-reasoning", "8 Reporter reasoning", config["reasoning"] or "Native arguments",
+         "Codex reasoning effort; the initial experimental preset is Luna medium."),
+        ("reporter-arguments", "9 Native arguments", config["arguments"] or "None",
+         "Additional native launch arguments, shell-quoted but never executed through a shell. "
+         "Directory and Herdr skill paths can be configured through reporting.py."),
+    ])
     content_width = max(1, min(width - 4, 120))
-    labels = [f"  {label}: {value}  " for _, label, value, _ in items]
+    labels = [f"  {label}: {clipped(value, 24)}  " for _, label, value, _ in items]
     control_width = max(map(len, labels))
     beside = content_width - control_width - 3 >= 40
-    intro = "Click a control or use Ctrl-P then 1 / 2 / 3 / 4. Esc returns. Saved for this workspace."
+    intro = "Click a control or use Ctrl-P then 1–9. Esc returns. Saved for this workspace."
     lines = [(line, 0, []) for line in textwrap.wrap(intro, content_width)] + [("", 0, [])]
     controls = {}
     for (key, _, _, description), label in zip(items, labels):
-        controls[len(lines)] = (label.ljust(control_width), key, settings[key])
+        controls[len(lines)] = (label.ljust(control_width), key,
+                               config["enabled"] if key == "reporter" else settings.get(key, False))
         indent = control_width + 3 if beside else 2
         wrapped = textwrap.wrap(description, max(1, content_width - indent))
         if not beside:
@@ -1049,6 +1075,57 @@ def settings_layout(settings, width):
         lines.extend((" " * indent + line, 0, []) for line in wrapped)
         lines.append(("", 0, []))
     return lines, controls
+
+
+def edit_reporter_setting(screen, label, value, input_reader=None):
+    """Edit launch options separately from message drafts; Escape changes nothing."""
+    text, position = value, len(value)
+    input_reader = input_reader or MessageInput(screen)
+    try:
+        curses.curs_set(1)
+        while True:
+            height, width = screen.getmaxyx()
+            if height < 5 or width < 12:
+                return None
+            box = curses.newwin(min(5, height), max(2, width - 4), max(0, (height - 5) // 2), 2)
+            box.keypad(True)
+            box.box()
+            box.addnstr(0, 2, f" {label} · Enter saves · Esc cancels ", max(0, width - 8))
+            usable = max(1, width - 8)
+            start = max(0, position - usable + 1)
+            box.addnstr(2, 2, text[start:], usable)
+            box.move(2, 2 + position - start)
+            box.refresh()
+            try:
+                key = input_reader.read()
+            except curses.error:
+                continue
+            if isinstance(key, InsertText):
+                inserted = key.text.replace("\n", " ")[:max(0, 1000 - len(text))]
+                text = text[:position] + inserted + text[position:]
+                position += len(inserted)
+                continue
+            if key == "\x1b":
+                return None
+            if key in ("\n", "\r", curses.KEY_ENTER):
+                return text
+            if key == curses.KEY_LEFT:
+                position = max(0, position - 1)
+            elif key == curses.KEY_RIGHT:
+                position = min(len(text), position + 1)
+            elif key in (curses.KEY_BACKSPACE, "\x7f", "\b") and position:
+                text, position = text[:position - 1] + text[position:], position - 1
+            elif key == curses.KEY_DC:
+                text = text[:position] + text[position + 1:]
+            elif key == curses.KEY_HOME:
+                position = 0
+            elif key == curses.KEY_END:
+                position = len(text)
+            elif isinstance(key, str) and key.isprintable() and len(text) < 1000:
+                text = text[:position] + key + text[position:]
+                position += 1
+    finally:
+        curses.curs_set(0)
 
 
 def clipped(text, width):
@@ -1168,6 +1245,17 @@ def detail_lines(row, width, info=False):
     action = row["action"] or ("Requested work is finished; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
     entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
                ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
+    if row.get("reporter_note"):
+        entries.append((row["reporter_note"], 0, None))
+    if row.get("report"):
+        report = row["report"]
+        entries.extend((label + report[key], 0, None) for label, key in
+                       (("RECENT: ", "recent_work"), ("REVIEW: ", "review_coverage"),
+                        ("NEXT STEP: ", "next_action"), ("FOR YOU: ", "human_action")))
+        entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0, None))
+        if info:
+            entries.extend(("EVIDENCE: " + value, 0, None) for value in report["evidence"])
+        entries.append(("", 0, None))
     if info:
         entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
                     (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
@@ -1377,6 +1465,7 @@ class ViewerState:
                     baseline = previous_runtime["identities"] if previous_runtime else {}
                     self.observations[row["id"]] = {"record_key": row["record_key"], "identities": {**baseline, **identities}}
                 apply_runtime_display(row, unreconciled=previous_runtime is not None, replaced=replaced)
+                reporting.apply_display(row)
             previous = later.get(row["id"])
             if previous is None:
                 continue
@@ -1912,7 +2001,14 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
     preview_refresh_at = 0
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     interaction = None
+    reporter_job = None
     while True:
+        if reporter_job is not None and reporter_job.done():
+            try:
+                notice = reporter_job.result()
+            except Exception as error:
+                notice = f"Reporter setup failed; ordinary reporting remains available: {clean(error)}"
+            reporter_job, refresh_at = None, 0
         try:
             flush_drafts()
         except OSError:
@@ -2162,7 +2258,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             notice = "Interaction ended: preview changed or disconnected. No input replayed."
         setting_controls = {}
         if utility_view == "settings":
-            details, setting_controls = settings_layout(viewer.settings, width)
+            details, setting_controls = settings_layout(
+                dict(viewer.settings, reporter=activity.get("reporter", reporting.DEFAULTS)), width)
             title, color = "Board settings", 10
         elif utility_view:
             details = help_lines(width, warnings)
@@ -2343,8 +2440,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 live.retry()
         elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
             action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
-        elif utility_view == "settings" and key in (ord("1"), ord("2"), ord("3"), ord("4")):
-            action = "setting-" + {ord("1"): "send_while_working", ord("2"): "animate_activity", ord("3"): "live_preview", ord("4"): "safe_paste"}[key]
+        elif utility_view == "settings" and ord("1") <= key <= ord("9"):
+            action = "setting-" + ("send_while_working", "animate_activity", "live_preview", "safe_paste",
+                                   "reporter", "reporter-kind", "reporter-model", "reporter-reasoning",
+                                   "reporter-arguments")[key - ord("1")]
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:
@@ -2485,8 +2584,27 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             utility_view, detail_offset = action if utility_view != action else None, 0
         elif action and action.startswith("setting-"):
             try:
-                viewer.toggle_setting(action[len("setting-"):])
-                notice = "Settings saved."
+                setting = action[len("setting-"):]
+                if setting.startswith("reporter"):
+                    if reporter_job is not None or args.offline:
+                        raise ValueError("Reporter setup is running or the board is offline")
+                    config = reporting.configuration(args.tasks)
+                    if setting == "reporter":
+                        reporter_job = executor.submit(reporting.disable if config["enabled"] else reporting.enable, args.tasks)
+                        notice = "Updating reporter setup…"
+                    else:
+                        if config["enabled"] or config.get("pane"):
+                            raise ValueError("Launch options apply to a new reporter; configure an existing agent in its tab")
+                        field = setting[len("reporter-"):]
+                        value = edit_reporter_setting(screen, field.title(), config[field], input_reader)
+                        if value is not None:
+                            config[field] = value
+                            reporting.write(reporting.config_path(args.tasks), config)
+                            activity["reporter"] = config
+                            notice = "Reporter launch option saved."
+                else:
+                    viewer.toggle_setting(setting)
+                    notice = "Settings saved."
             except (OSError, ValueError) as error:
                 notice = f"Setting not saved: {clean(error)}"
         elif action in {"aside", "later"}:

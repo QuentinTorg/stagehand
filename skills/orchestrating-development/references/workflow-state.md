@@ -22,6 +22,8 @@ Add detail only when relevant: review outcome and evidence bound to each PR/head
 
 Save meaningful outcomes, not every message. Reference the author's plan or PR instead of duplicating it. Open-ended work needs no review fields or invented delivery stages.
 
+If the [optional reporter](../../../plugins/status-board/README.md#optional-status-reporter) is enabled in `reporter.json` beside the task directory, it owns dashboard explanations. Keep saving authoritative outcomes, identities, decisions, and next actions for recovery and fallback; do not duplicate its conversation summaries. It observes you and workers but has no coordination authority.
+
 ## Wake registration
 
 The coordinator owns subscriptions. After starting a role and before its initial prompt, register its exact live identity:

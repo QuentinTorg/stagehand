@@ -100,7 +100,7 @@ Drafts are saved per task and recipient privately under `board-drafts/` beside t
 
 ## Settings and activity
 
-Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3 / 4** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
+Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or use the prefixed numeric shortcuts; Esc returns. Viewer preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
 - **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the message recipient working. Turn it off for a static Working label. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
@@ -109,6 +109,26 @@ Open **Settings** at the top, or press **s**. Settings are stacked vertically wi
 - **Enter inserts newline** (default off): marked pastes are protected even when this is off. Enable this fallback for clients that strip paste markers: Enter inserts a newline; **Send** or **Ctrl-G** submits. This affects only the message composer, not Interact's native terminal input.
 
 Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; Shift+Enter is not used as a busy-send override because terminals do not consistently distinguish it from Enter.
+
+## Optional status reporter
+
+Off by default. **Settings → Status reporting: Background** launches one read-only observer in a separate tab of the controller workspace. Its dedicated working directory has its own instructions and only the installed Herdr skill. It explains recent work, review coverage of the current changes, who acts next, and what you need to decide. It cannot message workers or the orchestrator, approve actions, or edit their records or code. The orchestrator still owns coordination and durable recovery facts.
+
+Before enabling, install and enable the bundled [Agent Wake Relay](../agent-wake/README.md) and establish the controller binding. Reload the updated board once. Set **Reporter harness / Model / Reasoning / Native arguments** before launching. The initial preset is Codex `gpt-6-luna`, medium reasoning. For another Herdr harness, clear Model and Reasoning and supply its native arguments. First-launch trust/authentication or permissions may need attention in the reporter tab; setup errors are shown rather than silently retried.
+
+Private setup is saved in `reporter.json` beside the task directory. The default working directory is `$XDG_STATE_HOME/stagehand/reporters/<workspace-key>` (normally `~/.local/state/stagehand/reporters/…`), outside repositories so orchestration instructions are not inherited. To set another directory or installed Herdr skill before launching:
+
+```sh
+/absolute/stagehand/.local/board-venv/bin/python /absolute/stagehand/plugins/status-board/reporting.py \
+  --tasks /absolute/stagehand/.orchestrator/tasks configure \
+  --directory /absolute/private-reporter --herdr-skill /absolute/installed/herdr
+```
+
+The board registers independent watches for the controller and assigned task roles as it refreshes. Existing watches continue while the board is closed; registering new task roles requires the board to be running. Reporter activity is excluded. Reports bind to observed task/agent fingerprints; later work or changed intent invalidates them. Stale, missing, blocked, or unavailable reporting falls back to ordinary status, labeling retained context as previous information.
+
+Switch back to **Orchestrator** to cancel only reporter subscriptions and restore the original mode. Workers, coordinator wakes, records, and drafts are untouched. Its tab remains available; disabling does not interrupt the observer. There is no automatic restart or promotion. If startup timed out, inspect the saved pane before retrying; the package will not create another blindly. Launch settings for an existing reporter are changed in its native tab, not by restarting it from the board.
+
+This is an instruction-level read-only role, not an OS security boundary. Keep its agent permissions consistent with observation-only work. See the [reporter design](../../docs/04-status-reporter.md).
 
 ## Appearance
 

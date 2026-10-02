@@ -75,6 +75,8 @@ Keep the orchestrator conversation and a persistent [status board](./plugins/sta
 
 The coordinator preserves concise outcomes and next actions, then reconciles worker responses with Git/PR evidence. A wake or idle agent is not proof of approval or success. After a missed notification or restart, it catches up without replaying old handoffs or requiring workers to reconstruct events.
 
+For richer task context, enable the [optional read-only reporter](./plugins/status-board/README.md#optional-status-reporter) in board settings. It runs separately and explains recent work, current review coverage, and your next action. Ordinary reporting remains the default and fallback; workers have no additional responsibilities.
+
 ## Guardrails
 
 The human authorizes work, individually or through an explicit project delegation, and controls concurrency. Each task owns one workspace and worktree. Development uses a persistent author and reviewer; reviewer-only work uses one reviewer; delegated work uses one worker and cannot silently become implementation; workspace-only work can host a human-directed agent without a delivery loop. The orchestrator warns about likely overlap and recommends sequencing, but fixed concurrency or review-count caps are not imposed. Unexpected permissions, stale heads, material disagreement, broader scope, and repeated non-progress return to the human.
