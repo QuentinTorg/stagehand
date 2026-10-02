@@ -191,11 +191,12 @@ class BoardTests(unittest.TestCase):
         settings = dict(board.VIEWER_DEFAULTS)
         for width in (60, 80, 88, 120, 240):
             lines, controls = board.settings_layout(settings, width)
-            self.assertEqual([key for _, key, _ in controls.values()], list(settings))
-            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True, False])
+            self.assertEqual([key for _, key, _ in controls.values()], [*settings, "reporter", "reporter-kind",
+                             "reporter-model", "reporter-reasoning", "reporter-arguments"])
+            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True, False, False, False, False, False, False])
             self.assertEqual(len({len(label) for label, _, _ in controls.values()}), 1)
             for index, (label, _, _) in controls.items():
-                if width >= 80:
+                if min(width - 4, 120) - len(label) - 3 >= 40:
                     self.assertTrue(lines[index][0].startswith(" " * (len(label) + 3)))
                     self.assertTrue(lines[index][0].strip())
                 else:
