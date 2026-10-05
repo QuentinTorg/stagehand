@@ -150,6 +150,23 @@ class ReportingTests(unittest.TestCase):
             reporting.publish(self.directory, [dict(self.record(), recent_work="\x1b[2J")])
         self.assertEqual((self.directory / "reports.json").read_bytes(), before)
 
+    def test_report_lists_survive_publish_and_display_without_multiline_table_labels(self):
+        self.configure()
+        record = dict(self.record(), summary="Proposal\nready",
+                      recent_work="- Fault isolated.\n\t- Reproduced offline.\n- Proposal written.",
+                      review_coverage="- Author checks passed.\n- Independent review pending.")
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        reporting.apply_display(row)
+        self.assertEqual(row["summary"], "Proposal ready")
+        self.assertEqual(row["report"]["recent_work"], "- Fault isolated.\n  - Reproduced offline.\n- Proposal written.")
+        lines = [line for line, _, _ in board.detail_lines(row, 100)]
+        self.assertIn("  - Fault isolated.", lines)
+        self.assertIn("    - Reproduced offline.", lines)
+        self.assertIn("  - Independent review pending.", lines)
+
     def test_malformed_report_is_visible_and_does_not_break_other_rows(self):
         self.configure()
         reporting.write(self.directory / "reports.json", {"example": {"status": "complete"}})

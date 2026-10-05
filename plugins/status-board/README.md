@@ -116,7 +116,7 @@ Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; S
 
 Off by default. **Settings → Status reporting: Background** launches one read-only observer in a separate tab of the controller workspace. Its dedicated working directory has its own instructions and only the installed Herdr skill. It explains recent work, review coverage of the current changes, who acts next, and what you need to decide. It cannot message workers or the orchestrator, approve actions, or edit their records or code. The orchestrator still owns coordination and durable recovery facts.
 
-**Details** puts the next action first, followed by latest progress, relevant review context, and purpose. Colored headings separate sections; **Technical details** expands evidence and runtime metadata. Retained stale reports are labeled as previous context, not current instructions.
+**Details** puts the next action first, followed by latest progress, relevant review context, and purpose. Colored headings separate sections; bullets and sub-bullets keep their indentation when wrapped. **Technical details** expands evidence and runtime metadata. Retained stale reports are labeled as previous context, not current instructions.
 
 Before enabling, install and enable the bundled [Agent Wake Relay](../agent-wake/README.md) and establish the controller binding. Reload the updated board once. Set **Reporter harness / Model / Reasoning / Native arguments** before launching. The initial preset is Codex `gpt-6-luna`, medium reasoning. For another Herdr harness, clear Model and Reasoning and supply its native arguments. First-launch trust/authentication or permissions may need attention in the reporter tab; setup errors are shown rather than silently retried.
 

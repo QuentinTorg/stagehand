@@ -397,7 +397,7 @@ def decorate(tasks_directory, tasks, agents, controller, rows):
             row["reporter_note"] = "Invalid reporter summary; showing ordinary status."
             continue
         from board import clean
-        report = dict(report, **{key: clean(report[key]) for key in FIELDS},
+        report = dict(report, **{key: clean(report[key], multiline=key in {"recent_work", "review_coverage"}) for key in FIELDS},
                       evidence=[clean(value) for value in report["evidence"]])
         row["report"] = report
         row["report_fresh"] = available and report.get("fingerprint") == fingerprint(task_map[row["id"]], sources)

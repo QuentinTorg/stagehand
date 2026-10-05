@@ -723,6 +723,26 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertNotIn("\nReview\n", text)
         self.assertNotIn("Previous review", text)
 
+    def test_detail_bullets_preserve_items_and_align_wrapped_sub_bullets(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(report_fresh=True,
+                   report={"recent_work": "- Converted observations directly to Protobuf without intermediary types.\n"
+                                          "  - Navigation remains with the Zenoh worker and its existing tests.\n"
+                                          "- Added offline tests.",
+                           "review_coverage": "• Independent review is pending.\n* Author checks passed.",
+                           "updated_at": time.time(), "evidence": []})
+        for width in (10, 40, 80, 320):
+            lines = board.detail_lines(row, width)
+            self.assertTrue(all(len(line) <= min(width, 114) - 4 for line, _, _ in lines))
+        lines = [line for line, _, _ in board.detail_lines(row, 40)]
+        root = next(i for i, line in enumerate(lines) if line.startswith("  - Converted"))
+        child = next(i for i, line in enumerate(lines) if line.startswith("    - Navigation"))
+        self.assertTrue(lines[root + 1].startswith("    "))
+        self.assertTrue(lines[child + 1].startswith("      "))
+        self.assertIn("  - Added offline tests.", lines)
+        self.assertIn("  • Independent review is pending.", lines)
+        self.assertIn("  * Author checks passed.", lines)
+
     def test_detail_technical_disclosure_expands_and_collapses_without_navigation(self):
         executor = Mock()
         ready = Future()

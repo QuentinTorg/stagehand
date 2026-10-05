@@ -609,9 +609,11 @@ def mapping(value):
     return value if isinstance(value, dict) else {}
 
 
-def clean(value):
+def clean(value, multiline=False):
     # Task text is data: never let terminal control characters affect the display.
-    return " ".join("".join(c for c in str(value or "") if c.isprintable() or c.isspace()).split())
+    text = "".join(c for c in str(value or "") if c.isprintable() or c.isspace())
+    # Descriptions retain list structure; table labels stay single-line.
+    return "\n".join(line.rstrip() for line in text.expandtabs(2).splitlines()).strip() if multiline else " ".join(text.split())
 
 
 def read_tasks(directory):
@@ -1278,10 +1280,20 @@ def detail_lines(row, width, info=False):
             entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0))
             entries.extend(("Evidence: " + value, 0) for value in report["evidence"])
     entries.append(("", 0))
-    # Indent body text beneath colored headings without coloring entire paragraphs.
-    lines = [(line, color, []) for text, color in entries
-             for line in (textwrap.wrap(text, max(1, width - 4), initial_indent="" if color else "  ",
-                                        subsequent_indent="" if color else "  ") or [""])]
+    # Keep bullets and their continuations aligned beneath section headings.
+    lines, wrap_width = [], max(1, width - 4)
+    for text, color in entries:
+        for paragraph in text.splitlines() or [""]:
+            bullet = re.match(r"(\s*[-*•]\s+)(.*)", paragraph)
+            indent = "" if color else "  "
+            first = indent + bullet[1] if bullet else indent
+            rest = " " * len(first) if bullet else indent
+            content = bullet[2] if bullet else paragraph
+            if len(first) >= wrap_width:
+                first = rest = ""
+                content = paragraph.strip()
+            lines.extend((line, color, []) for line in
+                         (textwrap.wrap(content, wrap_width, initial_indent=first, subsequent_indent=rest) or [""]))
     text, links = "PRs: ", []
     for url in row["prs"]:
         parts = urlsplit(url).path.rstrip("/").split("/")
