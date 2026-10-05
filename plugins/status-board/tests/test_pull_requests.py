@@ -79,6 +79,21 @@ class PullRequestTests(unittest.TestCase):
             self.assertEqual(pool.return_value.submit.call_count, 2)
             cache.close()
 
+    def test_removed_running_request_is_not_duplicated_on_return(self):
+        with patch.object(pull_requests, "ThreadPoolExecutor") as pool:
+            cache = pull_requests.PullRequestStates()
+            future = Future()
+            future.set_running_or_notify_cancel()
+            pool.return_value.submit.return_value = future
+            url = "https://github.com/team/repo/pull/1"
+            cache.snapshot([url])
+            cache.snapshot([])
+            cache.snapshot([url])
+            self.assertEqual(pool.return_value.submit.call_count, 1)
+            future.set_result("merged")
+            self.assertEqual(cache.snapshot([url]), {url: "merged"})
+            cache.close()
+
     def test_table_and_wrapped_details_keep_complete_clickable_labels(self):
         urls = [f"https://github.com/team/repo/pull/{n}" for n in (123, 456)]
         row = {"prs": urls, "pr_states": dict(zip(urls, ("closed", "merged"))),

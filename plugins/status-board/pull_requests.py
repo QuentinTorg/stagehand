@@ -46,8 +46,7 @@ class PullRequestStates:
                     state = None
                 self.cached[url] = (state, now)
                 del self.pending[url]
-            elif url not in wanted:
-                future.cancel()
+            elif url not in wanted and future.cancel():
                 del self.pending[url]
         self.cached = {url: value for url, value in self.cached.items() if url in wanted}
         for url in wanted:
