@@ -1,6 +1,6 @@
 # Optional status reporter
 
-The ordinary Stagehand workflow remains the default. An optional observer provides richer dashboard context without directing work or changing authoritative task records.
+The ordinary Stagehand workflow remains the default. An optional observer provides decision-ready dashboard context without directing work or changing authoritative task records. Its goal is to reduce rereading: show what the agent needs, the facts or tradeoffs needed to answer, and its recommendation when available, without reproducing the conversation.
 
 ## Responsibilities
 
