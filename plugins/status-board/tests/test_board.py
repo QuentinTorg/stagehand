@@ -732,12 +732,56 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                    report={"recent_work": "An earlier proposal was written.", "review_coverage": "",
                            "next_action": "Obsolete request", "human_action": "Obsolete request",
                            "updated_at": time.time(), "evidence": []})
-        text = "\n".join(line for line, _, _ in board.detail_lines(row, 100))
-        self.assertIn("Previous progress", text)
+        lines = board.detail_lines(row, 100)
+        text = "\n".join(line for line, _, _ in lines)
+        self.assertIn("Earlier progress", text)
         self.assertNotIn("Latest progress", text)
         self.assertNotIn("Obsolete request", text)
         self.assertNotIn("\nReview\n", text)
-        self.assertNotIn("Previous review", text)
+        self.assertNotIn("Earlier review", text)
+        muted = [line for line, _, _ in lines if isinstance(line, board.StyledText)]
+        self.assertEqual(list(map(str, muted)), ["Earlier progress", "  An earlier proposal was written."])
+        self.assertTrue(all(style.dim and not style.bold for line in muted for style in line.styles))
+        self.assertNotIn("  Agent work is underway.", muted)
+
+    def test_report_indicator_tracks_reporting_not_task_completion(self):
+        row = board.task_summary(self.task("decision-required"), 0, None, None, 5)
+        row.update(report_fresh=False, reporter_activity={"status": "working", "observed_at": 100})
+        saved = row.copy()
+        self.assertNotEqual(board.report_label(row, now=100), board.report_label(row, now=100.3))
+        self.assertEqual(board.report_label(row, animate=False, now=100), ("Reporter updating…", 10))
+        self.assertEqual(board.report_label(row, now=111), ("Report status unavailable", 10))
+        self.assertEqual(row, saved)
+        for status, expected in (("idle", "Report update pending"), ("done", "Report update pending"),
+                                 ("blocked", "Reporter needs attention"), ("unavailable", "Reporter unavailable")):
+            row["reporter_activity"] = {"status": status, "observed_at": 100}
+            label, _ = board.report_label(row, now=100)
+            self.assertTrue(label.startswith(expected))
+        row["report_fresh"] = True
+        self.assertEqual(board.report_label(row), ("✓ Report up to date", 3))
+        self.assertEqual(row["color"], saved["color"])
+        row["reporter_error"] = True
+        self.assertEqual(board.report_label(row), ("Report unavailable · invalid summary", 1))
+        self.assertIsNone(board.report_label(board.task_summary(self.task(), 0, None, None, 5)))
+
+    def test_pending_reports_keep_earlier_bullets_readable_and_diagnostics_in_details(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(report_fresh=False, reporter_activity={"status": "idle", "observed_at": 100},
+                   reporter_note="Previous reporter summary; current status uses the ordinary dashboard.",
+                   report={"recent_work": "- An earlier proposal with a long explanation.\n  - Supporting detail.",
+                           "review_coverage": "- Earlier review passed.", "updated_at": time.time(), "evidence": []})
+        for width in (40, 100, 320):
+            lines = board.detail_lines(row, width, now=100)
+            text = "\n".join(line for line, _, _ in lines)
+            self.assertIn("Report update pending", text)
+            self.assertNotIn("Reporting update", text)
+            self.assertNotIn(row["reporter_note"], text)
+            self.assertTrue(all(len(line) <= min(width, 114) - 4 for line, _, _ in lines))
+            self.assertTrue(all(style.dim for line, _, _ in lines if isinstance(line, board.StyledText) for style in line.styles))
+        lines = board.detail_lines(row, 40, now=100)
+        self.assertTrue(any(line.startswith("    - Supporting") for line, _, _ in lines))
+        expanded = "\n".join(line for line, _, _ in board.detail_lines(row, 100, info=True, now=100))
+        self.assertIn(row["reporter_note"], expanded)
 
     def test_detail_bullets_preserve_items_and_align_wrapped_sub_bullets(self):
         row = board.task_summary(self.task(), 0, None, None, 5)

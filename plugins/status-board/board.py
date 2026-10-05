@@ -848,15 +848,13 @@ def snapshot(directory, offline=False, include_controller=False):
                 status = clean(owner.get("agent_status")) or "unknown"
             except ValueError as error:
                 warnings.append(str(error))
-            try:
-                # Reporter hooks must recover even while the controller frontend
-                # is still resuming; the observer has its own durable identity.
-                reporting.sync(directory, tasks, agents, owner)
-                reporting.decorate(directory, tasks, agents, owner, rows)
-            except ValueError as error:
-                warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
-            except (OSError, KeyError, TypeError, subprocess.SubprocessError, SystemExit) as error:
-                warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
+            # Recover observer hooks independently of the controller. A failed
+            # reconnection must not hide retained summaries or their freshness.
+            for update, extra in ((reporting.sync, ()), (reporting.decorate, (rows,))):
+                try:
+                    update(directory, tasks, agents, owner, *extra)
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, SystemExit) as error:
+                    warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
         try:
             reporter_config = reporting.configuration(directory)
         except (OSError, ValueError) as error:
@@ -1252,44 +1250,64 @@ def table_line(row, width, pr_width=9, next_width=12, stage_width=30, workspace_
     return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + "  " + pr_cell(row, pr_width)[0]
 
 
-def detail_lines(row, width, info=False):
+def report_label(row, interval=5, animate=True, now=None):
+    if row.get("reporter_error"):
+        return "Report unavailable · invalid summary", 1
+    if row.get("report_fresh"):
+        return "✓ Report up to date", 3
+    activity = row.get("reporter_activity")
+    if activity is None:
+        return None
+    state = activity_label(activity, interval, animate, now)
+    if state.endswith("Working"):
+        return state.replace("Working", "Reporter updating…"), 10
+    return {"Ready": ("Report update pending", 10),
+            "Blocked · use Interact": ("Reporter needs attention · open Status reporter", 1),
+            "Unavailable": ("Reporter unavailable · open Status reporter", 1)}.get(
+                state, ("Report status unavailable", 10))
+
+
+def detail_lines(row, width, info=False, interval=5, animate=True, now=None):
     width = min(width, 114)
     action = row["action"] or ("Requested work is finished; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
     entries = []
 
-    def section(title, text, color=10):
+    def section(title, text, color=10, muted=False):
         if not text:
             return
-        entries.extend([(title, color), (text, 0), ("", 0)])
+        entries.extend([(title, color, muted), (text, 0, muted), ("", 0, False)])
 
     heading = {1: "Your next step", 2: "Next · " + task_next(row), 3: "Finished"}.get(row["color"], "Next step")
     section(heading, action, row["color"] or 10)
-    if row.get("reporter_note"):
-        section("Reporting update", row["reporter_note"])
+    label = report_label(row, interval, animate, now)
+    if label:
+        entries.extend([(*label, False), ("", 0, False)])
     if row.get("report"):
         report = row["report"]
         # Current action is already above. Retained reports explain prior work,
         # but must never resurrect an obsolete human request as a new checkpoint.
-        previous = "Previous " if not row.get("report_fresh") else ""
-        section(previous + "progress" if previous else "Latest progress", report["recent_work"])
-        section(previous + "review" if previous else "Review", report["review_coverage"])
+        stale = not row.get("report_fresh")
+        section("Earlier progress" if stale else "Latest progress", report["recent_work"], muted=stale)
+        section("Earlier review" if stale else "Review", report["review_coverage"], muted=stale)
     section("Purpose", row["objective"])
-    entries.append(("▾ Technical details" if info else "▸ Technical details", 10))
+    entries.append(("▾ Technical details" if info else "▸ Technical details", 10, False))
     if info:
-        entries += [(row["label"], 0), (task_stage(row) + " · " + row["roles"], 0),
-                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0)]
+        entries += [(row["label"], 0, False), (task_stage(row) + " · " + row["roles"], 0, False),
+                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0, False)]
         if row.get("runtime_note"):
-            entries.append((row["runtime_note"], 0))
+            entries.append((row["runtime_note"], 0, False))
+        if row.get("reporter_note"):
+            entries.append((row["reporter_note"], 0, False))
         if row.get("location"):
-            entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0))
+            entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, False))
         if row.get("report"):
             report = row["report"]
-            entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0))
-            entries.extend(("Evidence: " + value, 0) for value in report["evidence"])
-    entries.append(("", 0))
+            entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0, False))
+            entries.extend(("Evidence: " + value, 0, False) for value in report["evidence"])
+    entries.append(("", 0, False))
     # Keep bullets and their continuations aligned beneath section headings.
     lines, wrap_width = [], max(1, width - 4)
-    for text, color in entries:
+    for text, color, muted in entries:
         for paragraph in text.splitlines() or [""]:
             bullet = re.match(r"(\s*[-*•]\s+)(.*)", paragraph)
             indent = "" if color else "  "
@@ -1299,8 +1317,11 @@ def detail_lines(row, width, info=False):
             if len(first) >= wrap_width:
                 first = rest = ""
                 content = paragraph.strip()
-            lines.extend((line, color, []) for line in
-                         (textwrap.wrap(content, wrap_width, initial_indent=first, subsequent_indent=rest) or [""]))
+            for line in textwrap.wrap(content, wrap_width, initial_indent=first, subsequent_indent=rest) or [""]:
+                # Retain older evidence without giving it current-result emphasis.
+                if muted:
+                    line = StyledText(line, [TerminalStyle(dim=True)] * len(line))
+                lines.append((line, color, []))
     text, links = "PRs: ", []
     for url in row["prs"]:
         parts = urlsplit(url).path.rstrip("/").split("/")
@@ -2332,7 +2353,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                  "Message the orchestrator below to start a task, or open the Orchestrator tab for its conversation."), width - 4)]
             title, color = "Later" if all_rows else "No tasks yet", 10
         elif info:
-            details = detail_lines(current, width, info=technical)
+            details = detail_lines(current, width, info=technical, interval=args.interval,
+                                   animate=viewer.settings["animate_activity"])
             title, color = current["label"], 10
         else:
             # The request key already binds this result to the selected role.

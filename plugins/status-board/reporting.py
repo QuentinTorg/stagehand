@@ -442,14 +442,19 @@ def decorate(tasks_directory, tasks, agents, controller, rows):
     if not isinstance(reports, dict):
         raise ValueError("Invalid report file")
     available = True
+    reporter_status = "unavailable"
     try:
         observer = agent_binding.resolve(agent_binding.load(directory / "binding.json"), agents)
+        reporter_status = observer.get("agent_status", "unknown")
         available = observer.get("agent_status") != "blocked"
     except ValueError:
         available = False
     sources = scoped_sources(tasks, agents, controller)
     task_map = {str(task["task_id"]): task for task, _ in tasks}
     for row in rows:
+        # Reporting activity is presentation-only, separate from task progress.
+        row["reporter_activity"] = {"status": reporter_status, "observed_at": time.monotonic()}
+        row["reporter_error"] = False
         report = reports.get(row["id"])
         if not report:
             row["reporter_note"] = "Reporter has not summarized this task; showing ordinary status."
@@ -460,6 +465,7 @@ def decorate(tasks_directory, tasks, agents, controller, rows):
                 or not isinstance(report.get("evidence"), list)
                 or any(not isinstance(value, str) for value in report["evidence"])):
             row["reporter_note"] = "Invalid reporter summary; showing ordinary status."
+            row["reporter_error"] = True
             continue
         from board import clean
         report = dict(report, **{key: clean(report[key], multiline=key in {"recent_work", "review_coverage"}) for key in FIELDS},

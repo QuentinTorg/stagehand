@@ -127,6 +127,38 @@ class ReportingTests(unittest.TestCase):
             reporting.apply_display(row)
             self.assertEqual(row["summary"], row["saved_display"]["summary"])
 
+    def test_report_indicator_moves_from_pending_through_refresh_to_current(self):
+        self.configure()
+        self.publish()
+        self.task["objective"] = "Expanded scope"
+        for state in ("done", "working"):
+            self.observer["agent_status"] = state
+            row = self.row()
+            reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+            self.assertFalse(row["report_fresh"])
+            self.assertEqual(row["reporter_activity"]["status"], state)
+            self.assertIn("proposal written", row["report"]["recent_work"])
+            before = (row["status"], row["action"])
+            reporting.apply_display(row)
+            self.assertEqual((row["status"], row["action"]), before)
+        self.publish()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertTrue(row["report_fresh"])
+        self.assertEqual(board.report_label(row), ("✓ Report up to date", 3))
+
+    def test_reconnect_failure_does_not_hide_retained_report(self):
+        self.configure()
+        self.publish()
+        with patch.object(board, "CONTROLLER_BINDING", reporting.agent_binding.load(self.tasks.parent / "controller.json")), patch.object(
+                board, "read_tasks", return_value=([(self.task, 0)], [])), patch.object(
+                board, "inventory", return_value=([{"workspace_id": "task"}], [self.controller, self.author], [])), patch.object(
+                reporting, "sync", side_effect=ValueError("Waiting for the reporter to resume")):
+            rows, warnings, _ = board.snapshot(self.tasks, include_controller=True)
+        self.assertIn("resume", " ".join(warnings))
+        self.assertFalse(rows[0]["report_fresh"])
+        self.assertEqual(rows[0]["reporter_activity"]["status"], "unavailable")
+        self.assertIn("proposal written", rows[0]["report"]["recent_work"])
+
     def test_native_work_and_blockers_cannot_be_hidden_by_a_report(self):
         for native, expected in (("working", "working"), ("blocked", "needs-human")):
             row = self.row()
