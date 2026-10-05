@@ -691,6 +691,22 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertIn("record saved", expanded)
         self.assertIn(row["location"], expanded)
 
+    def test_reporter_launch_settings_remain_editable_after_an_agent_exists(self):
+        live = Mock()
+        live.available = False
+        for key, field, value in (("6", "kind", "claude"), ("7", "model", "different-model"), ("8", "reasoning", "high")):
+            config = dict(board.reporting.DEFAULTS, enabled=True, pane="control:p2", directory="/private/reporter", socket="/test/herdr.sock")
+            executor = Mock()
+            ready = Future()
+            ready.set_result(([], [], {"status": "idle", "reporter": config}))
+            executor.submit.return_value = ready
+            with patch.object(board.reporting, "configuration", return_value=config), patch.object(
+                board.reporting, "write"
+            ) as save, patch.object(board, "edit_reporter_setting", return_value=value):
+                screen = self.run_display(executor, [-1, ord("s"), ord(key), ord("q")], live=live)
+            self.assertEqual(save.call_args.args[1][field], value)
+            self.assertIn("running session is unchanged", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
     def test_report_details_show_action_once_and_separate_progress_from_background(self):
         row = board.task_summary(self.task("decision-required"), 0, None, None, 5)
         row.update(color=1, action="Choose the proposed approach.", report_fresh=True,

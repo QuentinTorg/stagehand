@@ -192,18 +192,112 @@ class ReportingTests(unittest.TestCase):
         self.configure()
         wake = Mock()
         wake._documents.return_value = []
+        wake._configured_consumers.return_value = []
         with patch.object(reporting, "relay", return_value=wake), patch.object(reporting, "relay_action") as action:
             reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
-            self.assertEqual(action.call_count, 2)
+            self.assertEqual(action.call_count, 3)
             for invocation in action.call_args_list:
                 self.assertEqual(invocation.kwargs["state_root"], str(self.directory / "wake"))
-                self.assertNotEqual(invocation.kwargs["pane"], self.observer["pane_id"])
+                self.assertNotEqual(invocation.kwargs.get("pane"), self.observer["pane_id"])
             wake._documents.return_value = [(Path("watch"), {"id": "a" * 32})]
             reporting.disable(self.tasks)
             self.assertEqual(action.call_args.args[1], "_remove")
             self.assertEqual(action.call_args.kwargs["state_root"], str(self.directory / "wake"))
             self.assertFalse(reporting.configuration(self.tasks)["enabled"])
         self.assertTrue((self.tasks.parent / "controller.json").exists())
+
+    def test_bootstrap_binding_gains_native_identity_before_a_restart(self):
+        path = self.directory / "binding.json"
+        with patch.object(reporting.agent_binding, "process_identity", return_value=123):
+            reporting.agent_binding.save(path, reporting.agent_binding.capture(dict(self.observer, agent_session=None)), replace=True)
+            reporting.reporter_agent(self.directory, self.agents)
+        self.assertEqual(reporting.agent_binding.load(path)["session"], reporting.agent_binding.native_session(self.observer))
+        restored = dict(self.observer, pane_id="control:p99", terminal_id="restored-terminal", name=None)
+        self.assertEqual(reporting.reporter_agent(self.directory, [restored]), restored)
+
+    def test_bootstrap_binding_never_adopts_a_replaced_process(self):
+        path = self.directory / "binding.json"
+        with patch.object(reporting.agent_binding, "process_identity", return_value=123):
+            reporting.agent_binding.save(path, reporting.agent_binding.capture(dict(self.observer, agent_session=None)), replace=True)
+        before = path.read_bytes()
+        with patch.object(reporting.agent_binding, "process_identity", return_value=456):
+            with self.assertRaisesRegex(ValueError, "process changed"):
+                reporting.reporter_agent(self.directory, self.agents)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_context_can_read_workers_while_the_orchestrator_is_still_resuming(self):
+        reporting.write(self.tasks / "task.json", self.task)
+        reporting.write(self.directory / "connection.json", {"tasks": str(self.tasks), "socket": os.environ["HERDR_SOCKET_PATH"]})
+        wake = Mock()
+        wake._documents.return_value = []
+        with patch.object(reporting, "call", return_value={"agents": [self.observer, self.author]}), patch.object(
+            reporting, "relay", return_value=wake
+        ):
+            context = reporting.context(self.directory)
+        self.assertIsNone(context["controller_pane"])
+        self.assertIn("still resuming", context["warnings"][0])
+        self.assertEqual(context["tasks"][0]["roles"][0]["pane_id"], self.author["pane_id"])
+
+    def test_reenable_uses_saved_launch_options_only_in_an_empty_reporter_shell(self):
+        config = self.configure()
+        config.update(enabled=False, pane=self.observer["pane_id"], terminal=self.observer["terminal_id"],
+                      model="different-model", reasoning="high")
+        reporting.write(reporting.config_path(self.tasks), config)
+        info = {"shell_pid": 10, "foreground_process_group_id": 10,
+                "foreground_processes": [{"pid": 10, "cwd": str(self.directory)}]}
+        launched = dict(self.observer, name="reporter_" + reporting.hashlib.sha256(str(self.tasks).encode()).hexdigest()[:12])
+        with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(
+            reporting, "call", side_effect=[{"agents": [self.controller, self.author]},
+                {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]},
+                {"pane": {"workspace_id": "control", "terminal_id": self.observer["terminal_id"]}}, {"process_info": info},
+                {"agent": launched}, {}, {"agents": self.agents}]
+        ) as call, patch.object(reporting, "relay"), patch.object(reporting, "relay_action"), patch.object(reporting, "_sync"):
+            reporting.enable(self.tasks)
+        launch = next(entry for entry in call.call_args_list if entry.args[:2] == ("agent", "start"))
+        self.assertEqual(launch.args[launch.args.index("--") + 1:], tuple(reporting.launch_arguments(config)))
+        self.assertNotIn(("tab", "create"), [entry.args[:2] for entry in call.call_args_list])
+        self.assertTrue(reporting.configuration(self.tasks)["enabled"])
+
+    def test_reenable_preserves_an_occupied_reporter_pane(self):
+        config = self.configure()
+        config.update(enabled=False, pane=self.observer["pane_id"], terminal=self.observer["terminal_id"])
+        reporting.write(reporting.config_path(self.tasks), config)
+        with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(
+            reporting, "call", side_effect=[{"agents": [self.controller, self.author]},
+                {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]},
+                {"pane": {"workspace_id": "control"}}, {"process_info": {"shell_pid": 10, "foreground_process_group_id": 99}}]
+        ) as call:
+            with self.assertRaisesRegex(ValueError, "no occupied pane was changed"):
+                reporting.enable(self.tasks)
+        self.assertNotIn(("agent", "start"), [entry.args[:2] for entry in call.call_args_list])
+
+    def test_relaunch_timeout_reuses_the_started_agent_on_retry(self):
+        config = self.configure()
+        config.update(enabled=False, pane=self.observer["pane_id"], terminal=self.observer["terminal_id"])
+        reporting.write(reporting.config_path(self.tasks), config)
+        info = {"shell_pid": 10, "foreground_process_group_id": 10,
+                "foreground_processes": [{"pid": 10, "cwd": str(self.directory)}]}
+        with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(reporting, "call") as call:
+            call.side_effect = [{"agents": [self.controller, self.author]},
+                {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]},
+                {"pane": {"workspace_id": "control", "terminal_id": self.observer["terminal_id"]}},
+                {"process_info": info}, subprocess.TimeoutExpired("agent start", 40)]
+            with self.assertRaises(subprocess.TimeoutExpired):
+                reporting.enable(self.tasks)
+            self.assertTrue(reporting.configuration(self.tasks)["starting"])
+            launched = dict(self.observer,
+                name="reporter_" + reporting.hashlib.sha256(str(self.tasks).encode()).hexdigest()[:12],
+                agent_session={"agent": "codex", "kind": "id", "value": "new-conversation"})
+            call.reset_mock()
+            call.side_effect = [{"agents": [self.controller, launched, self.author]},
+                {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]},
+                {"agent": launched}, {}, {"agents": [self.controller, launched, self.author]}]
+            with patch.object(reporting, "relay"), patch.object(reporting, "relay_action"), patch.object(reporting, "_sync"):
+                reporting.enable(self.tasks)
+            self.assertNotIn(("agent", "start"), [entry.args[:2] for entry in call.call_args_list])
+            self.assertNotIn(("tab", "create"), [entry.args[:2] for entry in call.call_args_list])
+            self.assertNotIn("starting", reporting.configuration(self.tasks))
+            self.assertEqual(reporting.agent_binding.load(self.directory / "binding.json")["session"]["value"], "new-conversation")
 
     def test_ack_uses_only_reporter_root(self):
         with patch.object(reporting, "relay"), patch.object(reporting, "relay_action") as action:
@@ -362,6 +456,59 @@ class ReportingTests(unittest.TestCase):
             self.assertFalse(wake._documents(root / "watches"))
         self.assertEqual(sentinel.read_bytes(), before)
         self.assertTrue(all(args[2] == self.observer["pane_id"] for args in submitted))
+
+    def test_restored_reporter_repairs_real_hooks_and_replays_unacknowledged_notice_once(self):
+        """Simulate cold-start order with real relay files, not the user's server."""
+        self.configure()
+        wake = reporting.relay()
+        plugin = self.root / "plugin"
+        plugin.mkdir()
+        coordinator = {"root": str(self.tasks.parent / "wake"), "target": {"binding": str(self.tasks.parent / "controller.json")},
+                       "socket": os.environ["HERDR_SOCKET_PATH"]}
+        reporting.write(plugin / "config.json", {"consumers": [coordinator]})
+        root = self.directory / "wake"
+        submitted = []
+
+        def herdr(*args):
+            if args[:2] == ("agent", "list"):
+                return {"result": {"agents": self.agents}}, None
+            if args[:2] == ("agent", "get"):
+                return {"result": {"agent": next(a for a in self.agents if a["pane_id"] == args[2])}}, None
+            if args[:2] == ("agent", "prompt"):
+                submitted.append(args)
+                return {"result": {"type": "agent_prompted"}}, None
+            raise AssertionError(args)
+
+        with patch.object(wake, "_config_dir", return_value=plugin), patch.object(wake, "_herdr", side_effect=herdr), patch.object(
+            wake, "_ensure_timer"
+        ), patch.object(wake.time, "sleep"), patch.object(reporting, "relay", return_value=wake):
+            reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.author.update(agent_status="working", state_change_seq=2)
+            wake._record_event_for(root, self.author)
+            self.author.update(agent_status="done", state_change_seq=3)
+            wake._record_event_for(root, self.author)
+            notice_path, notice = wake._documents(root / "inbox")[0]
+            notice["notified"] = True  # Accepted just before the simulated reboot.
+            reporting.write(notice_path, notice)
+
+            self.observer.update(pane_id="control:p99", terminal_id="restored-terminal", name=None)
+            self.agents.remove(self.controller)  # Controller has not resumed yet.
+            reporting.write(plugin / "config.json", {"consumers": [coordinator]})
+            reporting.sync(self.tasks, [(self.task, 0)], self.agents, None)
+            self.assertEqual([entry[2] for entry in submitted], ["control:p99"])
+            self.assertEqual(reporting.configuration(self.tasks)["pane"], "control:p99")
+            self.assertTrue(reporting.read(notice_path)["notified"])
+            self.assertIn(coordinator, reporting.read(plugin / "config.json")["consumers"])
+            reporting.sync(self.tasks, [(self.task, 0)], self.agents, None)
+            self.assertEqual(len(submitted), 1)
+
+            reporting.worker_main(self.directory, ["ack", notice["id"]])
+            self.author.update(agent_status="working", state_change_seq=4)
+            wake._record_event_for(root, self.author)
+            self.author.update(agent_status="done", state_change_seq=5)
+            wake._record_event_for(root, self.author)
+            wake._notify_consumer(root, {"binding": str(self.directory / "binding.json")})
+            self.assertEqual([entry[2] for entry in submitted], ["control:p99", "control:p99"])
 
 
 if __name__ == "__main__":

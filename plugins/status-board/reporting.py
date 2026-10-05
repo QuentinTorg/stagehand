@@ -99,7 +99,7 @@ def relay_action(module, operation, **arguments):
 
 def scoped_sources(tasks, agents, controller):
     """No sibling workspace or reporter activity belongs in this consumer."""
-    sources = [("controller", "orchestrator", controller)]
+    sources = [("controller", "orchestrator", controller)] if controller else []
     for task, _ in tasks:
         workspace = task.get("workspace", {}).get("id")
         for role, name in task.get("agents", {}).items():
@@ -130,6 +130,22 @@ def sync(tasks_directory, tasks, agents, controller):
         _sync(tasks_directory, tasks, agents, controller)
 
 
+def reporter_agent(directory, agents):
+    binding_path = directory / "binding.json"
+    binding = agent_binding.load(binding_path)
+    try:
+        target = agent_binding.resolve(binding, agents)
+    except agent_binding.ControllerUnavailable as error:
+        raise agent_binding.ControllerUnavailable(
+            "Waiting for the reporter to resume. Open its Status reporter tab; "
+            "resume the saved conversation, or exit it and re-enable reporting to launch anew.") from error
+    # Enrich only the verified original frontend, never adopt a replacement by
+    # pane/name. Its native conversation identity survives a system restart.
+    if not binding.get("session") and agent_binding.native_session(target):
+        agent_binding.save(binding_path, agent_binding.capture(target), replace=True)
+    return target
+
+
 def _sync(tasks_directory, tasks, agents, controller):
     config = configuration(tasks_directory)
     if not config["enabled"]:
@@ -137,10 +153,23 @@ def _sync(tasks_directory, tasks, agents, controller):
     directory = Path(config["directory"])
     if config.get("socket") != os.environ.get("HERDR_SOCKET_PATH"):
         raise ValueError("Reporter belongs to another Herdr session")
-    target = agent_binding.resolve(agent_binding.load(directory / "binding.json"), agents)
+    target = reporter_agent(directory, agents)
+    resumed = bool(config.get("terminal") and config["terminal"] != target["terminal_id"])
+    current = {key: target[field] for key, field in (("pane", "pane_id"), ("terminal", "terminal_id"), ("tab", "tab_id"))
+               if target.get(field)}
+    if any(config.get(key) != value for key, value in current.items()):
+        config.update(current)
+        write(config_path(tasks_directory), config)
     sources = scoped_sources(tasks, agents, controller)
     wake = relay()
     root = directory / "wake"
+    consumer = {"binding": str(directory / "binding.json")}
+    repaired = not any(Path(entry["root"]).resolve() == root.resolve() and entry.get("target") == consumer
+                       and entry.get("socket") == config["socket"] for entry in wake._configured_consumers())
+    if repaired:
+        # Repair this observer's registration, not the coordinator's consumer.
+        relay_action(wake, "_configure", state_root=str(root), target=None,
+                     target_binding=consumer["binding"], reminder_minutes=0)
     registrations = list(wake._documents(root / "watches"))
     wanted = {(key, role, agent["pane_id"]): agent for key, role, agent in sources
               if agent["pane_id"] != target["pane_id"]}
@@ -160,6 +189,15 @@ def _sync(tasks_directory, tasks, agents, controller):
                      workspace_id=agent["workspace_id"], workspace_label=key,
                      pane=pane, agent=agent.get("name"), metadata=json.dumps({"role": role}),
                      persistent=True, observed_working=False)
+    if resumed:
+        # An accepted notice may have been interrupted by the reboot. Replay
+        # unacknowledged IDs once per restored frontend, not on every refresh.
+        with wake._locked(root):
+            for path, notice in wake._documents(root / "inbox"):
+                notice.update(notified=False, attempts=0, last_error=None)
+                wake._atomic_json(path, notice)
+    if repaired or resumed:
+        wake._flush(root)
 
 
 def launch_arguments(config):
@@ -239,18 +277,38 @@ def _enable(tasks):
     # Save the pane before launching: a startup timeout may leave a live process.
     # Re-enabling never blindly creates another tab or replays agent start.
     if config.get("pane"):
-        agent = call("agent", "get", config["pane"])["agent"]
+        if (directory / "binding.json").exists() and not config.get("starting"):
+            try:
+                agent = reporter_agent(directory, agents)
+            except agent_binding.ControllerUnavailable:
+                pane = call("pane", "get", config["pane"])["pane"]
+                info = call("pane", "process-info", "--pane", config["pane"])["process_info"]
+                if (pane.get("workspace_id") != controller["workspace_id"] or pane.get("agent") or
+                        not info.get("shell_pid") or info.get("foreground_process_group_id") != info["shell_pid"] or
+                        not any(process.get("pid") == info["shell_pid"] and process.get("cwd") == str(directory)
+                                for process in info.get("foreground_processes", []))):
+                    raise ValueError("Exit the reporter in its own tab before applying launch settings; no occupied pane was changed")
+                # Re-enabling is an explicit launch request; automatic sync never
+                # replaces an agent or starts a new conversation after a reboot.
+                config.update(starting=True, terminal=pane["terminal_id"])
+                write(config_path(tasks), config)
+                agent = call("agent", "start", name, "--kind", config["kind"], "--pane", config["pane"],
+                             "--", *arguments, timeout=40)["agent"]
+        else:
+            agent = call("agent", "get", config["pane"])["agent"]
         if agent.get("agent_status") in {"working", "blocked"}:
             raise ValueError("Inspect the existing reporter tab and let its current turn/setup finish before enabling")
         binding = directory / "binding.json"
-        if not binding.exists():
+        if not binding.exists() or config.get("starting"):
             # Explicit retry after startup/permission failure may adopt only the
             # exact agent in the terminal we created, never a pane replacement.
             if (agent.get("pane_id") != config["pane"] or agent.get("terminal_id") != config["terminal"]
                     or agent.get("workspace_id") != controller["workspace_id"] or agent.get("name") != name):
                 raise ValueError("Cannot verify the reporter from the saved startup attempt; inspect its tab")
-            agent_binding.save(binding, agent_binding.capture(agent))
-        agent_binding.resolve(agent_binding.load(binding), [agent])
+            agent_binding.save(binding, agent_binding.capture(agent), replace=bool(config.get("starting")))
+            config.pop("starting", None)
+        reporter_agent(directory, [agent])
+        config.update(pane=agent["pane_id"], terminal=agent["terminal_id"])
     else:
         tab = call("tab", "create", "--workspace", controller["workspace_id"], "--cwd", str(directory),
                    "--label", "Status reporter", "--no-focus")
@@ -282,7 +340,7 @@ def _enable(tasks):
     except (OSError, ValueError, KeyError, subprocess.SubprocessError, SystemExit):
         _disable(tasks)
         raise
-    return "Background reporter enabled; its separate tab is available for inspection."
+    return "Background reporter enabled. Saved launch settings apply to new sessions; live changes use its native tab."
 
 
 def disable(tasks):
@@ -312,7 +370,14 @@ def context(directory):
     from board import read_tasks, pr_links
     tasks, warnings = read_tasks(tasks_directory)
     agents = call("agent", "list")["agents"]
-    controller = agent_binding.resolve(agent_binding.load(tasks_directory.parent / "controller.json"), agents)
+    binding = agent_binding.load(tasks_directory.parent / "controller.json")
+    if binding["socket"] != connection["socket"]:
+        raise ValueError("The orchestrator binding belongs to a different Herdr session")
+    try:
+        controller = agent_binding.resolve(binding, agents)
+    except ValueError as error:
+        controller = None
+        warnings.append(f"The bound orchestrator is unavailable or still resuming: {error}")
     sources = scoped_sources(tasks, agents, controller)
     briefs = []
     for task, _ in tasks:
@@ -327,7 +392,7 @@ def context(directory):
                                   ("pane_id", "name", "agent_status", "agent_session", "state_change_seq")}}
                                  for key, role, agent in sources if key == str(task["task_id"])]})
     notices = [notice for _, notice in relay()._documents(directory / "wake/inbox")]
-    result = {"tasks": briefs, "controller_pane": controller["pane_id"], "notices": notices,
+    result = {"tasks": briefs, "controller_pane": controller["pane_id"] if controller else None, "notices": notices,
               "warnings": warnings, "report_format": {"task_id": "from task", "fingerprint": "from task",
                   "status": "working | needs-human | complete | unknown", **{field: "short text" for field in FIELDS},
                   "evidence": ["pane/artifact/head supporting your conclusion"]}}

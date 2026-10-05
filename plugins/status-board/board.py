@@ -842,13 +842,19 @@ def snapshot(directory, offline=False, include_controller=False):
         # Reuse inventory; showing activity must not poll hidden conversations.
         status = "offline" if offline else "unavailable"
         if not offline:
+            owner = None
             try:
                 owner = agent_binding.resolve(CONTROLLER_BINDING, agents)
                 status = clean(owner.get("agent_status")) or "unknown"
+            except ValueError as error:
+                warnings.append(str(error))
+            try:
+                # Reporter hooks must recover even while the controller frontend
+                # is still resuming; the observer has its own durable identity.
                 reporting.sync(directory, tasks, agents, owner)
                 reporting.decorate(directory, tasks, agents, owner, rows)
             except ValueError as error:
-                warnings.append(str(error))
+                warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
             except (OSError, KeyError, TypeError, subprocess.SubprocessError, SystemExit) as error:
                 warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
         try:
@@ -1050,14 +1056,15 @@ def settings_layout(settings, width):
     config = settings.get("reporter", reporting.DEFAULTS)
     items.extend([
         ("reporter", "5 Status reporting", "Background" if config["enabled"] else "Orchestrator",
-         "Optional read-only observer in its own directory and separate tab. Enabling launches one agent "
+         "Optional read-only observer in its own directory and separate tab. Enabling launches or reconnects an agent "
          "with the settings below; workers and coordinator are never messaged by it. Disabling restores "
          "ordinary status and cancels only reporter watches, leaving its tab available."),
-        ("reporter-kind", "6 Reporter harness", config["kind"], "Herdr agent kind. Change while reporting is off."),
+        ("reporter-kind", "6 Reporter harness", config["kind"], "Herdr agent kind for the next launch. Exit the reporter and re-enable reporting to apply changes."),
         ("reporter-model", "7 Reporter model", config["model"] or "Native arguments",
-         "Codex model. For another harness, clear Model and Reasoning and use its native arguments."),
+         "Model for the next launch. Use the running harness's native controls for live changes. "
+         "For another harness, clear Model and Reasoning and use its native arguments."),
         ("reporter-reasoning", "8 Reporter reasoning", config["reasoning"] or "Native arguments",
-         "Codex reasoning effort; the initial experimental preset is Luna medium."),
+         "Codex reasoning effort for the next launch; live changes use its native controls."),
         ("reporter-arguments", "9 Native arguments", config["arguments"] or "None",
          "Additional native launch arguments, shell-quoted but never executed through a shell. "
          "Directory and Herdr skill paths can be configured through reporting.py."),
@@ -2635,15 +2642,15 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                         reporter_job = executor.submit(reporting.disable if config["enabled"] else reporting.enable, args.tasks)
                         notice = "Updating reporter setup…"
                     else:
-                        if config["enabled"] or config.get("pane"):
-                            raise ValueError("Launch options apply to a new reporter; configure an existing agent in its tab")
                         field = setting[len("reporter-"):]
                         value = edit_reporter_setting(screen, field.title(), config[field], input_reader)
                         if value is not None:
+                            # Keep identities repaired during the modal edit.
+                            config = reporting.configuration(args.tasks)
                             config[field] = value
                             reporting.write(reporting.config_path(args.tasks), config)
                             activity["reporter"] = config
-                            notice = "Reporter launch option saved."
+                            notice = "Saved for the next reporter launch; a running session is unchanged."
                 else:
                     viewer.toggle_setting(setting)
                     notice = "Settings saved."
