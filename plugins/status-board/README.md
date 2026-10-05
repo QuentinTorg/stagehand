@@ -42,6 +42,8 @@ Click a task row to select it. Scroll conversation output with the mouse wheel o
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
+PR labels retain their hyperlinks: `#123×` is closed without merging; `#123✓` is merged. Details spell out the state. Best-effort GitHub CLI reads run in the background and refresh every two minutes; missing authentication or offline mode leaves links unmarked, not confirmed open. PR state never changes task status or grants cleanup authority.
+
 The task list has a position indicator and clickable scroll rail. It grows automatically up to 12 rows (fewer in short panes). Drag its bottom border to show more or fewer rows, leaving space for details and messages. Workspace and Status share the available width according to their content; Next and PR stay compact. Drag the **↔** divider between Workspace and Status in the header to adjust their widths. **Auto**, beside the bottom resize grip, restores both automatic height and column sizing; it uses the active-tab color when both are automatic. Manual sizing lasts for the current board session and fits within the pane when resized. Delayed-refresh warnings expose update health, not agent progress. **Details** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
 
 ```sh

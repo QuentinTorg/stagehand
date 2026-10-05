@@ -29,6 +29,7 @@ from preview_links import LinkedScreen, safe_link
 import agent_binding
 import resume
 import reporting
+from pull_requests import PullRequestStates, marker as pr_marker
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -1003,6 +1004,7 @@ def help_lines(width, warnings):
             "", "Tasks: select a workspace, then an assigned role (Author, Reviewer, Worker, or another role) for its conversation.",
             "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
+            "PR links: × means closed without merging; ✓ means merged. Plain links are open or status is unconfirmed.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
             "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
@@ -1155,7 +1157,8 @@ def pr_column(width, pr_width=9, next_width=12, stage_width=30, workspace_width=
 
 
 def pr_labels(row):
-    return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1], url) for url in row.get("prs", [])]
+    return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1] +
+             pr_marker(row.get("pr_states", {}).get(url)), url) for url in row.get("prs", [])]
 
 
 def pr_cell(row, width):
@@ -1269,6 +1272,9 @@ def detail_lines(row, width, info=False):
     for url in row["prs"]:
         parts = urlsplit(url).path.rstrip("/").split("/")
         label = parts[-3] + "#" + parts[-1]
+        state = row.get("pr_states", {}).get(url)
+        if state in {"closed", "merged"}:
+            label += " (" + state + ")"
         if links:
             text += ", "
         links.append((len(text), len(text) + len(label), url))
@@ -1930,11 +1936,13 @@ def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
     live = LivePreview()
+    pr_states = PullRequestStates()
     drafts = {}
     try:
-        return display_loop(screen, args, executor, previews, live, drafts)
+        return display_loop(screen, args, executor, previews, live, drafts, pr_states)
     finally:
         live.close()
+        pr_states.close()
         bracketed_paste(False)
         drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
@@ -1943,7 +1951,7 @@ def display(screen, args):
             draft.flush(force=True)
 
 
-def display_loop(screen, args, executor, previews, live=None, drafts=None):
+def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_states=None):
     drafts = drafts if drafts is not None else {}
 
     def flush_drafts(force=False):
@@ -2035,6 +2043,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         if pending is None and time.monotonic() >= refresh_at:
             pending = executor.submit(board_snapshot, args.tasks, args.offline)
             refresh_started = time.monotonic()
+        if pr_states is not None and not args.offline:
+            states = pr_states.snapshot(url for row in all_rows for url in row.get("prs", []))
+            for row in all_rows:
+                row["pr_states"] = states
         height, width = screen.getmaxyx()
         screen.erase()
         preview_palette.begin_frame()
