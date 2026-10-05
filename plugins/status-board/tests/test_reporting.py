@@ -263,6 +263,17 @@ class ReportingTests(unittest.TestCase):
                 reporting.enable(self.tasks)
             self.assertEqual(call.call_count, 3)
 
+    def test_blocked_startup_points_to_retained_setup_tab(self):
+        with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(reporting, "call") as call:
+            call.side_effect = [{"agents": self.agents}, {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]},
+                                {"root_pane": {"pane_id": "control:p2", "terminal_id": "t"}, "tab": {"tab_id": "reporter-tab"}},
+                                subprocess.CalledProcessError(1, "agent start")]
+            with self.assertRaisesRegex(ValueError, "Open the Status reporter tab"):
+                reporting.enable(self.tasks)
+            config = reporting.configuration(self.tasks)
+            self.assertFalse(config["enabled"])
+            self.assertEqual(config["pane"], "control:p2")
+
     def test_settings_layout_bounds_long_native_arguments(self):
         settings = dict(board.VIEWER_DEFAULTS, reporter=dict(reporting.DEFAULTS, arguments="x" * 1000))
         for width in (60, 120, 240):

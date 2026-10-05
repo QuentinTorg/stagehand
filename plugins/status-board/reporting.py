@@ -257,8 +257,13 @@ def _enable(tasks):
         config.update(pane=tab["root_pane"]["pane_id"], tab=tab["tab"]["tab_id"],
                       terminal=tab["root_pane"]["terminal_id"])
         write(config_path(tasks), config)
-        agent = call("agent", "start", name, "--kind", config["kind"], "--pane", config["pane"],
-                     "--", *arguments, timeout=40)["agent"]
+        try:
+            agent = call("agent", "start", name, "--kind", config["kind"], "--pane", config["pane"],
+                         "--", *arguments, timeout=40)["agent"]
+        except subprocess.CalledProcessError as error:
+            # First-run harness setup belongs to the human, not an auto-approval.
+            raise ValueError("Reporter startup needs attention. Open the Status reporter tab to finish setup, "
+                             "then enable reporting again; its saved pane will be reused.") from error
         agent_binding.save(directory / "binding.json", agent_binding.capture(agent))
     wake = relay()
     relay_action(wake, "_configure", state_root=str(directory / "wake"),
