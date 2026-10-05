@@ -685,11 +685,72 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row["location"] = "/private/worktree/path"
         compact = "\n".join(line for line, _, _ in board.detail_lines(row, 140))
         expanded = "\n".join(line for line, _, _ in board.detail_lines(row, 140, info=True))
-        self.assertTrue(compact.startswith("NEXT: Approve the plan"))
+        self.assertTrue(compact.startswith("Your next step\n  Approve the plan"))
         self.assertNotIn("record saved", compact)
         self.assertNotIn(row["location"], compact)
         self.assertIn("record saved", expanded)
         self.assertIn(row["location"], expanded)
+
+    def test_report_details_show_action_once_and_separate_progress_from_background(self):
+        row = board.task_summary(self.task("decision-required"), 0, None, None, 5)
+        row.update(color=1, action="Choose the proposed approach.", report_fresh=True,
+                   report={"recent_work": "Fault isolated; proposal written.",
+                           "review_coverage": "The proposal has not been independently reviewed.",
+                           "next_action": "Choose the proposed approach.",
+                           "human_action": "Choose the proposed approach.",
+                           "updated_at": time.time(), "evidence": ["/private/proposal.md"]})
+        lines = board.detail_lines(row, 100)
+        text = "\n".join(line for line, _, _ in lines)
+        self.assertEqual(text.count("Choose the proposed approach."), 1)
+        self.assertLess(text.index("Latest progress"), text.index("Review"))
+        self.assertLess(text.index("Review"), text.index("Purpose"))
+        self.assertIn(("Your next step", 1, []), lines)
+        self.assertIn(("Latest progress", 10, []), lines)
+        self.assertIn(("  Fault isolated; proposal written.", 0, []), lines)
+        self.assertNotIn("/private/proposal.md", text)
+        self.assertIn("/private/proposal.md", "\n".join(line for line, _, _ in board.detail_lines(row, 100, info=True)))
+
+    def test_previous_reports_do_not_repeat_obsolete_requests_or_empty_sections(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(action="Agent work is underway.", report_fresh=False,
+                   report={"recent_work": "An earlier proposal was written.", "review_coverage": "",
+                           "next_action": "Obsolete request", "human_action": "Obsolete request",
+                           "updated_at": time.time(), "evidence": []})
+        text = "\n".join(line for line, _, _ in board.detail_lines(row, 100))
+        self.assertIn("Previous progress", text)
+        self.assertNotIn("Latest progress", text)
+        self.assertNotIn("Obsolete request", text)
+        self.assertNotIn("\nReview\n", text)
+        self.assertNotIn("Previous review", text)
+
+    def test_detail_technical_disclosure_expands_and_collapses_without_navigation(self):
+        executor = Mock()
+        ready = Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["location"] = "/private/worktree/path"
+        ready.set_result(([row], [], {"status": "idle"}))
+        executor.submit.return_value = ready
+
+        disclosure = []
+        draw_button = board.draw_button
+
+        def track_button(screen, y, x, label, *args, **kwargs):
+            if "Technical details" in label:
+                disclosure.append(("select", x + 1, y, 0))
+            return draw_button(screen, y, x, label, *args, **kwargs)
+
+        # Locate the disclosure from each actual render, not assumed row numbers.
+        with patch.object(board, "mouse_event", side_effect=lambda: disclosure[-1]), patch.object(
+            board, "open_target"
+        ) as navigate, patch.object(board, "detail_lines", wraps=board.detail_lines) as render, patch.object(
+            board, "draw_button", side_effect=track_button
+        ):
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, board.curses.KEY_MOUSE, ord("q")], (60, 140))
+        flags = [call.kwargs["info"] for call in render.call_args_list]
+        self.assertIn(True, flags)
+        self.assertFalse(flags[-1])
+        self.assertIn("/private/worktree/path", " ".join(str(call) for call in screen.addnstr.call_args_list))
+        navigate.assert_not_called()
 
     def test_task_and_controller_navigation_keep_message_context_separate(self):
         executor = Mock()
@@ -726,7 +787,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertEqual(board.task_stage(row), "Author fixing findings")
             self.assertEqual(board.task_next(row), "Author")
             self.assertEqual(row["color"], 2)
-            self.assertEqual(board.detail_lines(row, 100)[0], ("NEXT: Apply the selected fix", 0, []))
+            self.assertEqual(board.detail_lines(row, 100)[:2], [("Next · Author", 2, []), ("  Apply the selected fix", 0, [])])
 
     def test_obsolete_counters_do_not_change_display(self):
         task = self.task()

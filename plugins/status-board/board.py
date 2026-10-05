@@ -1246,28 +1246,42 @@ def table_line(row, width, pr_width=9, next_width=12, stage_width=30, workspace_
 def detail_lines(row, width, info=False):
     width = min(width, 114)
     action = row["action"] or ("Requested work is finished; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
-    entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
-               ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
+    entries = []
+
+    def section(title, text, color=10):
+        if not text:
+            return
+        entries.extend([(title, color), (text, 0), ("", 0)])
+
+    heading = {1: "Your next step", 2: "Next · " + task_next(row), 3: "Finished"}.get(row["color"], "Next step")
+    section(heading, action, row["color"] or 10)
     if row.get("reporter_note"):
-        entries.append((row["reporter_note"], 0, None))
+        section("Reporting update", row["reporter_note"])
     if row.get("report"):
         report = row["report"]
-        entries.extend((label + report[key], 0, None) for label, key in
-                       (("RECENT: ", "recent_work"), ("REVIEW: ", "review_coverage"),
-                        ("NEXT STEP: ", "next_action"), ("FOR YOU: ", "human_action")))
-        entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0, None))
-        if info:
-            entries.extend(("EVIDENCE: " + value, 0, None) for value in report["evidence"])
-        entries.append(("", 0, None))
+        # Current action is already above. Retained reports explain prior work,
+        # but must never resurrect an obsolete human request as a new checkpoint.
+        previous = "Previous " if not row.get("report_fresh") else ""
+        section(previous + "progress" if previous else "Latest progress", report["recent_work"])
+        section(previous + "review" if previous else "Review", report["review_coverage"])
+    section("Purpose", row["objective"])
+    entries.append(("▾ Technical details" if info else "▸ Technical details", 10))
     if info:
-        entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
-                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+        entries += [(row["label"], 0), (task_stage(row) + " · " + row["roles"], 0),
+                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0)]
         if row.get("runtime_note"):
-            entries.append((row["runtime_note"], 0, None))
-    if info and row.get("location"):
-        entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
-    lines = [(line, color, []) for text, color, _ in entries
-             for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
+            entries.append((row["runtime_note"], 0))
+        if row.get("location"):
+            entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0))
+        if row.get("report"):
+            report = row["report"]
+            entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0))
+            entries.extend(("Evidence: " + value, 0) for value in report["evidence"])
+    entries.append(("", 0))
+    # Indent body text beneath colored headings without coloring entire paragraphs.
+    lines = [(line, color, []) for text, color in entries
+             for line in (textwrap.wrap(text, max(1, width - 4), initial_indent="" if color else "  ",
+                                        subsequent_indent="" if color else "  ") or [""])]
     text, links = "PRs: ", []
     for url in row["prs"]:
         parts = urlsplit(url).path.rstrip("/").split("/")
@@ -2003,6 +2017,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
     refresh_started = None
     detail_offset, detail_task = 0, None
     general, info, utility_view = None, True, None
+    technical = False
     controller_offset = None
     preview_role, preview_offset = None, None
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
@@ -2110,7 +2125,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
-            info = True
+            info, technical = True, False
         message_role = (conversation_role(current, preview_role)
                         if current and not viewing_controller and not info and not utility_view else None)
         message_target = None if viewing_controller else message_route(current, message_role)
@@ -2298,7 +2313,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                  "Message the orchestrator below to start a task, or open the Orchestrator tab for its conversation."), width - 4)]
             title, color = "Later" if all_rows else "No tasks yet", 10
         elif info:
-            details = detail_lines(current, width, info=True)
+            details = detail_lines(current, width, info=technical)
             title, color = current["label"], 10
         else:
             # The request key already binds this result to the selected role.
@@ -2332,6 +2347,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                 draw_preview_line(screen, y, line, preview_palette, width)
             else:
                 put(y, line, color, bold=bool(color))
+            if not utility_view and not viewing_controller and info and line in {"▸ Technical details", "▾ Technical details"}:
+                if draw_button(screen, y, 1, line, active=technical):
+                    actions.append((y, 1, 1 + len(line), "technical"))
             if active_offset + i in setting_controls:
                 label, setting, enabled = setting_controls[active_offset + i]
                 if draw_button(screen, y, 1, label, active=enabled):
@@ -2634,11 +2652,13 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                 notice = f"Viewer preference not saved: {clean(error)}"
         elif action == "info":
             info, detail_offset = True, 0
+        elif action == "technical":
+            technical = not technical
         elif action == "pr-list":
             info = True
             # Details place links last; scroll directly to them, including on selection change.
             detail_task = rows[selected]["id"]
-            detail_offset = len(detail_lines(rows[selected], width, info=True))
+            detail_offset = len(detail_lines(rows[selected], width, info=technical))
         elif action and action.startswith("role-"):
             preview_role, preview_offset, info = action[5:], None, False
         elif action == "latest":
