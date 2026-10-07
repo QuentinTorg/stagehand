@@ -191,11 +191,12 @@ class BoardTests(unittest.TestCase):
         settings = dict(board.VIEWER_DEFAULTS)
         for width in (60, 80, 88, 120, 240):
             lines, controls = board.settings_layout(settings, width)
-            self.assertEqual([key for _, key, _ in controls.values()], list(settings))
-            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True, False])
+            self.assertEqual([key for _, key, _ in controls.values()], [*settings, "reporter", "reporter-kind",
+                             "reporter-model", "reporter-reasoning", "reporter-arguments"])
+            self.assertEqual([enabled for _, _, enabled in controls.values()], [False, True, True, False, False, False, False, False, False])
             self.assertEqual(len({len(label) for label, _, _ in controls.values()}), 1)
             for index, (label, _, _) in controls.items():
-                if width >= 80:
+                if min(width - 4, 120) - len(label) - 3 >= 40:
                     self.assertTrue(lines[index][0].startswith(" " * (len(label) + 3)))
                     self.assertTrue(lines[index][0].strip())
                 else:
@@ -684,11 +685,152 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         row["location"] = "/private/worktree/path"
         compact = "\n".join(line for line, _, _ in board.detail_lines(row, 140))
         expanded = "\n".join(line for line, _, _ in board.detail_lines(row, 140, info=True))
-        self.assertTrue(compact.startswith("NEXT: Approve the plan"))
+        self.assertTrue(compact.startswith("Your next step\n  Approve the plan"))
         self.assertNotIn("record saved", compact)
         self.assertNotIn(row["location"], compact)
         self.assertIn("record saved", expanded)
         self.assertIn(row["location"], expanded)
+
+    def test_reporter_launch_settings_remain_editable_after_an_agent_exists(self):
+        live = Mock()
+        live.available = False
+        for key, field, value in (("6", "kind", "claude"), ("7", "model", "different-model"), ("8", "reasoning", "high")):
+            config = dict(board.reporting.DEFAULTS, enabled=True, pane="control:p2", directory="/private/reporter", socket="/test/herdr.sock")
+            executor = Mock()
+            ready = Future()
+            ready.set_result(([], [], {"status": "idle", "reporter": config}))
+            executor.submit.return_value = ready
+            with patch.object(board.reporting, "configuration", return_value=config), patch.object(
+                board.reporting, "write"
+            ) as save, patch.object(board, "edit_reporter_setting", return_value=value):
+                screen = self.run_display(executor, [-1, ord("s"), ord(key), ord("q")], live=live)
+            self.assertEqual(save.call_args.args[1][field], value)
+            self.assertIn("running session is unchanged", " ".join(str(call) for call in screen.addnstr.call_args_list))
+
+    def test_report_details_show_action_once_and_separate_progress_from_background(self):
+        row = board.task_summary(self.task("decision-required"), 0, None, None, 5)
+        row.update(color=1, action="Choose the proposed approach.", report_fresh=True,
+                   report={"recent_work": "Fault isolated; proposal written.",
+                           "review_coverage": "The proposal has not been independently reviewed.",
+                           "next_action": "Choose the proposed approach.",
+                           "human_action": "Choose the proposed approach.",
+                           "updated_at": time.time(), "evidence": ["/private/proposal.md"]})
+        lines = board.detail_lines(row, 100)
+        text = "\n".join(line for line, _, _ in lines)
+        self.assertEqual(text.count("Choose the proposed approach."), 1)
+        self.assertLess(text.index("Latest progress"), text.index("Review"))
+        self.assertLess(text.index("Review"), text.index("Purpose"))
+        self.assertIn(("Your next step", 1, []), lines)
+        self.assertIn(("Latest progress", 10, []), lines)
+        self.assertIn(("  Fault isolated; proposal written.", 0, []), lines)
+        self.assertNotIn("/private/proposal.md", text)
+        self.assertIn("/private/proposal.md", "\n".join(line for line, _, _ in board.detail_lines(row, 100, info=True)))
+
+    def test_previous_reports_do_not_repeat_obsolete_requests_or_empty_sections(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(action="Agent work is underway.", report_fresh=False,
+                   report={"recent_work": "An earlier proposal was written.", "review_coverage": "",
+                           "next_action": "Obsolete request", "human_action": "Obsolete request",
+                           "updated_at": time.time(), "evidence": []})
+        lines = board.detail_lines(row, 100)
+        text = "\n".join(line for line, _, _ in lines)
+        self.assertIn("Earlier progress", text)
+        self.assertNotIn("Latest progress", text)
+        self.assertNotIn("Obsolete request", text)
+        self.assertNotIn("\nReview\n", text)
+        self.assertNotIn("Earlier review", text)
+        muted = [line for line, _, _ in lines if isinstance(line, board.StyledText)]
+        self.assertEqual(list(map(str, muted)), ["Earlier progress", "  An earlier proposal was written."])
+        self.assertTrue(all(style.dim and not style.bold for line in muted for style in line.styles))
+        self.assertNotIn("  Agent work is underway.", muted)
+
+    def test_report_indicator_tracks_reporting_not_task_completion(self):
+        row = board.task_summary(self.task("decision-required"), 0, None, None, 5)
+        row.update(report_fresh=False, reporter_activity={"status": "working", "observed_at": 100})
+        saved = row.copy()
+        self.assertNotEqual(board.report_label(row, now=100), board.report_label(row, now=100.3))
+        self.assertEqual(board.report_label(row, animate=False, now=100), ("Reporter updating…", 10))
+        self.assertEqual(board.report_label(row, now=111), ("Report status unavailable", 10))
+        self.assertEqual(row, saved)
+        for status, expected in (("idle", "Report update pending"), ("done", "Report update pending"),
+                                 ("blocked", "Reporter needs attention"), ("unavailable", "Reporter unavailable")):
+            row["reporter_activity"] = {"status": status, "observed_at": 100}
+            label, _ = board.report_label(row, now=100)
+            self.assertTrue(label.startswith(expected))
+        row["report_fresh"] = True
+        self.assertEqual(board.report_label(row), ("✓ Report matches latest inputs", 3))
+        self.assertEqual(row["color"], saved["color"])
+        row["reporter_error"] = True
+        self.assertEqual(board.report_label(row), ("Report unavailable · invalid summary", 1))
+        self.assertIsNone(board.report_label(board.task_summary(self.task(), 0, None, None, 5)))
+
+    def test_pending_reports_keep_earlier_bullets_readable_and_diagnostics_in_details(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(report_fresh=False, reporter_activity={"status": "idle", "observed_at": 100},
+                   reporter_note="Previous reporter summary; current status uses the ordinary dashboard.",
+                   report={"recent_work": "- An earlier proposal with a long explanation.\n  - Supporting detail.",
+                           "review_coverage": "- Earlier review passed.", "updated_at": time.time(), "evidence": []})
+        for width in (40, 100, 320):
+            lines = board.detail_lines(row, width, now=100)
+            text = "\n".join(line for line, _, _ in lines)
+            self.assertIn("Report update pending", text)
+            self.assertNotIn("Reporting update", text)
+            self.assertNotIn(row["reporter_note"], text)
+            self.assertTrue(all(len(line) <= min(width, 114) - 4 for line, _, _ in lines))
+            self.assertTrue(all(style.dim for line, _, _ in lines if isinstance(line, board.StyledText) for style in line.styles))
+        lines = board.detail_lines(row, 40, now=100)
+        self.assertTrue(any(line.startswith("    - Supporting") for line, _, _ in lines))
+        expanded = "\n".join(line for line, _, _ in board.detail_lines(row, 100, info=True, now=100))
+        self.assertIn(row["reporter_note"], expanded)
+
+    def test_detail_bullets_preserve_items_and_align_wrapped_sub_bullets(self):
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row.update(report_fresh=True,
+                   report={"recent_work": "- Converted observations directly to Protobuf without intermediary types.\n"
+                                          "  - Navigation remains with the Zenoh worker and its existing tests.\n"
+                                          "- Added offline tests.",
+                           "review_coverage": "• Independent review is pending.\n* Author checks passed.",
+                           "updated_at": time.time(), "evidence": []})
+        for width in (10, 40, 80, 320):
+            lines = board.detail_lines(row, width)
+            self.assertTrue(all(len(line) <= min(width, 114) - 4 for line, _, _ in lines))
+        lines = [line for line, _, _ in board.detail_lines(row, 40)]
+        root = next(i for i, line in enumerate(lines) if line.startswith("  - Converted"))
+        child = next(i for i, line in enumerate(lines) if line.startswith("    - Navigation"))
+        self.assertTrue(lines[root + 1].startswith("    "))
+        self.assertTrue(lines[child + 1].startswith("      "))
+        self.assertIn("  - Added offline tests.", lines)
+        self.assertIn("  • Independent review is pending.", lines)
+        self.assertIn("  * Author checks passed.", lines)
+
+    def test_detail_technical_disclosure_expands_and_collapses_without_navigation(self):
+        executor = Mock()
+        ready = Future()
+        row = board.task_summary(self.task(), 0, None, None, 5)
+        row["location"] = "/private/worktree/path"
+        ready.set_result(([row], [], {"status": "idle"}))
+        executor.submit.return_value = ready
+
+        disclosure = []
+        draw_button = board.draw_button
+
+        def track_button(screen, y, x, label, *args, **kwargs):
+            if "Technical details" in label:
+                disclosure.append(("select", x + 1, y, 0))
+            return draw_button(screen, y, x, label, *args, **kwargs)
+
+        # Locate the disclosure from each actual render, not assumed row numbers.
+        with patch.object(board, "mouse_event", side_effect=lambda: disclosure[-1]), patch.object(
+            board, "open_target"
+        ) as navigate, patch.object(board, "detail_lines", wraps=board.detail_lines) as render, patch.object(
+            board, "draw_button", side_effect=track_button
+        ):
+            screen = self.run_display(executor, [-1, board.curses.KEY_MOUSE, board.curses.KEY_MOUSE, ord("q")], (60, 140))
+        flags = [call.kwargs["info"] for call in render.call_args_list]
+        self.assertIn(True, flags)
+        self.assertFalse(flags[-1])
+        self.assertIn("/private/worktree/path", " ".join(str(call) for call in screen.addnstr.call_args_list))
+        navigate.assert_not_called()
 
     def test_task_and_controller_navigation_keep_message_context_separate(self):
         executor = Mock()
@@ -725,7 +867,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             self.assertEqual(board.task_stage(row), "Author fixing findings")
             self.assertEqual(board.task_next(row), "Author")
             self.assertEqual(row["color"], 2)
-            self.assertEqual(board.detail_lines(row, 100)[0], ("NEXT: Apply the selected fix", 0, []))
+            self.assertEqual(board.detail_lines(row, 100)[:2], [("Next · Author", 2, []), ("  Apply the selected fix", 0, [])])
 
     def test_obsolete_counters_do_not_change_display(self):
         task = self.task()

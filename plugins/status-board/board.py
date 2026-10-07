@@ -28,6 +28,8 @@ from live_terminal import LivePreview
 from preview_links import LinkedScreen, safe_link
 import agent_binding
 import resume
+import reporting
+from pull_requests import PullRequestStates, canonical_url, marker as pr_marker
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -607,9 +609,11 @@ def mapping(value):
     return value if isinstance(value, dict) else {}
 
 
-def clean(value):
+def clean(value, multiline=False):
     # Task text is data: never let terminal control characters affect the display.
-    return " ".join("".join(c for c in str(value or "") if c.isprintable() or c.isspace()).split())
+    text = "".join(c for c in str(value or "") if c.isprintable() or c.isspace())
+    # Descriptions retain list structure; table labels stay single-line.
+    return "\n".join(line.rstrip() for line in text.expandtabs(2).splitlines()).strip() if multiline else " ".join(text.split())
 
 
 def read_tasks(directory):
@@ -625,8 +629,8 @@ def read_tasks(directory):
             continue
         try:
             task = yaml.safe_load(path.read_text())
-            if not isinstance(task, dict) or not task.get("task_id") or not isinstance(task.get("state"), dict):
-                raise ValueError("expected task_id and state mapping")
+            from task_records import validate
+            validate(task)
             if task["state"].get("name") == "cleaned":
                 continue
             tasks.append((task, path.stat().st_mtime))
@@ -675,10 +679,9 @@ def pr_links(task):
                 collect(child)
         elif isinstance(value, str):
             try:
-                parsed = urlsplit(value)
-                parts = parsed.path.rstrip("/").split("/")
-                if parsed.scheme == "https" and parsed.hostname and len(parts) >= 5 and parts[-2] == "pull" and parts[-1].isdigit() and value not in links:
-                    links.append(value)
+                url = canonical_url(value)
+                if url not in links:
+                    links.append(url)
             except ValueError:
                 pass
 
@@ -838,12 +841,25 @@ def snapshot(directory, offline=False, include_controller=False):
         # Reuse inventory; showing activity must not poll hidden conversations.
         status = "offline" if offline else "unavailable"
         if not offline:
+            owner = None
             try:
                 owner = agent_binding.resolve(CONTROLLER_BINDING, agents)
                 status = clean(owner.get("agent_status")) or "unknown"
             except ValueError as error:
                 warnings.append(str(error))
-        return rows, warnings, {"status": status, "observed_at": time.monotonic()}
+            # Recover observer hooks independently of the controller. A failed
+            # reconnection must not hide retained summaries or their freshness.
+            for update, extra in ((reporting.sync, ()), (reporting.decorate, (rows,))):
+                try:
+                    update(directory, tasks, agents, owner, *extra)
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, SystemExit) as error:
+                    warnings.append(f"Reporter unavailable; using ordinary status: {clean(error)}")
+        try:
+            reporter_config = reporting.configuration(directory)
+        except (OSError, ValueError) as error:
+            reporter_config = dict(reporting.DEFAULTS)
+            warnings.append(f"Reporter configuration: {clean(error)}")
+        return rows, warnings, {"status": status, "observed_at": time.monotonic(), "reporter": reporter_config}
     return rows, warnings
 
 
@@ -993,6 +1009,7 @@ def help_lines(width, warnings):
             "", "Tasks: select a workspace, then an assigned role (Author, Reviewer, Worker, or another role) for its conversation.",
             "Details (i): task purpose, next action, PR links, and technical context. Messages still go to the orchestrator.",
             "Orchestrator: discuss setup or new work, and read recent agent output.",
+            "PR links: × means closed without merging; ✓ means merged. Plain links are open or status is unconfirmed.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
             "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
@@ -1033,15 +1050,32 @@ def settings_layout(settings, width):
          "Enable this fallback for clients that strip them: Enter inserts a newline; Send or Ctrl-G submits. "
          "Does not change Interact's native terminal input."),
     ]
+    config = settings.get("reporter", reporting.DEFAULTS)
+    items.extend([
+        ("reporter", "5 Status reporting", "Background" if config["enabled"] else "Orchestrator",
+         "Optional read-only observer in its own directory and separate tab. Enabling launches or reconnects an agent "
+         "with the settings below; workers and coordinator are never messaged by it. Disabling restores "
+         "ordinary status and cancels only reporter watches, leaving its tab available."),
+        ("reporter-kind", "6 Reporter harness", config["kind"], "Herdr agent kind for the next launch. Exit the reporter and re-enable reporting to apply changes."),
+        ("reporter-model", "7 Reporter model", config["model"] or "Native arguments",
+         "Model for the next launch. Use the running harness's native controls for live changes. "
+         "For another harness, clear Model and Reasoning and use its native arguments."),
+        ("reporter-reasoning", "8 Reporter reasoning", config["reasoning"] or "Native arguments",
+         "Codex reasoning effort for the next launch; live changes use its native controls."),
+        ("reporter-arguments", "9 Native arguments", config["arguments"] or "None",
+         "Additional native launch arguments, shell-quoted but never executed through a shell. "
+         "Directory and Herdr skill paths can be configured through reporting.py."),
+    ])
     content_width = max(1, min(width - 4, 120))
-    labels = [f"  {label}: {value}  " for _, label, value, _ in items]
+    labels = [f"  {label}: {clipped(value, 24)}  " for _, label, value, _ in items]
     control_width = max(map(len, labels))
     beside = content_width - control_width - 3 >= 40
-    intro = "Click a control or use Ctrl-P then 1 / 2 / 3 / 4. Esc returns. Saved for this workspace."
+    intro = "Click a control or use Ctrl-P then 1–9. Esc returns. Saved for this workspace."
     lines = [(line, 0, []) for line in textwrap.wrap(intro, content_width)] + [("", 0, [])]
     controls = {}
     for (key, _, _, description), label in zip(items, labels):
-        controls[len(lines)] = (label.ljust(control_width), key, settings[key])
+        controls[len(lines)] = (label.ljust(control_width), key,
+                               config["enabled"] if key == "reporter" else settings.get(key, False))
         indent = control_width + 3 if beside else 2
         wrapped = textwrap.wrap(description, max(1, content_width - indent))
         if not beside:
@@ -1049,6 +1083,57 @@ def settings_layout(settings, width):
         lines.extend((" " * indent + line, 0, []) for line in wrapped)
         lines.append(("", 0, []))
     return lines, controls
+
+
+def edit_reporter_setting(screen, label, value, input_reader=None):
+    """Edit launch options separately from message drafts; Escape changes nothing."""
+    text, position = value, len(value)
+    input_reader = input_reader or MessageInput(screen)
+    try:
+        curses.curs_set(1)
+        while True:
+            height, width = screen.getmaxyx()
+            if height < 5 or width < 12:
+                return None
+            box = curses.newwin(min(5, height), max(2, width - 4), max(0, (height - 5) // 2), 2)
+            box.keypad(True)
+            box.box()
+            box.addnstr(0, 2, f" {label} · Enter saves · Esc cancels ", max(0, width - 8))
+            usable = max(1, width - 8)
+            start = max(0, position - usable + 1)
+            box.addnstr(2, 2, text[start:], usable)
+            box.move(2, 2 + position - start)
+            box.refresh()
+            try:
+                key = input_reader.read()
+            except curses.error:
+                continue
+            if isinstance(key, InsertText):
+                inserted = key.text.replace("\n", " ")[:max(0, 1000 - len(text))]
+                text = text[:position] + inserted + text[position:]
+                position += len(inserted)
+                continue
+            if key == "\x1b":
+                return None
+            if key in ("\n", "\r", curses.KEY_ENTER):
+                return text
+            if key == curses.KEY_LEFT:
+                position = max(0, position - 1)
+            elif key == curses.KEY_RIGHT:
+                position = min(len(text), position + 1)
+            elif key in (curses.KEY_BACKSPACE, "\x7f", "\b") and position:
+                text, position = text[:position - 1] + text[position:], position - 1
+            elif key == curses.KEY_DC:
+                text = text[:position] + text[position + 1:]
+            elif key == curses.KEY_HOME:
+                position = 0
+            elif key == curses.KEY_END:
+                position = len(text)
+            elif isinstance(key, str) and key.isprintable() and len(text) < 1000:
+                text = text[:position] + key + text[position:]
+                position += 1
+    finally:
+        curses.curs_set(0)
 
 
 def clipped(text, width):
@@ -1078,7 +1163,8 @@ def pr_column(width, pr_width=9, next_width=12, stage_width=30, workspace_width=
 
 
 def pr_labels(row):
-    return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1], url) for url in row.get("prs", [])]
+    return [("#" + urlsplit(url).path.rstrip("/").split("/")[-1] +
+             pr_marker(row.get("pr_states", {}).get(url)), url) for url in row.get("prs", [])]
 
 
 def pr_cell(row, width):
@@ -1163,24 +1249,85 @@ def table_line(row, width, pr_width=9, next_width=12, stage_width=30, workspace_
     return "  ".join(f"{clipped(value, size):<{size}}" for value, size in fields if size) + "  " + pr_cell(row, pr_width)[0]
 
 
-def detail_lines(row, width, info=False):
+def report_label(row, interval=5, animate=True, now=None):
+    if row.get("reporter_error"):
+        return "Report unavailable · invalid summary", 1
+    if row.get("report_fresh"):
+        return "✓ Report matches latest inputs", 3
+    activity = row.get("reporter_activity")
+    if activity is None:
+        return None
+    state = activity_label(activity, interval, animate, now)
+    if state.endswith("Working"):
+        return state.replace("Working", "Reporter updating…"), 10
+    return {"Ready": ("Report update pending", 10),
+            "Blocked · use Interact": ("Reporter needs attention · open Status reporter", 1),
+            "Unavailable": ("Reporter unavailable · open Status reporter", 1)}.get(
+                state, ("Report status unavailable", 10))
+
+
+def detail_lines(row, width, info=False, interval=5, animate=True, now=None):
     width = min(width, 114)
     action = row["action"] or ("Requested work is finished; no action is required here." if row["color"] == 3 else f"No action needed from you. Waiting on {task_next(row).lower()}.")
-    entries = [("NEXT: " + action, 1 if row["color"] == 1 else 0, None),
-               ("", 0, None), (row["objective"], 0, None), ("", 0, None)]
+    entries = []
+
+    def section(title, text, color=10, muted=False):
+        if not text:
+            return
+        entries.extend([(title, color, muted), (text, 0, muted), ("", 0, False)])
+
+    heading = {1: "Your next step", 2: "Next · " + task_next(row), 3: "Finished"}.get(row["color"], "Next step")
+    section(heading, action, row["color"] or 10)
+    label = report_label(row, interval, animate, now)
+    if label:
+        entries.extend([(*label, False), ("", 0, False)])
+    if row.get("report"):
+        report = row["report"]
+        # Current action is already above. Retained reports explain prior work,
+        # but must never resurrect an obsolete human request as a new checkpoint.
+        stale = not row.get("report_fresh")
+        section("Earlier progress" if stale else "Latest progress", report["recent_work"], muted=stale)
+        section("Earlier review" if stale else "Review", report["review_coverage"], muted=stale)
+    section("Purpose", row["objective"])
+    entries.append(("▾ Technical details" if info else "▸ Technical details", 10, False))
     if info:
-        entries += [(row["label"], 0, None), (task_stage(row) + " · " + row["roles"], 0, None),
-                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0, None)]
+        entries += [(row["label"], 0, False), (task_stage(row) + " · " + row["roles"], 0, False),
+                    (row["repository"] + " · record saved " + row["saved"] + " ago", 0, False)]
         if row.get("runtime_note"):
-            entries.append((row["runtime_note"], 0, None))
-    if info and row.get("location"):
-        entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, None))
-    lines = [(line, color, []) for text, color, _ in entries
-             for line in (textwrap.wrap(text, max(1, width - 4)) or [""])]
+            entries.append((row["runtime_note"], 0, False))
+        if row.get("reporter_note"):
+            entries.append((row["reporter_note"], 0, False))
+        if row.get("location"):
+            entries.append((f"WORKSPACE: {row['workspace_id']} · {row['location']}", 0, False))
+        if row.get("report"):
+            report = row["report"]
+            entries.append(("Reporter updated " + age(report["updated_at"], time.time()) + " ago", 0, False))
+            entries.extend(("Evidence: " + value, 0, False) for value in report["evidence"])
+    entries.append(("", 0, False))
+    # Keep bullets and their continuations aligned beneath section headings.
+    lines, wrap_width = [], max(1, width - 4)
+    for text, color, muted in entries:
+        for paragraph in text.splitlines() or [""]:
+            bullet = re.match(r"(\s*[-*•]\s+)(.*)", paragraph)
+            indent = "" if color else "  "
+            first = indent + bullet[1] if bullet else indent
+            rest = " " * len(first) if bullet else indent
+            content = bullet[2] if bullet else paragraph
+            if len(first) >= wrap_width:
+                first = rest = ""
+                content = paragraph.strip()
+            for line in textwrap.wrap(content, wrap_width, initial_indent=first, subsequent_indent=rest) or [""]:
+                # Retain older evidence without giving it current-result emphasis.
+                if muted:
+                    line = StyledText(line, [TerminalStyle(dim=True)] * len(line))
+                lines.append((line, color, []))
     text, links = "PRs: ", []
     for url in row["prs"]:
         parts = urlsplit(url).path.rstrip("/").split("/")
         label = parts[-3] + "#" + parts[-1]
+        state = row.get("pr_states", {}).get(url)
+        if state in {"closed", "merged"}:
+            label += " (" + state + ")"
         if links:
             text += ", "
         links.append((len(text), len(text) + len(label), url))
@@ -1377,6 +1524,7 @@ class ViewerState:
                     baseline = previous_runtime["identities"] if previous_runtime else {}
                     self.observations[row["id"]] = {"record_key": row["record_key"], "identities": {**baseline, **identities}}
                 apply_runtime_display(row, unreconciled=previous_runtime is not None, replaced=replaced)
+                reporting.apply_display(row)
             previous = later.get(row["id"])
             if previous is None:
                 continue
@@ -1841,11 +1989,13 @@ def display(screen, args):
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-refresh")
     previews = ThreadPoolExecutor(max_workers=1, thread_name_prefix="board-preview")
     live = LivePreview()
+    pr_states = PullRequestStates()
     drafts = {}
     try:
-        return display_loop(screen, args, executor, previews, live, drafts)
+        return display_loop(screen, args, executor, previews, live, drafts, pr_states)
     finally:
         live.close()
+        pr_states.close()
         bracketed_paste(False)
         drag_tracking(False)
         executor.shutdown(wait=False, cancel_futures=True)
@@ -1854,7 +2004,7 @@ def display(screen, args):
             draft.flush(force=True)
 
 
-def display_loop(screen, args, executor, previews, live=None, drafts=None):
+def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_states=None):
     drafts = drafts if drafts is not None else {}
 
     def flush_drafts(force=False):
@@ -1906,13 +2056,21 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
     refresh_started = None
     detail_offset, detail_task = 0, None
     general, info, utility_view = None, True, None
+    technical = False
     controller_offset = None
     preview_role, preview_offset = None, None
     preview_pending, preview_request, preview_key, preview_result = None, None, None, {}
     preview_refresh_at = 0
     controller = {"status": "loading", "output": "Waiting for live inventory…"}
     interaction = None
+    reporter_job = None
     while True:
+        if reporter_job is not None and reporter_job.done():
+            try:
+                notice = reporter_job.result()
+            except Exception as error:
+                notice = f"Reporter setup failed; ordinary reporting remains available: {clean(error)}"
+            reporter_job, refresh_at = None, 0
         try:
             flush_drafts()
         except OSError:
@@ -1939,6 +2097,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         if pending is None and time.monotonic() >= refresh_at:
             pending = executor.submit(board_snapshot, args.tasks, args.offline)
             refresh_started = time.monotonic()
+        if pr_states is not None and not args.offline:
+            states = pr_states.snapshot(url for row in all_rows for url in row.get("prs", []))
+            for row in all_rows:
+                row["pr_states"] = states
         height, width = screen.getmaxyx()
         screen.erase()
         preview_palette.begin_frame()
@@ -2002,7 +2164,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
         if selected_id != detail_task:
             detail_offset, detail_task = 0, selected_id
             preview_role, preview_offset = None, None
-            info = True
+            info, technical = True, False
         message_role = (conversation_role(current, preview_role)
                         if current and not viewing_controller and not info and not utility_view else None)
         message_target = None if viewing_controller else message_route(current, message_role)
@@ -2162,7 +2324,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             notice = "Interaction ended: preview changed or disconnected. No input replayed."
         setting_controls = {}
         if utility_view == "settings":
-            details, setting_controls = settings_layout(viewer.settings, width)
+            details, setting_controls = settings_layout(
+                dict(viewer.settings, reporter=activity.get("reporter", reporting.DEFAULTS)), width)
             title, color = "Board settings", 10
         elif utility_view:
             details = help_lines(width, warnings)
@@ -2189,7 +2352,8 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                  "Message the orchestrator below to start a task, or open the Orchestrator tab for its conversation."), width - 4)]
             title, color = "Later" if all_rows else "No tasks yet", 10
         elif info:
-            details = detail_lines(current, width, info=True)
+            details = detail_lines(current, width, info=technical, interval=args.interval,
+                                   animate=viewer.settings["animate_activity"])
             title, color = current["label"], 10
         else:
             # The request key already binds this result to the selected role.
@@ -2223,6 +2387,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 draw_preview_line(screen, y, line, preview_palette, width)
             else:
                 put(y, line, color, bold=bool(color))
+            if not utility_view and not viewing_controller and info and line in {"▸ Technical details", "▾ Technical details"}:
+                if draw_button(screen, y, 1, line, active=technical):
+                    actions.append((y, 1, 1 + len(line), "technical"))
             if active_offset + i in setting_controls:
                 label, setting, enabled = setting_controls[active_offset + i]
                 if draw_button(screen, y, 1, label, active=enabled):
@@ -2343,8 +2510,10 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 live.retry()
         elif key in (ord("t"), ord("c"), ord("?"), ord("s")):
             action = {ord("t"): "task", ord("c"): "controller", ord("?"): "help", ord("s"): "settings"}[key]
-        elif utility_view == "settings" and key in (ord("1"), ord("2"), ord("3"), ord("4")):
-            action = "setting-" + {ord("1"): "send_while_working", ord("2"): "animate_activity", ord("3"): "live_preview", ord("4"): "safe_paste"}[key]
+        elif utility_view == "settings" and ord("1") <= key <= ord("9"):
+            action = "setting-" + ("send_while_working", "animate_activity", "live_preview", "safe_paste",
+                                   "reporter", "reporter-kind", "reporter-model", "reporter-reasoning",
+                                   "reporter-arguments")[key - ord("1")]
         elif key == ord("l") or (key in (10, 13, curses.KEY_ENTER) and current is None and not viewing_controller):
             action = "later"
         elif key == 27:
@@ -2485,8 +2654,27 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
             utility_view, detail_offset = action if utility_view != action else None, 0
         elif action and action.startswith("setting-"):
             try:
-                viewer.toggle_setting(action[len("setting-"):])
-                notice = "Settings saved."
+                setting = action[len("setting-"):]
+                if setting.startswith("reporter"):
+                    if reporter_job is not None or args.offline:
+                        raise ValueError("Reporter setup is running or the board is offline")
+                    config = reporting.configuration(args.tasks)
+                    if setting == "reporter":
+                        reporter_job = executor.submit(reporting.disable if config["enabled"] else reporting.enable, args.tasks)
+                        notice = "Updating reporter setup…"
+                    else:
+                        field = setting[len("reporter-"):]
+                        value = edit_reporter_setting(screen, field.title(), config[field], input_reader)
+                        if value is not None:
+                            # Keep identities repaired during the modal edit.
+                            config = reporting.configuration(args.tasks)
+                            config[field] = value
+                            reporting.write(reporting.config_path(args.tasks), config)
+                            activity["reporter"] = config
+                            notice = "Saved for the next reporter launch; a running session is unchanged."
+                else:
+                    viewer.toggle_setting(setting)
+                    notice = "Settings saved."
             except (OSError, ValueError) as error:
                 notice = f"Setting not saved: {clean(error)}"
         elif action in {"aside", "later"}:
@@ -2504,11 +2692,13 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None):
                 notice = f"Viewer preference not saved: {clean(error)}"
         elif action == "info":
             info, detail_offset = True, 0
+        elif action == "technical":
+            technical = not technical
         elif action == "pr-list":
             info = True
             # Details place links last; scroll directly to them, including on selection change.
             detail_task = rows[selected]["id"]
-            detail_offset = len(detail_lines(rows[selected], width, info=True))
+            detail_offset = len(detail_lines(rows[selected], width, info=technical))
         elif action and action.startswith("role-"):
             preview_role, preview_offset, info = action[5:], None, False
         elif action == "latest":

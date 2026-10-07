@@ -42,6 +42,8 @@ Click a task row to select it. Scroll conversation output with the mouse wheel o
 
 Click a PR number or repo#number label to open the recorded HTTPS link in your default browser. Public GitHub and GitHub Enterprise URLs retain their original host. These are board mouse targets, so no OS URL-handler changes or modified-click shortcuts are needed.
 
+PR labels retain their hyperlinks: `#123×` is closed without merging; `#123✓` is merged. Details spell out the state. Best-effort GitHub CLI reads run in the background and refresh every two minutes; missing authentication or offline mode leaves links unmarked, not confirmed open. PR state never changes task status or grants cleanup authority.
+
 The task list has a position indicator and clickable scroll rail. It grows automatically up to 12 rows (fewer in short panes). Drag its bottom border to show more or fewer rows, leaving space for details and messages. Workspace and Status share the available width according to their content; Next and PR stay compact. Drag the **↔** divider between Workspace and Status in the header to adjust their widths. **Auto**, beside the bottom resize grip, restores both automatic height and column sizing; it uses the active-tab color when both are automatic. Manual sizing lasts for the current board session and fits within the pane when resized. Delayed-refresh warnings expose update health, not agent progress. **Details** shows raw workflow/agent state, record age, and workspace paths; duplicate names retain workspace IDs. The board never merges or removes workspaces. For a plain-text snapshot:
 
 ```sh
@@ -100,7 +102,7 @@ Drafts are saved per task and recipient privately under `board-drafts/` beside t
 
 ## Settings and activity
 
-Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or press **1 / 2 / 3 / 4** to toggle it; Esc returns. Preferences persist alongside Later entries in private `board-state.json`, not task records.
+Open **Settings** at the top, or press **s**. Settings are stacked vertically with descriptions beside their controls (beneath them in narrow panes); scroll to see any rows that do not fit. Enabled controls are highlighted. Click a control or use the prefixed numeric shortcuts; Esc returns. Viewer preferences persist alongside Later entries in private `board-state.json`, not task records.
 
 - **Send while working** (default off): permits ordinary Enter / Send during an active turn. Enable it for agents that support mid-turn input. Delivery does not mean the message has been processed. This never bypasses permission dialogs or identity checks.
 - **Animation** (default on): rotating dots in the message-box heading indicate that Herdr last reported the message recipient working. Turn it off for a static Working label. It reuses the inventory refresh, not conversation reads; stale observations stop the animation and display Status stale.
@@ -109,6 +111,36 @@ Open **Settings** at the top, or press **s**. Settings are stacked vertically wi
 - **Enter inserts newline** (default off): marked pastes are protected even when this is off. Enable this fallback for clients that strip paste markers: Enter inserts a newline; **Send** or **Ctrl-G** submits. This affects only the message composer, not Interact's native terminal input.
 
 Enter / Send follows the same setting in every view. Ctrl-J inserts a newline; Shift+Enter is not used as a busy-send override because terminals do not consistently distinguish it from Enter.
+
+## Optional status reporter
+
+Off by default. **Settings → Status reporting: Background** launches one read-only observer in a separate tab of the controller workspace. Its dedicated working directory has its own instructions and only the installed Herdr skill. It explains recent work, review coverage of the current changes, who acts next, and what you need to decide. It cannot message workers or the orchestrator, approve actions, or edit their records or code. The orchestrator still owns coordination and durable recovery facts.
+
+**Details** puts the next action first, followed by latest progress, relevant review context, and purpose. Colored headings separate sections; bullets and sub-bullets keep their indentation when wrapped. A report indicator distinguishes up-to-date, updating, pending, and unavailable reporting; only a working reporter spins. Stale summaries remain visible as dimmed earlier context until replaced. **Technical details** expands evidence and runtime metadata. Reporting activity never changes a task's workflow state.
+
+Before enabling, install and enable the bundled [Agent Wake Relay](../agent-wake/README.md) and establish the controller binding. Reload the updated board once. **Reporter harness / Model / Reasoning / Native arguments** remain editable after launch; saved changes apply to the next new session, not a running or resumed one. The initial preset is Codex `gpt-6-luna`, medium reasoning. For another Herdr harness, clear Model and Reasoning and supply its native arguments. First-launch trust/authentication or permissions may need attention in the reporter tab; setup errors are shown rather than silently retried.
+
+Private setup is saved in `reporter.json` beside the task directory. The default working directory is `$XDG_STATE_HOME/stagehand/reporters/<workspace-key>` (normally `~/.local/state/stagehand/reporters/…`), outside repositories so orchestration instructions are not inherited. To set another directory or installed Herdr skill before launching:
+
+```sh
+/absolute/stagehand/.local/board-venv/bin/python /absolute/stagehand/plugins/status-board/reporting.py \
+  --tasks /absolute/stagehand/.orchestrator/tasks configure \
+  --directory /absolute/private-reporter --herdr-skill /absolute/installed/herdr
+```
+
+The board registers independent watches for the controller and assigned task roles as it refreshes. Existing watches continue while the board is closed; registering new task roles requires the board to be running. Reporter activity is excluded. Reports bind to observed task/agent fingerprints; later work or changed intent invalidates them. While open, the board also coalesces stale or missing snapshots into a refresh after five seconds of stability, once per changed snapshot—not periodic agent audits. Publishing automatically acknowledges covered notices in the reporter's own inbox. Stale, missing, blocked, or unavailable reporting falls back to ordinary status, labeling retained context as previous information.
+
+Reporter context includes affected task details and a compact index of other conclusions/next steps. Each update checks whether new evidence invalidates another report; related details are available through `report.py context <task-id> ...` (`--all` for a full reconciliation). “Matches latest inputs” describes snapshot validity, not a guarantee that every conclusion is correct. No extra timer or background agent is required.
+
+Keep task PR URLs in the record's `pull_requests` collection, as in the [task template](../../skills/orchestrating-development/assets/task-record.yaml). With background reporting enabled, a fresh report also supplies verified task PR links discovered in conversations or artifacts. The board combines both collections without changing recovery records; stale reports add no links. Without a reporter, only the recorded collection is used. The board does not mine arbitrary historical notes for links.
+
+The orchestrator can use `python scripts/task-record.py save <task-path> --input <candidate-path>` to validate and atomically save YAML/JSON recovery notes; `check <task-path-or-directory>` diagnoses malformed keys and role mappings. JSON needs only Python; YAML can use the board's PyYAML environment. Flexible evidence fields are preserved.
+
+Herdr restores the reporter's native conversation after restart; the board saves that identity and repairs its own relay registration and watches, even while the orchestrator is unavailable. Unacknowledged notices are replayed once after the reporter reconnects. Neither agent has recovery duties. If automatic restoration fails, open **Status reporter** and resume the saved conversation. Harnesses without native session identity need manual recovery. If the wake plugin is disabled, enable it again before retrying.
+
+Switch back to **Orchestrator** to cancel only reporter subscriptions and restore the original mode. Workers, coordinator wakes, records, and drafts are untouched. Its tab remains available; disabling does not interrupt the observer. There is no automatic restart or promotion. To apply saved launch settings, disable reporting, exit the reporter normally in its tab, and enable **Background** again; its verified shell pane is reused. For live model/reasoning changes, use the harness's native controls. If startup timed out, inspect the saved pane before retrying; the package will not create another blindly.
+
+This is an instruction-level read-only role, not an OS security boundary. Keep its agent permissions consistent with observation-only work. See the [reporter design](../../docs/04-status-reporter.md).
 
 ## Appearance
 

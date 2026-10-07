@@ -1,0 +1,681 @@
+"""Optional observer: isolated workspace, independent relay inbox, display-only reports."""
+
+import argparse
+import builtins
+import contextlib
+import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import time
+import uuid
+from types import SimpleNamespace
+
+import agent_binding
+from pull_requests import validated_links
+
+PACKAGE = Path(__file__).resolve().parent
+DEFAULTS = {"enabled": False, "kind": "codex", "model": "gpt-6-luna", "reasoning": "medium", "arguments": ""}
+FIELDS = ("summary", "recent_work", "review_coverage", "next_actor", "next_action", "human_action")
+REPORT_FORMAT_VERSION = 2
+REFRESH_DEBOUNCE_SECONDS = 5
+
+
+def read(path, default=None):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Shared atomic writer; reports must never leave a half-written dashboard row.
+    from resume import write as atomic_write
+    atomic_write(path, value)
+
+
+def config_path(tasks):
+    return tasks.parent / "reporter.json"
+
+
+def configuration(tasks):
+    saved = read(config_path(tasks), {})
+    if not isinstance(saved, dict):
+        raise ValueError("Invalid reporter configuration")
+    config = dict(DEFAULTS, **saved)
+    if type(config["enabled"]) is not bool or any(not isinstance(config[key], str) for key in DEFAULTS if key != "enabled"):
+        raise ValueError("Invalid reporter launch settings")
+    if config["enabled"] and not all(isinstance(config.get(key), str) and config[key] for key in ("directory", "socket")):
+        raise ValueError("Enabled reporter has no workspace/session binding")
+    return config
+
+
+@contextlib.contextmanager
+def locked(tasks):
+    tasks.parent.mkdir(parents=True, exist_ok=True)
+    with (tasks.parent / "reporter.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def call(*args, timeout=5):
+    result = subprocess.run([agent_binding.herdr_binary(), *args], capture_output=True,
+                            text=True, check=True, timeout=timeout)
+    return json.loads(result.stdout)["result"]
+
+
+def relay():
+    # Reuse lifecycle identity, coalescing, and retry handling instead of inventing
+    # a second worker protocol. Each reporter is a separate relay consumer.
+    loader = importlib.machinery.SourceFileLoader("reporter_wake", str(PACKAGE.parent / "agent-wake" / "agent-wake"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    # This module runs inside the board plugin or an agent, whose config-dir
+    # environment is not necessarily the wake plugin's. Never configure another
+    # plugin's directory by inheriting that environment.
+    def config_directory():
+        result = subprocess.run([agent_binding.herdr_binary(), "plugin", "config-dir", module.PLUGIN_ID],
+                                capture_output=True, text=True, check=True, timeout=5)
+        return Path(result.stdout.strip())
+    module._config_dir = config_directory
+    # CLI JSON output is not needed here. Suppress it only in this module,
+    # without redirecting stdout used by the board's other rendering threads.
+    def diagnostic_print(*args, **kwargs):
+        if kwargs.get("file") is not None:
+            builtins.print(*args, **kwargs)
+    module.print = diagnostic_print
+    return module
+
+
+def relay_action(module, operation, **arguments):
+    if operation == "_remove":
+        acknowledge = arguments.pop("acknowledge")
+        return module._remove(SimpleNamespace(**arguments), acknowledge)
+    return getattr(module, operation)(SimpleNamespace(**arguments))
+
+
+def scoped_sources(tasks, agents, controller):
+    """No sibling workspace or reporter activity belongs in this consumer."""
+    sources = [("controller", "orchestrator", controller)] if controller else []
+    for task, _ in tasks:
+        workspace = task.get("workspace", {}).get("id")
+        for role, name in task.get("agents", {}).items():
+            recorded = (task.get("role_sessions") or {}).get(role) or {}
+            matches = [agent for agent in agents if agent.get("name") == name and
+                       agent.get("workspace_id") == workspace and
+                       (not recorded.get("pane_id", recorded.get("pane")) or
+                        recorded.get("pane_id", recorded.get("pane")) == agent.get("pane_id")) and
+                       (not recorded.get("native_session_id", recorded.get("session_id")) or
+                        recorded.get("native_session_id", recorded.get("session_id")) ==
+                        (agent.get("agent_session") or {}).get("value"))]
+            if len(matches) == 1:
+                sources.append((str(task["task_id"]), role, matches[0]))
+    return sources
+
+
+def fingerprint(task, sources):
+    identities = [(role, agent.get("pane_id"), agent.get("terminal_id"),
+                   agent_binding.native_session(agent), agent.get("state_change_seq"))
+                  for key, role, agent in sources if key == str(task["task_id"])]
+    # A new report contract needs one reconciliation even if no worker moved.
+    return hashlib.sha256(json.dumps([REPORT_FORMAT_VERSION, task, sorted(identities)], sort_keys=True).encode()).hexdigest()
+
+
+def acknowledge_covered(directory, fingerprints, captured=None):
+    """Retire only this reporter's hints whose snapshot has been summarized."""
+    root = directory / "wake"
+    if not root.is_dir() or captured == {}:
+        return
+    reports = read(directory / "reports.json", {})
+    covered = {key for key, value in fingerprints.items()
+               if isinstance(reports.get(key), dict) and reports[key].get("fingerprint") == value
+               and isinstance(reports[key].get("updated_at"), (int, float))}
+    wake = relay()
+    with wake._locked(root):
+        for path, notice in wake._documents(root / "inbox"):
+            if not notice or (captured is not None and (notice["id"] not in captured or
+                              captured[notice["id"]] != notice.get("observed_at"))):
+                continue
+            key = notice["key"]
+            if key == "controller":
+                # Fresh task records alone do not prove a new orchestrator
+                # conversation was read. Recover old deliveries, not new input.
+                handled = covered == set(fingerprints) and (captured is not None or all(
+                    reports[key]["updated_at"] >= notice.get("observed_at", float("inf")) for key in covered))
+            elif notice.get("kind") == "report-refresh":
+                handled = set(notice["metadata"]["task_ids"]) <= covered
+            else:
+                handled = key in covered and (captured is not None or
+                          reports[key]["updated_at"] >= notice.get("observed_at", float("inf")))
+            if handled:
+                path.unlink()
+
+
+def queue_refresh(directory, fingerprints, wake, now=None):
+    """Repair late edits/missed hooks once per snapshot, without an idle LLM timer."""
+    now = time.time() if now is None else now
+    path = directory / "refresh.json"
+    state = read(path, {})
+    reports = read(directory / "reports.json", {})
+    stale = {key: value for key, value in fingerprints.items()
+             if not isinstance(reports.get(key), dict) or reports[key].get("fingerprint") != value}
+    changed = {key: value for key, value in stale.items() if state.get("requested", {}).get(key) != value}
+    if changed != state.get("candidate", {}):
+        state.update(candidate=changed, since=now)
+        write(path, state)
+    if not changed or now - state["since"] < REFRESH_DEBOUNCE_SECONDS:
+        return
+    root = directory / "wake"
+    with wake._locked(root):
+        pending = next((notice for _, notice in wake._documents(root / "inbox")
+                        if notice and notice.get("kind") == "report-refresh" and not notice.get("notified")), None)
+        identifier = pending["id"] if pending else uuid.uuid4().hex
+        # A delivered batch is immutable: finishing it must not erase later work.
+        wake._atomic_json(root / "inbox" / f"{identifier}.json", {
+            "version": 1, "id": identifier, "watch_id": "report-refresh", "kind": "report-refresh",
+            "key": "reports", "metadata": {"task_ids": sorted(stale)},
+            "workspace_label": "Status reporter", "pane_id": None, "status": "stale",
+            "observed_at": now, "notified": False,
+            "attempts": pending.get("attempts", 0) if pending else 0,
+            "last_error": pending.get("last_error") if pending else None,
+        })
+    state.setdefault("requested", {}).update(changed)
+    state["candidate"] = {}
+    write(path, state)
+
+
+def sync(tasks_directory, tasks, agents, controller):
+    if not configuration(tasks_directory)["enabled"]:
+        return
+    with locked(tasks_directory):
+        _sync(tasks_directory, tasks, agents, controller)
+
+
+def reporter_agent(directory, agents):
+    binding_path = directory / "binding.json"
+    binding = agent_binding.load(binding_path)
+    try:
+        target = agent_binding.resolve(binding, agents)
+    except agent_binding.ControllerUnavailable as error:
+        raise agent_binding.ControllerUnavailable(
+            "Waiting for the reporter to resume. Open its Status reporter tab; "
+            "resume the saved conversation, or exit it and re-enable reporting to launch anew.") from error
+    # Enrich only the verified original frontend, never adopt a replacement by
+    # pane/name. Its native conversation identity survives a system restart.
+    if not binding.get("session") and agent_binding.native_session(target):
+        agent_binding.save(binding_path, agent_binding.capture(target), replace=True)
+    return target
+
+
+def _sync(tasks_directory, tasks, agents, controller):
+    config = configuration(tasks_directory)
+    if not config["enabled"]:
+        return
+    directory = Path(config["directory"])
+    if config.get("socket") != os.environ.get("HERDR_SOCKET_PATH"):
+        raise ValueError("Reporter belongs to another Herdr session")
+    target = reporter_agent(directory, agents)
+    resumed = bool(config.get("terminal") and config["terminal"] != target["terminal_id"])
+    current = {key: target[field] for key, field in (("pane", "pane_id"), ("terminal", "terminal_id"), ("tab", "tab_id"))
+               if target.get(field)}
+    if any(config.get(key) != value for key, value in current.items()):
+        config.update(current)
+        write(config_path(tasks_directory), config)
+    sources = scoped_sources(tasks, agents, controller)
+    wake = relay()
+    root = directory / "wake"
+    consumer = {"binding": str(directory / "binding.json")}
+    repaired = not any(Path(entry["root"]).resolve() == root.resolve() and entry.get("target") == consumer
+                       and entry.get("socket") == config["socket"] for entry in wake._configured_consumers())
+    if repaired:
+        # Repair this observer's registration, not the coordinator's consumer.
+        relay_action(wake, "_configure", state_root=str(root), target=None,
+                     target_binding=consumer["binding"], reminder_minutes=0)
+    registrations = list(wake._documents(root / "watches"))
+    wanted = {(key, role, agent["pane_id"]): agent for key, role, agent in sources
+              if agent["pane_id"] != target["pane_id"]}
+    # Cancel only reporter-owned subscriptions. The coordinator's inbox and
+    # task-record watch IDs are untouched, including during fallback.
+    retained = set()
+    for _, watch in registrations:
+        identity = (watch["key"], watch.get("metadata", {}).get("role"), watch["pane_id"])
+        if identity in wanted and wake._same_source(watch, wanted[identity]):
+            retained.add(identity)
+        else:
+            relay_action(wake, "_remove", state_root=str(root), watch=watch["id"], acknowledge=False)
+    for (key, role, pane), agent in wanted.items():
+        if (key, role, pane) in retained:
+            continue
+        relay_action(wake, "_arm", state_root=str(root), key=key,
+                     workspace_id=agent["workspace_id"], workspace_label=key,
+                     pane=pane, agent=agent.get("name"), metadata=json.dumps({"role": role}),
+                     persistent=True, observed_working=False)
+    if resumed:
+        # An accepted notice may have been interrupted by the reboot. Replay
+        # unacknowledged IDs once per restored frontend, not on every refresh.
+        with wake._locked(root):
+            for path, notice in wake._documents(root / "inbox"):
+                notice.update(notified=False, attempts=0, last_error=None)
+                wake._atomic_json(path, notice)
+    if repaired or resumed:
+        wake._flush(root)
+    fingerprints = {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks}
+    acknowledge_covered(directory, fingerprints)
+    queue_refresh(directory, fingerprints, wake)
+    if target.get("agent_status") in {"idle", "done", "unknown"} and any(
+            notice and not notice.get("notified") for _, notice in wake._documents(root / "inbox")):
+        wake._notify_consumer(root, consumer)
+
+
+def launch_arguments(config):
+    arguments = shlex.split(config.get("arguments", ""))
+    if config["kind"] == "codex":
+        if not config["model"] or not config["reasoning"]:
+            raise ValueError("Choose a Codex model and reasoning effort")
+        arguments = ["--model", config["model"], "-c",
+                     "model_reasoning_effort=" + json.dumps(config["reasoning"]), *arguments]
+    elif config.get("model") or config.get("reasoning"):
+        raise ValueError("For other harnesses, clear Model/Reasoning and supply native launch arguments")
+    return arguments
+
+
+def prepare_directory(tasks, config):
+    key = hashlib.sha256(str(tasks.resolve()).encode()).hexdigest()[:12]
+    directory = Path(config.get("directory") or
+                     Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) /
+                     "stagehand/reporters" / key).expanduser().resolve()
+    # A tab does not isolate inherited instructions. Keep the reporter outside
+    # the source checkout and reject other repository/AGENTS ancestors.
+    if (directory / ".git").exists() or directory.is_relative_to(PACKAGE.parents[1]) or any(
+            (parent / ".git").exists() or (parent / "AGENTS.md").exists()
+            for parent in directory.parents if parent != Path.home()):
+        raise ValueError("Choose a reporter directory outside repositories and their AGENTS.md ancestors")
+    directory.mkdir(parents=True, exist_ok=True)
+    previous = read(directory / "connection.json", {})
+    if previous and (previous.get("tasks") != str(tasks) or previous.get("socket") != os.environ.get("HERDR_SOCKET_PATH")):
+        raise ValueError("Reporter directory is already assigned to another workspace/session")
+    for name in ("AGENTS.md", "report.py"):
+        text = (PACKAGE / "reporter-workspace" / name).read_text()
+        if name == "report.py":
+            text = text.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1)
+        destination = directory / name
+        if destination.exists() and destination.read_text() != text:
+            raise ValueError(f"Preserving modified reporter instructions: {destination}")
+        destination.write_text(text)
+    (directory / "report.py").chmod(0o755)
+    candidates = [PACKAGE.parents[1] / path for path in (".agents/skills/herdr", ".codex/skills/herdr", ".local/skills/herdr")]
+    installed = next((path for path in candidates if (path / "SKILL.md").is_file()), candidates[0])
+    skill = Path(config.get("herdr_skill") or installed).expanduser().resolve()
+    if not (skill / "SKILL.md").is_file():
+        raise ValueError("Configure an installed Herdr skill directory before enabling the reporter")
+    for parent in (".agents", ".codex"):
+        link = directory / parent / "skills/herdr"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() and link.resolve() == skill:
+            continue
+        if link.exists() or link.is_symlink():
+            raise ValueError(f"Preserving existing skill installation: {link}")
+        link.symlink_to(skill, target_is_directory=True)
+    write(directory / "connection.json", {"tasks": str(tasks), "package": str(PACKAGE),
+          "socket": os.environ.get("HERDR_SOCKET_PATH")})
+    return directory
+
+
+def enable(tasks):
+    with locked(tasks):
+        return _enable(tasks)
+
+
+def _enable(tasks):
+    config = configuration(tasks)
+    if config.get("enabled"):
+        return "Background reporter already enabled."
+    if os.environ.get("HERDR_ENV") != "1":
+        raise ValueError("Reporter launch requires Herdr")
+    arguments = launch_arguments(config)
+    agents = call("agent", "list")["agents"]
+    controller = agent_binding.resolve(agent_binding.load(tasks.parent / "controller.json"), agents)
+    plugins = call("plugin", "list", "--json")["plugins"]
+    if not any(p.get("plugin_id") == "quentintorg.agent-wake" and p.get("enabled") for p in plugins):
+        raise ValueError("Enable the Agent Wake Relay before launching the reporter")
+    directory = prepare_directory(tasks, config)
+    config.update(directory=str(directory), socket=os.environ["HERDR_SOCKET_PATH"])
+    name = "reporter_" + hashlib.sha256(str(tasks).encode()).hexdigest()[:12]
+    # Save the pane before launching: a startup timeout may leave a live process.
+    # Re-enabling never blindly creates another tab or replays agent start.
+    if config.get("pane"):
+        if (directory / "binding.json").exists() and not config.get("starting"):
+            try:
+                agent = reporter_agent(directory, agents)
+            except agent_binding.ControllerUnavailable:
+                pane = call("pane", "get", config["pane"])["pane"]
+                info = call("pane", "process-info", "--pane", config["pane"])["process_info"]
+                if (pane.get("workspace_id") != controller["workspace_id"] or pane.get("agent") or
+                        not info.get("shell_pid") or info.get("foreground_process_group_id") != info["shell_pid"] or
+                        not any(process.get("pid") == info["shell_pid"] and process.get("cwd") == str(directory)
+                                for process in info.get("foreground_processes", []))):
+                    raise ValueError("Exit the reporter in its own tab before applying launch settings; no occupied pane was changed")
+                # Re-enabling is an explicit launch request; automatic sync never
+                # replaces an agent or starts a new conversation after a reboot.
+                config.update(starting=True, terminal=pane["terminal_id"])
+                write(config_path(tasks), config)
+                agent = call("agent", "start", name, "--kind", config["kind"], "--pane", config["pane"],
+                             "--", *arguments, timeout=40)["agent"]
+        else:
+            agent = call("agent", "get", config["pane"])["agent"]
+        if agent.get("agent_status") in {"working", "blocked"}:
+            raise ValueError("Inspect the existing reporter tab and let its current turn/setup finish before enabling")
+        binding = directory / "binding.json"
+        if not binding.exists() or config.get("starting"):
+            # Explicit retry after startup/permission failure may adopt only the
+            # exact agent in the terminal we created, never a pane replacement.
+            if (agent.get("pane_id") != config["pane"] or agent.get("terminal_id") != config["terminal"]
+                    or agent.get("workspace_id") != controller["workspace_id"] or agent.get("name") != name):
+                raise ValueError("Cannot verify the reporter from the saved startup attempt; inspect its tab")
+            agent_binding.save(binding, agent_binding.capture(agent), replace=bool(config.get("starting")))
+            config.pop("starting", None)
+        reporter_agent(directory, [agent])
+        config.update(pane=agent["pane_id"], terminal=agent["terminal_id"])
+    else:
+        tab = call("tab", "create", "--workspace", controller["workspace_id"], "--cwd", str(directory),
+                   "--label", "Status reporter", "--no-focus")
+        config.update(pane=tab["root_pane"]["pane_id"], tab=tab["tab"]["tab_id"],
+                      terminal=tab["root_pane"]["terminal_id"])
+        write(config_path(tasks), config)
+        try:
+            agent = call("agent", "start", name, "--kind", config["kind"], "--pane", config["pane"],
+                         "--", *arguments, timeout=40)["agent"]
+        except subprocess.CalledProcessError as error:
+            # First-run harness setup belongs to the human, not an auto-approval.
+            raise ValueError("Reporter startup needs attention. Open the Status reporter tab to finish setup, "
+                             "then enable reporting again; its saved pane will be reused.") from error
+        agent_binding.save(directory / "binding.json", agent_binding.capture(agent))
+    wake = relay()
+    relay_action(wake, "_configure", state_root=str(directory / "wake"),
+                 target=None, target_binding=str(directory / "binding.json"), reminder_minutes=0)
+    # Bootstrap first, then subscribe. An ambiguous send remains inspectable;
+    # it is not automatically retried or converted into a replacement agent.
+    call("agent", "prompt", agent["pane_id"],
+         "Read ./AGENTS.md to initialize this read-only status reporter. Run ./report.py context, "
+         "summarize the current tasks, publish the reports, and stop. Future HERDR_AGENT_WAKE notices "
+         "refer to your independent inbox; publishing handles covered acknowledgments.", timeout=10)
+    config["enabled"] = True
+    write(config_path(tasks), config)
+    from board import read_tasks
+    try:
+        _sync(tasks, read_tasks(tasks)[0], call("agent", "list")["agents"], controller)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, SystemExit):
+        _disable(tasks)
+        raise
+    return "Background reporter enabled. Saved launch settings apply to new sessions; live changes use its native tab."
+
+
+def disable(tasks):
+    with locked(tasks):
+        return _disable(tasks)
+
+
+def _disable(tasks):
+    config = configuration(tasks)
+    if config.get("socket") and config["socket"] != os.environ.get("HERDR_SOCKET_PATH"):
+        raise ValueError("Reporter belongs to another Herdr session")
+    config["enabled"] = False
+    write(config_path(tasks), config)
+    if config.get("directory"):
+        directory = Path(config["directory"])
+        root = directory / "wake"
+        wake = relay()
+        for _, watch in wake._documents(root / "watches"):
+            relay_action(wake, "_remove", state_root=str(root), watch=watch["id"], acknowledge=False)
+        if root.is_dir():
+            with wake._locked(root):
+                for path, notice in wake._documents(root / "inbox"):
+                    if notice and notice.get("kind") == "report-refresh":
+                        path.unlink()
+        (directory / "refresh.json").unlink(missing_ok=True)
+    return "Original reporting restored. Reporter tab retained; no agents interrupted."
+
+
+def context(directory, task_ids=None, all_tasks=False):
+    connection = read(directory / "connection.json")
+    if connection["socket"] != os.environ.get("HERDR_SOCKET_PATH"):
+        raise ValueError("Reporter context belongs to a different Herdr session")
+    tasks_directory = Path(connection["tasks"])
+    from board import read_tasks, pr_links
+    tasks, warnings = read_tasks(tasks_directory)
+    agents = call("agent", "list")["agents"]
+    binding = agent_binding.load(tasks_directory.parent / "controller.json")
+    if binding["socket"] != connection["socket"]:
+        raise ValueError("The orchestrator binding belongs to a different Herdr session")
+    try:
+        controller = agent_binding.resolve(binding, agents)
+    except ValueError as error:
+        controller = None
+        warnings.append(f"The bound orchestrator is unavailable or still resuming: {error}")
+    sources = scoped_sources(tasks, agents, controller)
+    reports = read(directory / "reports.json", {})
+    notices = [notice for _, notice in relay()._documents(directory / "wake/inbox")]
+    fingerprints = {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks}
+    if task_ids:
+        selected = set(task_ids)
+        if selected - fingerprints.keys():
+            raise ValueError("Unknown task(s): " + ", ".join(sorted(selected - fingerprints.keys())))
+    elif all_tasks:
+        selected = set(fingerprints)
+    else:
+        selected = {key for key, value in fingerprints.items()
+                    if reports.get(key, {}).get("fingerprint") != value}
+        for notice in notices:
+            if notice["key"] in fingerprints:
+                selected.add(notice["key"])
+            selected.update(key for key in notice.get("metadata", {}).get("task_ids", []) if key in fingerprints)
+    briefs = []
+    index = []
+    for task, _ in tasks:
+        key = str(task["task_id"])
+        previous = reports.get(key, {})
+        roles = [{"role": role, **{field: agent.get(field) for field in
+                  ("pane_id", "name", "agent_status", "agent_session", "state_change_seq")}}
+                 for source, role, agent in sources if source == key]
+        # Cheap shared conclusions expose cross-task contradictions without
+        # requiring another timer, dependency graph, or full transcript audit.
+        index.append({"task_id": key, "workspace": task.get("workspace", {}).get("label"),
+                      "state": task["state"],
+                      "report_matches_inputs": previous.get("fingerprint") == fingerprints[key],
+                      "conclusion": previous.get("summary", ""),
+                      "next_step": previous.get("human_action") or previous.get("next_action", ""),
+                      "updated_at": previous.get("updated_at"),
+                      "roles": {role["role"]: role["agent_status"] for role in roles}})
+        if key not in selected:
+            continue
+        briefs.append({"task_id": task["task_id"], "objective": task.get("objective"),
+                       "mode": task.get("mode"), "workspace": task.get("workspace"), "state": task["state"],
+                       "repository": task.get("repository"), "development_target": task.get("development_target"),
+                       "intent_ref": task.get("intent_ref"), "handoff": task.get("handoff"),
+                       "result": task.get("result"), "review": task.get("review"),
+                       "pull_requests": pr_links(task),
+                       "fingerprint": fingerprints[key], "roles": roles, "previous_report": previous})
+    result = {"tasks": briefs, "index": index,
+              "controller_pane": controller["pane_id"] if controller else None, "notices": notices,
+              "warnings": warnings, "report_format": {"task_id": "from task", "fingerprint": "from task",
+                  "status": "working | needs-human | complete | unknown", **{field: "short text" for field in FIELDS},
+                  "pull_requests": ["verified URL of each PR belonging to this task, not merely a dependency"],
+                  "evidence": ["pane/artifact/head supporting your conclusion"]}}
+    # Capture the evidence used by this turn. A late publish cannot claim it read
+    # a newer turn just because its file was written recently.
+    write(directory / "context.json", fingerprints)
+    write(directory / "context-wakes.json", {notice["id"]: notice.get("observed_at") for notice in notices})
+    return result
+
+
+def publish(directory, records):
+    if not isinstance(records, list):
+        raise ValueError("Reports must be a JSON array")
+    expected = read(directory / "context.json", {})
+    validated = {}
+    for record in records:
+        if (not isinstance(record, dict) or not isinstance(record.get("task_id"), str)
+                or record.get("fingerprint") != expected.get(record["task_id"]) or not record.get("fingerprint")):
+            raise ValueError("Report does not match the captured task context")
+        if record.get("status") not in {"working", "needs-human", "complete", "unknown"}:
+            raise ValueError("Invalid report status")
+        if any(not isinstance(record.get(key), str) or len(record[key]) > 700 for key in FIELDS):
+            raise ValueError("Report fields must be short text (at most 700 characters each)")
+        if len(record["summary"]) > 100 or len(record["next_actor"]) > 40:
+            raise ValueError("Keep the table summary and next actor compact")
+        if not isinstance(record.get("evidence"), list) or len(record["evidence"]) > 6 or any(
+                not isinstance(value, str) or len(value) > 500 for value in record["evidence"]):
+            raise ValueError("Supply at most six concise evidence references")
+        if any(any(not character.isprintable() and not character.isspace() for character in value)
+               for value in [*(record[key] for key in FIELDS), *record["evidence"]]):
+            raise ValueError("Report text must not contain terminal controls")
+        links = validated_links(record.get("pull_requests"))
+        validated[record["task_id"]] = {key: record[key] for key in ("task_id", "fingerprint", "status", *FIELDS, "evidence")}
+        validated[record["task_id"]]["pull_requests"] = links
+    reports = read(directory / "reports.json", {})
+    if not isinstance(reports, dict):
+        raise ValueError("Invalid report file")
+    now = time.time()
+    reports.update({key: dict(value, updated_at=now) for key, value in validated.items()})
+    write(directory / "reports.json", reports)
+    # Persist the result before consuming its captured hints. A crash leaves
+    # recoverable work, and the agent never needs to copy opaque wake IDs.
+    acknowledge_covered(directory, expected, read(directory / "context-wakes.json", {}))
+
+
+def decorate(tasks_directory, tasks, agents, controller, rows):
+    """Attach explanations without changing task records or baseline status."""
+    config = configuration(tasks_directory)
+    if not config["enabled"]:
+        return
+    directory = Path(config["directory"])
+    reports = read(directory / "reports.json", {})
+    if not isinstance(reports, dict):
+        raise ValueError("Invalid report file")
+    available = True
+    reporter_status = "unavailable"
+    try:
+        observer = agent_binding.resolve(agent_binding.load(directory / "binding.json"), agents)
+        reporter_status = observer.get("agent_status", "unknown")
+        available = observer.get("agent_status") != "blocked"
+    except ValueError:
+        available = False
+    sources = scoped_sources(tasks, agents, controller)
+    task_map = {str(task["task_id"]): task for task, _ in tasks}
+    for row in rows:
+        # Reporting activity is presentation-only, separate from task progress.
+        row["reporter_activity"] = {"status": reporter_status, "observed_at": time.monotonic()}
+        row["reporter_error"] = False
+        report = reports.get(row["id"])
+        if not report:
+            row["reporter_note"] = "Reporter has not summarized this task; showing ordinary status."
+            continue
+        if (not isinstance(report, dict) or any(not isinstance(report.get(key), str) for key in FIELDS)
+                or report.get("status") not in {"working", "needs-human", "complete", "unknown"}
+                or not isinstance(report.get("updated_at"), (int, float))
+                or not isinstance(report.get("evidence"), list)
+                or any(not isinstance(value, str) for value in report["evidence"])):
+            row["reporter_note"] = "Invalid reporter summary; showing ordinary status."
+            row["reporter_error"] = True
+            continue
+        try:
+            links = validated_links(report.get("pull_requests", []))
+        except ValueError:
+            row["reporter_note"] = "Invalid reporter PR links; showing ordinary status."
+            row["reporter_error"] = True
+            continue
+        from board import clean
+        report = dict(report, **{key: clean(report[key], multiline=key in {"recent_work", "review_coverage"}) for key in FIELDS},
+                      evidence=[clean(value) for value in report["evidence"]], pull_requests=links)
+        row["report"] = report
+        row["report_fresh"] = available and report.get("fingerprint") == fingerprint(task_map[row["id"]], sources)
+        row["reporter_note"] = "" if row["report_fresh"] else "Previous reporter summary; current status uses the ordinary dashboard."
+        if row["report_fresh"]:
+            # PR discovery is display-only: the observer can fill gaps without
+            # rewriting coordinator-owned recovery records or reviving stale links.
+            row["prs"] = validated_links([*row["prs"], *links])
+            row["pr"] = row["prs"][0] if row["prs"] else ""
+
+
+def apply_display(row):
+    report = row.get("report")
+    if not report or not row.get("report_fresh"):
+        return
+    # Explicit native blockers/activity stay authoritative. Fresh explanations
+    # can clarify a settled result without treating idle as a successful review.
+    runtime = set(row.get("runtime_states", {}).values())
+    status = report["status"]
+    if "blocked" in runtime:
+        status = "needs-human"
+    elif "working" in runtime:
+        status = "working"
+    actor = "you" if status == "needs-human" else report["next_actor"]
+    action = report["human_action"] if status == "needs-human" else report["next_action"]
+    summary = report["summary"]
+    if status != report["status"]:
+        # Keep the live next actor/action together with its color: a yellow row
+        # must not inherit an obsolete "you" or "finished" explanation.
+        summary = row["summary"]
+        row["reporter_note"] = "Live activity takes precedence over this reporter explanation."
+        actor = "you" if status == "needs-human" else next(role for role, value in row["runtime_states"].items() if value == "working")
+        action = row["action"]
+    row.update(summary=summary, stage=summary, next=actor,
+               action=action,
+               status=None if status == "unknown" else status,
+               color={"needs-human": 1, "working": 2, "complete": 3}.get(status, 0))
+    row["runtime_overlay"] = True
+    row["roles"] = row["roles"].split(" → ")[0] + (" → " + actor if actor else "")
+
+
+def worker_main(directory, arguments):
+    parser = argparse.ArgumentParser(description="Read context and publish private dashboard reports")
+    commands = parser.add_subparsers(dest="command", required=True)
+    info = commands.add_parser("context", help="Affected task details and a compact cross-task index")
+    info.add_argument("task_ids", nargs="*", help="Read specific related tasks instead")
+    info.add_argument("--all", action="store_true", help="Read every full task brief")
+    output = commands.add_parser("publish")
+    output.add_argument("file", type=Path)
+    ack = commands.add_parser("ack")
+    ack.add_argument("ids", nargs="+")
+    args = parser.parse_args(arguments)
+    if args.command == "context":
+        if args.all and args.task_ids:
+            parser.error("choose task IDs or --all")
+        print(json.dumps(context(directory, args.task_ids, args.all), indent=2))
+    elif args.command == "publish":
+        publish(directory, read(args.file))
+        print("Reports published")
+    else:
+        for identifier in args.ids:
+            relay_action(relay(), "_remove", state_root=str(directory / "wake"), wake=identifier, acknowledge=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tasks", type=Path, required=True)
+    parser.add_argument("command", choices=("configure", "enable", "disable"))
+    for key in ("kind", "model", "reasoning", "arguments", "directory", "herdr_skill"):
+        parser.add_argument("--" + key.replace("_", "-"))
+    args = parser.parse_args()
+    try:
+        if not args.tasks.is_absolute():
+            raise ValueError("--tasks must be absolute")
+        if args.command == "configure":
+            config = configuration(args.tasks)
+            if config["enabled"]:
+                raise ValueError("Disable reporting before changing its launch configuration")
+            config.update({key: value for key, value in vars(args).items()
+                           if key not in {"tasks", "command"} and value is not None})
+            write(config_path(args.tasks), config)
+            print(json.dumps(config, indent=2))
+        else:
+            print(enable(args.tasks) if args.command == "enable" else disable(args.tasks))
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"Reporter: {error}\n")
