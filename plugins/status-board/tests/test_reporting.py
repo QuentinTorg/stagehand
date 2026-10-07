@@ -61,7 +61,7 @@ class ReportingTests(unittest.TestCase):
                 "status": "needs-human", "summary": "Proposal ready", "recent_work": "Fault isolated; proposal written.",
                 "review_coverage": "Proposal only; no implementation to review.", "next_actor": "you",
                 "next_action": "Choose the proposed approach.", "human_action": "Read the proposal and choose an approach.",
-                "evidence": ["task:p1 latest answer"]}
+                "evidence": ["task:p1 latest answer"], "pull_requests": []}
 
     def publish(self):
         record = self.record()
@@ -181,6 +181,114 @@ class ReportingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reporting.publish(self.directory, [dict(self.record(), recent_work="\x1b[2J")])
         self.assertEqual((self.directory / "reports.json").read_bytes(), before)
+
+    def test_report_discovered_prs_fill_table_and_details_without_editing_tasks(self):
+        self.configure()
+        urls = ["https://github.carnegierobotics.com/GEARS/gears-vehicle-comms/pull/442",
+                "https://github.carnegierobotics.com/GEARS/gears-vehicle-comms/pull/443"]
+        # Reproduce the failure: numbers were in result notes, not the collection.
+        self.task["result"] = {"prs": [{"number": 442}, {"number": 443}]}
+        reporting.write(self.tasks / "task.json", self.task)
+        before = (self.tasks / "task.json").read_bytes()
+        self.assertEqual(board.pr_links(self.task), [])
+        record = dict(self.record(), pull_requests=urls)
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertEqual(row["prs"], urls)
+        self.assertEqual(row["pr"], urls[0])
+        _, spans = board.pr_cell(row, 40)
+        self.assertEqual([url for _, _, url in spans], urls)
+        details = board.detail_lines(row, 100)
+        self.assertTrue(all(any(url == target for _, _, links in details for _, _, target in links) for url in urls))
+        self.assertEqual((self.tasks / "task.json").read_bytes(), before)
+
+    def test_report_prs_supplement_records_and_deduplicate_full_urls(self):
+        self.configure()
+        recorded = "https://github.com/team/repo/pull/1"
+        discovered = "https://github.company.test/team/repo/pull/1"
+        self.task["pull_requests"] = [recorded]
+        record = dict(self.record(), pull_requests=[recorded + "/#discussion_r1", discovered, discovered])
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertEqual(row["prs"], [recorded, discovered])
+        self.assertEqual(reporting.read(self.directory / "reports.json")["example"]["pull_requests"], [recorded, discovered])
+
+    def test_bad_recorded_link_does_not_prevent_verified_report_links(self):
+        self.configure()
+        self.task["pull_requests"] = ["https://github.com/not/a/repo/pull/1", "https://user@github.com/team/repo/pull/1"]
+        url = "https://github.com/team/repo/pull/2"
+        record = dict(self.record(), pull_requests=[url])
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertTrue(row["report_fresh"])
+        self.assertEqual(row["prs"], [url])
+
+    def test_stale_unavailable_or_disabled_report_cannot_add_prs(self):
+        self.configure()
+        record = dict(self.record(), pull_requests=["https://github.com/team/repo/pull/1"])
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        for availability in ("stale", "missing", "blocked", "disabled"):
+            with self.subTest(availability=availability):
+                agents = self.agents
+                if availability == "stale":
+                    self.author["state_change_seq"] += 1
+                elif availability == "missing":
+                    agents = [self.controller, self.author]
+                elif availability == "blocked":
+                    agents = [self.controller, self.author, dict(self.observer, agent_status="blocked")]
+                else:
+                    config = self.configure()
+                    reporting.write(reporting.config_path(self.tasks), dict(config, enabled=False))
+                row = self.row()
+                reporting.decorate(self.tasks, [(self.task, 0)], agents, self.controller, [row])
+                self.assertEqual(row["prs"], [])
+                self.assertEqual(row["pr"], "")
+                if availability == "stale":
+                    self.author["state_change_seq"] -= 1
+
+    def test_invalid_report_prs_preserve_last_report_and_do_not_ack(self):
+        self.publish()
+        before = (self.directory / "reports.json").read_bytes()
+        path, notice = self.notice("a" * 32)
+        reporting.write(self.directory / "context-wakes.json", {notice["id"]: notice["observed_at"]})
+        with self.assertRaises(ValueError):
+            reporting.publish(self.directory, [dict(self.record(), pull_requests=["#442"])])
+        self.assertEqual((self.directory / "reports.json").read_bytes(), before)
+        self.assertTrue(path.exists())
+        reporting.write(self.directory / "reports.json", {"example": dict(self.record(), updated_at=1, pull_requests=["#442"])})
+        self.configure()
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertTrue(row["reporter_error"])
+        self.assertEqual(row["prs"], [])
+
+    def test_omitting_pr_collection_cannot_silently_erase_discovered_links(self):
+        record = dict(self.record(), pull_requests=["https://github.com/team/repo/pull/1"])
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        before = (self.directory / "reports.json").read_bytes()
+        del record["pull_requests"]
+        with self.assertRaisesRegex(ValueError, "pull_requests must be a list"):
+            reporting.publish(self.directory, [record])
+        self.assertEqual((self.directory / "reports.json").read_bytes(), before)
+
+    def test_report_contract_upgrade_invalidates_old_snapshot_once(self):
+        self.configure()
+        with patch.object(reporting, "REPORT_FORMAT_VERSION", 1):
+            self.publish()
+        row = self.row()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertFalse(row["report_fresh"])
+        self.publish()
+        reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
+        self.assertTrue(row["report_fresh"])
 
     def notice(self, identifier, key="example", observed=1, **extra):
         value = dict(id=identifier, key=key, observed_at=observed, notified=True,

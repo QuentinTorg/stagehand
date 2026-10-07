@@ -8,15 +8,37 @@ import time
 from urllib.parse import urlsplit
 
 
+def canonical_url(url):
+    """Keep display links unambiguous without assuming a public GitHub host."""
+    if not isinstance(url, str) or len(url) > 500 or any(character.isspace() or not character.isprintable() for character in url):
+        raise ValueError("Expected an HTTPS pull request URL")
+    try:
+        parsed = urlsplit(url)
+        path = re.fullmatch(r"/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?", parsed.path)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or not path:
+            raise ValueError("Expected an HTTPS pull request URL")
+        parsed.port  # Reject malformed authorities before they become clickable.
+    except ValueError as error:
+        raise ValueError("Expected an HTTPS pull request URL") from error
+    return f"https://{parsed.netloc.lower()}/{path[1]}/{path[2]}/pull/{path[3]}"
+
+
+def validated_links(value):
+    if not isinstance(value, list):
+        raise ValueError("pull_requests must be a list of HTTPS PR URLs")
+    return list(dict.fromkeys(canonical_url(url) for url in value))
+
+
 def fetch_state(url):
-    parsed = urlsplit(url)
-    path = re.fullmatch(r"/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?", parsed.path)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or not path:
+    try:
+        parsed = urlsplit(canonical_url(url))
+    except ValueError:
         return None
+    owner, repository, _, number = parsed.path.strip("/").split("/")
     # Preserve Enterprise hosts; never turn a displayed link into a shell command.
     response = subprocess.run(
         ["gh", "api", "--hostname", parsed.netloc,
-         f"repos/{path[1]}/{path[2]}/pulls/{path[3]}", "--jq", "{state: .state, merged_at: .merged_at}"],
+         f"repos/{owner}/{repository}/pulls/{number}", "--jq", "{state: .state, merged_at: .merged_at}"],
         capture_output=True, text=True, check=True, timeout=5,
     )
     data = json.loads(response.stdout)

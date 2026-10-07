@@ -132,7 +132,7 @@ The board registers independent watches for the controller and assigned task rol
 
 Reporter context includes affected task details and a compact index of other conclusions/next steps. Each update checks whether new evidence invalidates another report; related details are available through `report.py context <task-id> ...` (`--all` for a full reconciliation). “Matches latest inputs” describes snapshot validity, not a guarantee that every conclusion is correct. No extra timer or background agent is required.
 
-Keep current PR URLs in the task record's `pull_requests` collection, as in the [task template](../../skills/orchestrating-development/assets/task-record.yaml). The board does not mine historical result notes for links.
+Keep task PR URLs in the record's `pull_requests` collection, as in the [task template](../../skills/orchestrating-development/assets/task-record.yaml). With background reporting enabled, a fresh report also supplies verified task PR links discovered in conversations or artifacts. The board combines both collections without changing recovery records; stale reports add no links. Without a reporter, only the recorded collection is used. The board does not mine arbitrary historical notes for links.
 
 The orchestrator can use `python scripts/task-record.py save <task-path> --input <candidate-path>` to validate and atomically save YAML/JSON recovery notes; `check <task-path-or-directory>` diagnoses malformed keys and role mappings. JSON needs only Python; YAML can use the board's PyYAML environment. Flexible evidence fields are preserved.
 

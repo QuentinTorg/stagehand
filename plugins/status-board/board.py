@@ -29,7 +29,7 @@ from preview_links import LinkedScreen, safe_link
 import agent_binding
 import resume
 import reporting
-from pull_requests import PullRequestStates, marker as pr_marker
+from pull_requests import PullRequestStates, canonical_url, marker as pr_marker
 
 
 STATES = {"needs-human": 1, "working": 2, "complete": 3}
@@ -679,10 +679,9 @@ def pr_links(task):
                 collect(child)
         elif isinstance(value, str):
             try:
-                parsed = urlsplit(value)
-                parts = parsed.path.rstrip("/").split("/")
-                if parsed.scheme == "https" and parsed.hostname and len(parts) >= 5 and parts[-2] == "pull" and parts[-1].isdigit() and value not in links:
-                    links.append(value)
+                url = canonical_url(value)
+                if url not in links:
+                    links.append(url)
             except ValueError:
                 pass
 

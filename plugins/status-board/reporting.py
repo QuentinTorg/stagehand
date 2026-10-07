@@ -18,10 +18,12 @@ import uuid
 from types import SimpleNamespace
 
 import agent_binding
+from pull_requests import validated_links
 
 PACKAGE = Path(__file__).resolve().parent
 DEFAULTS = {"enabled": False, "kind": "codex", "model": "gpt-6-luna", "reasoning": "medium", "arguments": ""}
 FIELDS = ("summary", "recent_work", "review_coverage", "next_actor", "next_action", "human_action")
+REPORT_FORMAT_VERSION = 2
 REFRESH_DEBOUNCE_SECONDS = 5
 
 
@@ -122,7 +124,8 @@ def fingerprint(task, sources):
     identities = [(role, agent.get("pane_id"), agent.get("terminal_id"),
                    agent_binding.native_session(agent), agent.get("state_change_seq"))
                   for key, role, agent in sources if key == str(task["task_id"])]
-    return hashlib.sha256(json.dumps([task, sorted(identities)], sort_keys=True).encode()).hexdigest()
+    # A new report contract needs one reconciliation even if no worker moved.
+    return hashlib.sha256(json.dumps([REPORT_FORMAT_VERSION, task, sorted(identities)], sort_keys=True).encode()).hexdigest()
 
 
 def acknowledge_covered(directory, fingerprints, captured=None):
@@ -503,6 +506,7 @@ def context(directory, task_ids=None, all_tasks=False):
               "controller_pane": controller["pane_id"] if controller else None, "notices": notices,
               "warnings": warnings, "report_format": {"task_id": "from task", "fingerprint": "from task",
                   "status": "working | needs-human | complete | unknown", **{field: "short text" for field in FIELDS},
+                  "pull_requests": ["verified URL of each PR belonging to this task, not merely a dependency"],
                   "evidence": ["pane/artifact/head supporting your conclusion"]}}
     # Capture the evidence used by this turn. A late publish cannot claim it read
     # a newer turn just because its file was written recently.
@@ -532,7 +536,9 @@ def publish(directory, records):
         if any(any(not character.isprintable() and not character.isspace() for character in value)
                for value in [*(record[key] for key in FIELDS), *record["evidence"]]):
             raise ValueError("Report text must not contain terminal controls")
+        links = validated_links(record.get("pull_requests"))
         validated[record["task_id"]] = {key: record[key] for key in ("task_id", "fingerprint", "status", *FIELDS, "evidence")}
+        validated[record["task_id"]]["pull_requests"] = links
     reports = read(directory / "reports.json", {})
     if not isinstance(reports, dict):
         raise ValueError("Invalid report file")
@@ -579,12 +585,23 @@ def decorate(tasks_directory, tasks, agents, controller, rows):
             row["reporter_note"] = "Invalid reporter summary; showing ordinary status."
             row["reporter_error"] = True
             continue
+        try:
+            links = validated_links(report.get("pull_requests", []))
+        except ValueError:
+            row["reporter_note"] = "Invalid reporter PR links; showing ordinary status."
+            row["reporter_error"] = True
+            continue
         from board import clean
         report = dict(report, **{key: clean(report[key], multiline=key in {"recent_work", "review_coverage"}) for key in FIELDS},
-                      evidence=[clean(value) for value in report["evidence"]])
+                      evidence=[clean(value) for value in report["evidence"]], pull_requests=links)
         row["report"] = report
         row["report_fresh"] = available and report.get("fingerprint") == fingerprint(task_map[row["id"]], sources)
         row["reporter_note"] = "" if row["report_fresh"] else "Previous reporter summary; current status uses the ordinary dashboard."
+        if row["report_fresh"]:
+            # PR discovery is display-only: the observer can fill gaps without
+            # rewriting coordinator-owned recovery records or reviving stale links.
+            row["prs"] = validated_links([*row["prs"], *links])
+            row["pr"] = row["prs"][0] if row["prs"] else ""
 
 
 def apply_display(row):

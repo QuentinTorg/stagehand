@@ -14,6 +14,26 @@ from preview_links import LinkedScreen
 
 
 class PullRequestTests(unittest.TestCase):
+    def test_report_links_are_normalized_without_conflating_hosts_or_repositories(self):
+        links = ["https://GitHub.com/team/repo/pull/123/#discussion_r1",
+                 "https://github.com/team/repo/pull/123",
+                 "https://github.carnegierobotics.com/team/repo/pull/123",
+                 "https://github.com/team/other/pull/123"]
+        self.assertEqual(pull_requests.validated_links(links), [
+            "https://github.com/team/repo/pull/123",
+            "https://github.carnegierobotics.com/team/repo/pull/123",
+            "https://github.com/team/other/pull/123"])
+
+    def test_report_links_reject_ambiguous_or_unsafe_values(self):
+        for value in ("#123", {"url": "https://github.com/team/repo/pull/123"},
+                      [123], ["https://github.com/team/repo/issues/123"],
+                      ["https://user@github.com/team/repo/pull/123"],
+                      ["https://github.com:invalid/team/repo/pull/123"],
+                      ["https://github.com/team/repo/pull/123\x1b"],
+                      ["http://github.com/team/repo/pull/123"]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                pull_requests.validated_links(value)
+
     def test_fetch_distinguishes_closed_and_merged_preserving_host(self):
         for host in ("github.com", "github.carnegierobotics.com"):
             for raw, expected in (({"state": "open", "merged_at": None}, "open"),
