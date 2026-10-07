@@ -134,7 +134,7 @@ Reporter context includes affected task details and a compact index of other con
 
 Keep current PR URLs in the task record's `pull_requests` collection, as in the [task template](../../skills/orchestrating-development/assets/task-record.yaml). The board does not mine historical result notes for links.
 
-The orchestrator can use `python scripts/task-record.py save <task-path> --input <candidate-path>` to validate and atomically save YAML/JSON recovery notes; `check <task-path-or-directory>` diagnoses malformed keys and role mappings. Use the board's Python environment for PyYAML. Flexible evidence fields are preserved.
+The orchestrator can use `python scripts/task-record.py save <task-path> --input <candidate-path>` to validate and atomically save YAML/JSON recovery notes; `check <task-path-or-directory>` diagnoses malformed keys and role mappings. JSON needs only Python; YAML can use the board's PyYAML environment. Flexible evidence fields are preserved.
 
 Herdr restores the reporter's native conversation after restart; the board saves that identity and repairs its own relay registration and watches, even while the orchestrator is unavailable. Unacknowledged notices are replayed once after the reporter reconnects. Neither agent has recovery duties. If automatic restoration fails, open **Status reporter** and resume the saved conversation. Harnesses without native session identity need manual recovery. If the wake plugin is disabled, enable it again before retrying.
 

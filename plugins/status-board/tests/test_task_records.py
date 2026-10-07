@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import board
@@ -92,6 +93,17 @@ class TaskRecordTests(unittest.TestCase):
         destination = self.root / "example.json"
         task_records.save(destination, self.candidate(task))
         self.assertEqual(task_records.load(destination), task)
+
+    def test_json_writer_does_not_require_optional_dashboard_dependencies(self):
+        self.candidate()
+        destination = self.root / "example.json"
+        with patch.dict(sys.modules, yaml=None):
+            task_records.save(destination, self.source)
+            self.assertEqual(task_records.load(destination), self.task)
+            source = self.root / "yaml-candidate.yaml"
+            source.write_text("task_id: example\nstate: {name: complete}\n")
+            with self.assertRaisesRegex(ValueError, "use JSON"):
+                task_records.load(source)
 
     def test_cli_checks_all_files_without_mutating_and_saves_valid_candidate(self):
         script = Path(__file__).parents[3] / "scripts/task-record.py"

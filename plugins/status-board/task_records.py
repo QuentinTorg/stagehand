@@ -1,10 +1,9 @@
 """Validate recovery notes without constraining their task-specific evidence."""
 
 import argparse
+import json
 from pathlib import Path
 import sys
-
-import yaml
 
 from resume import write
 
@@ -51,8 +50,25 @@ def validate(task, canonical=False):
     return task
 
 
+def document(path):
+    text = path.read_text()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Basic record writing must not require installing the optional UI.
+        # YAML candidates can reuse its PyYAML environment; JSON needs stdlib only.
+        try:
+            import yaml
+        except ImportError as error:
+            raise ValueError("YAML input requires PyYAML; use JSON or the board Python environment") from error
+        try:
+            return yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            raise ValueError(f"Invalid YAML: {error}") from error
+
+
 def load(path, canonical=False):
-    return validate(yaml.safe_load(path.read_text()), canonical)
+    return validate(document(path), canonical)
 
 
 def save(path, source):
@@ -60,7 +76,7 @@ def save(path, source):
     if path.suffix not in {".json", ".yaml", ".yml"}:
         raise ValueError("task record must have a .json, .yaml, or .yml extension")
     if path.exists():
-        previous = yaml.safe_load(path.read_text())
+        previous = document(path)
         if not isinstance(previous, dict) or previous.get("task_id", previous.get("id")) != task["task_id"]:
             raise ValueError("preserving destination: task identity differs or cannot be established")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,12 +104,12 @@ def main(arguments=None):
             for path in paths:
                 try:
                     load(path, canonical=True)
-                except (OSError, ValueError, yaml.YAMLError) as error:
+                except (OSError, ValueError) as error:
                     failures.append(f"{path}: {error}")
             if failures:
                 raise ValueError("\n".join(failures))
             print(f"Validated {len(paths)} task record(s)")
-    except (OSError, ValueError, yaml.YAMLError) as error:
+    except (OSError, ValueError) as error:
         parser.exit(1, f"Task record: {error}\n")
 
 

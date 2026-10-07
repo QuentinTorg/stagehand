@@ -6,7 +6,7 @@ Read when dispatching work or recovering coordination. Workers do not read or wr
 
 Use the common [task-record.yaml](../assets/task-record.yaml) for all modes; omit unused fields. Keep active records in the configured directory, normally `.orchestrator/tasks`. This is a recovery note and dashboard input, not a checklist or permission system.
 
-Save complete candidates through `python scripts/task-record.py save <task-path> --input <candidate-path>`; `check <task-path-or-directory>` validates existing notes. Use the installed board Python environment if PyYAML is unavailable. The helper validates identity fields and writes atomically; task-specific evidence remains flexible.
+Save complete candidates through `python scripts/task-record.py save <task-path> --input <candidate-path>`; `check <task-path-or-directory>` validates existing notes. JSON needs only Python; YAML can use the board's PyYAML environment. The helper validates identity fields and writes atomically; task-specific evidence remains flexible.
 
 Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, latest result/evidence, next action, and relevant human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
