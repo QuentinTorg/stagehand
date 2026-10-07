@@ -137,12 +137,15 @@ def acknowledge_covered(directory, fingerprints, captured=None):
     wake = relay()
     with wake._locked(root):
         for path, notice in wake._documents(root / "inbox"):
-            if not notice or (captured is not None and
-                              captured.get(notice["id"]) != notice.get("observed_at")):
+            if not notice or (captured is not None and (notice["id"] not in captured or
+                              captured[notice["id"]] != notice.get("observed_at"))):
                 continue
             key = notice["key"]
             if key == "controller":
-                handled = covered == set(fingerprints)
+                # Fresh task records alone do not prove a new orchestrator
+                # conversation was read. Recover old deliveries, not new input.
+                handled = covered == set(fingerprints) and (captured is not None or all(
+                    reports[key]["updated_at"] >= notice.get("observed_at", float("inf")) for key in covered))
             elif notice.get("kind") == "report-refresh":
                 handled = set(notice["metadata"]["task_ids"]) <= covered
             else:

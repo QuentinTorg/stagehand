@@ -227,9 +227,11 @@ class ReportingTests(unittest.TestCase):
         self.publish()
         stamp = reporting.read(self.directory / "reports.json")["example"]["updated_at"]
         new, _ = self.notice("b" * 32, observed=stamp + 1)
+        controller, _ = self.notice("c" * 32, key="controller", observed=stamp + 1)
         reporting.acknowledge_covered(self.directory, {"example": self.record()["fingerprint"]})
         self.assertFalse(old.exists())
         self.assertTrue(new.exists())
+        self.assertTrue(controller.exists())
 
     def test_refresh_debounces_and_coalesces_without_repeating_same_snapshot(self):
         root = self.directory / "wake"
