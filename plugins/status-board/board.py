@@ -629,8 +629,8 @@ def read_tasks(directory):
             continue
         try:
             task = yaml.safe_load(path.read_text())
-            if not isinstance(task, dict) or not task.get("task_id") or not isinstance(task.get("state"), dict):
-                raise ValueError("expected task_id and state mapping")
+            from task_records import validate
+            validate(task)
             if task["state"].get("name") == "cleaned":
                 continue
             tasks.append((task, path.stat().st_mtime))
@@ -1254,7 +1254,7 @@ def report_label(row, interval=5, animate=True, now=None):
     if row.get("reporter_error"):
         return "Report unavailable · invalid summary", 1
     if row.get("report_fresh"):
-        return "✓ Report up to date", 3
+        return "✓ Report matches latest inputs", 3
     activity = row.get("reporter_activity")
     if activity is None:
         return None

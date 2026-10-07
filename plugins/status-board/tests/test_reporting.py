@@ -144,7 +144,7 @@ class ReportingTests(unittest.TestCase):
         self.publish()
         reporting.decorate(self.tasks, [(self.task, 0)], self.agents, self.controller, [row])
         self.assertTrue(row["report_fresh"])
-        self.assertEqual(board.report_label(row), ("✓ Report up to date", 3))
+        self.assertEqual(board.report_label(row), ("✓ Report matches latest inputs", 3))
 
     def test_reconnect_failure_does_not_hide_retained_report(self):
         self.configure()
@@ -378,6 +378,48 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(result["tasks"][0]["pull_requests"], self.task["pull_requests"])
         self.assertEqual(result["controller_pane"], "control:p1")
         self.assertEqual(list(reporting.read(self.directory / "context.json")), ["example"])
+
+    def test_context_focuses_changed_evidence_but_exposes_obsolete_other_conclusions(self):
+        self.publish()
+        # This report is structurally fresh, but a different worker just
+        # finished the dependency it still describes as blocking the human.
+        reports = reporting.read(self.directory / "reports.json")
+        reports["example"]["human_action"] = "Wait for SDK implementation."
+        reporting.write(self.directory / "reports.json", reports)
+        sdk = dict(self.task, task_id="sdk", agents={}, state={"name": "complete", "summary": "SDK drafts published"})
+        reporting.write(self.tasks / "planner.json", self.task)
+        reporting.write(self.tasks / "sdk.json", sdk)
+        reporting.write(self.directory / "connection.json", {"tasks": str(self.tasks), "socket": os.environ["HERDR_SOCKET_PATH"]})
+        wake = Mock()
+        wake._documents.return_value = []
+        with patch.object(reporting, "call", return_value={"agents": self.agents}), patch.object(reporting, "relay", return_value=wake):
+            result = reporting.context(self.directory)
+            self.assertEqual([task["task_id"] for task in result["tasks"]], ["sdk"])
+            planner = next(item for item in result["index"] if item["task_id"] == "example")
+            self.assertTrue(planner["report_matches_inputs"])
+            self.assertEqual(planner["next_step"], "Wait for SDK implementation.")
+            self.assertEqual(next(item for item in result["index"] if item["task_id"] == "sdk")["state"]["summary"], "SDK drafts published")
+            detail = reporting.context(self.directory, ["example"])
+            self.assertEqual(detail["tasks"][0]["previous_report"]["human_action"], "Wait for SDK implementation.")
+            self.assertEqual(len(reporting.context(self.directory, all_tasks=True)["tasks"]), 2)
+            with self.assertRaisesRegex(ValueError, "Unknown task"):
+                reporting.context(self.directory, ["not-in-this-workspace"])
+        # Correcting a related conclusion is allowed without inventing task
+        # activity or changing the orchestrator's record or authority.
+        corrected = dict(self.record(), human_action="", recent_work="SDK implementation finished; prior dependency resolved.")
+        before = (self.tasks / "planner.json").read_bytes()
+        reporting.publish(self.directory, [corrected])
+        self.assertEqual(reporting.read(self.directory / "reports.json")["example"]["human_action"], "")
+        self.assertEqual((self.tasks / "planner.json").read_bytes(), before)
+
+    def test_context_includes_delivered_task_even_when_its_fingerprint_matches(self):
+        self.publish()
+        reporting.write(self.tasks / "task.json", self.task)
+        reporting.write(self.directory / "connection.json", {"tasks": str(self.tasks), "socket": os.environ["HERDR_SOCKET_PATH"]})
+        wake = Mock()
+        wake._documents.return_value = [(Path("notice"), {"id": "a" * 32, "key": "example", "observed_at": 1})]
+        with patch.object(reporting, "call", return_value={"agents": self.agents}), patch.object(reporting, "relay", return_value=wake):
+            self.assertEqual([item["task_id"] for item in reporting.context(self.directory)["tasks"]], ["example"])
 
     def test_sync_and_disable_only_touch_the_reporter_inbox(self):
         self.configure()

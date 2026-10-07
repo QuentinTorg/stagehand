@@ -440,7 +440,7 @@ def _disable(tasks):
     return "Original reporting restored. Reporter tab retained; no agents interrupted."
 
 
-def context(directory):
+def context(directory, task_ids=None, all_tasks=False):
     connection = read(directory / "connection.json")
     if connection["socket"] != os.environ.get("HERDR_SOCKET_PATH"):
         raise ValueError("Reporter context belongs to a different Herdr session")
@@ -457,26 +457,56 @@ def context(directory):
         controller = None
         warnings.append(f"The bound orchestrator is unavailable or still resuming: {error}")
     sources = scoped_sources(tasks, agents, controller)
+    reports = read(directory / "reports.json", {})
+    notices = [notice for _, notice in relay()._documents(directory / "wake/inbox")]
+    fingerprints = {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks}
+    if task_ids:
+        selected = set(task_ids)
+        if selected - fingerprints.keys():
+            raise ValueError("Unknown task(s): " + ", ".join(sorted(selected - fingerprints.keys())))
+    elif all_tasks:
+        selected = set(fingerprints)
+    else:
+        selected = {key for key, value in fingerprints.items()
+                    if reports.get(key, {}).get("fingerprint") != value}
+        for notice in notices:
+            if notice["key"] in fingerprints:
+                selected.add(notice["key"])
+            selected.update(key for key in notice.get("metadata", {}).get("task_ids", []) if key in fingerprints)
     briefs = []
+    index = []
     for task, _ in tasks:
+        key = str(task["task_id"])
+        previous = reports.get(key, {})
+        roles = [{"role": role, **{field: agent.get(field) for field in
+                  ("pane_id", "name", "agent_status", "agent_session", "state_change_seq")}}
+                 for source, role, agent in sources if source == key]
+        # Cheap shared conclusions expose cross-task contradictions without
+        # requiring another timer, dependency graph, or full transcript audit.
+        index.append({"task_id": key, "workspace": task.get("workspace", {}).get("label"),
+                      "state": task["state"],
+                      "report_matches_inputs": previous.get("fingerprint") == fingerprints[key],
+                      "conclusion": previous.get("summary", ""),
+                      "next_step": previous.get("human_action") or previous.get("next_action", ""),
+                      "updated_at": previous.get("updated_at"),
+                      "roles": {role["role"]: role["agent_status"] for role in roles}})
+        if key not in selected:
+            continue
         briefs.append({"task_id": task["task_id"], "objective": task.get("objective"),
                        "mode": task.get("mode"), "workspace": task.get("workspace"), "state": task["state"],
                        "repository": task.get("repository"), "development_target": task.get("development_target"),
                        "intent_ref": task.get("intent_ref"), "handoff": task.get("handoff"),
                        "result": task.get("result"), "review": task.get("review"),
                        "pull_requests": pr_links(task),
-                       "fingerprint": fingerprint(task, sources),
-                       "roles": [{"role": role, **{key: agent.get(key) for key in
-                                  ("pane_id", "name", "agent_status", "agent_session", "state_change_seq")}}
-                                 for key, role, agent in sources if key == str(task["task_id"])]})
-    notices = [notice for _, notice in relay()._documents(directory / "wake/inbox")]
-    result = {"tasks": briefs, "controller_pane": controller["pane_id"] if controller else None, "notices": notices,
+                       "fingerprint": fingerprints[key], "roles": roles, "previous_report": previous})
+    result = {"tasks": briefs, "index": index,
+              "controller_pane": controller["pane_id"] if controller else None, "notices": notices,
               "warnings": warnings, "report_format": {"task_id": "from task", "fingerprint": "from task",
                   "status": "working | needs-human | complete | unknown", **{field: "short text" for field in FIELDS},
                   "evidence": ["pane/artifact/head supporting your conclusion"]}}
     # Capture the evidence used by this turn. A late publish cannot claim it read
     # a newer turn just because its file was written recently.
-    write(directory / "context.json", {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks})
+    write(directory / "context.json", fingerprints)
     write(directory / "context-wakes.json", {notice["id"]: notice.get("observed_at") for notice in notices})
     return result
 
@@ -590,14 +620,18 @@ def apply_display(row):
 def worker_main(directory, arguments):
     parser = argparse.ArgumentParser(description="Read context and publish private dashboard reports")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("context")
+    info = commands.add_parser("context", help="Affected task details and a compact cross-task index")
+    info.add_argument("task_ids", nargs="*", help="Read specific related tasks instead")
+    info.add_argument("--all", action="store_true", help="Read every full task brief")
     output = commands.add_parser("publish")
     output.add_argument("file", type=Path)
     ack = commands.add_parser("ack")
     ack.add_argument("ids", nargs="+")
     args = parser.parse_args(arguments)
     if args.command == "context":
-        print(json.dumps(context(directory), indent=2))
+        if args.all and args.task_ids:
+            parser.error("choose task IDs or --all")
+        print(json.dumps(context(directory, args.task_ids, args.all), indent=2))
     elif args.command == "publish":
         publish(directory, read(args.file))
         print("Reports published")

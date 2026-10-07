@@ -758,7 +758,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             label, _ = board.report_label(row, now=100)
             self.assertTrue(label.startswith(expected))
         row["report_fresh"] = True
-        self.assertEqual(board.report_label(row), ("✓ Report up to date", 3))
+        self.assertEqual(board.report_label(row), ("✓ Report matches latest inputs", 3))
         self.assertEqual(row["color"], saved["color"])
         row["reporter_error"] = True
         self.assertEqual(board.report_label(row), ("Report unavailable · invalid summary", 1))
