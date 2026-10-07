@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from types import SimpleNamespace
 
 import agent_binding
@@ -21,6 +22,7 @@ import agent_binding
 PACKAGE = Path(__file__).resolve().parent
 DEFAULTS = {"enabled": False, "kind": "codex", "model": "gpt-6-luna", "reasoning": "medium", "arguments": ""}
 FIELDS = ("summary", "recent_work", "review_coverage", "next_actor", "next_action", "human_action")
+REFRESH_DEBOUNCE_SECONDS = 5
 
 
 def read(path, default=None):
@@ -123,6 +125,66 @@ def fingerprint(task, sources):
     return hashlib.sha256(json.dumps([task, sorted(identities)], sort_keys=True).encode()).hexdigest()
 
 
+def acknowledge_covered(directory, fingerprints, captured=None):
+    """Retire only this reporter's hints whose snapshot has been summarized."""
+    root = directory / "wake"
+    if not root.is_dir() or captured == {}:
+        return
+    reports = read(directory / "reports.json", {})
+    covered = {key for key, value in fingerprints.items()
+               if isinstance(reports.get(key), dict) and reports[key].get("fingerprint") == value
+               and isinstance(reports[key].get("updated_at"), (int, float))}
+    wake = relay()
+    with wake._locked(root):
+        for path, notice in wake._documents(root / "inbox"):
+            if not notice or (captured is not None and
+                              captured.get(notice["id"]) != notice.get("observed_at")):
+                continue
+            key = notice["key"]
+            if key == "controller":
+                handled = covered == set(fingerprints)
+            elif notice.get("kind") == "report-refresh":
+                handled = set(notice["metadata"]["task_ids"]) <= covered
+            else:
+                handled = key in covered and (captured is not None or
+                          reports[key]["updated_at"] >= notice.get("observed_at", float("inf")))
+            if handled:
+                path.unlink()
+
+
+def queue_refresh(directory, fingerprints, wake, now=None):
+    """Repair late edits/missed hooks once per snapshot, without an idle LLM timer."""
+    now = time.time() if now is None else now
+    path = directory / "refresh.json"
+    state = read(path, {})
+    reports = read(directory / "reports.json", {})
+    stale = {key: value for key, value in fingerprints.items()
+             if not isinstance(reports.get(key), dict) or reports[key].get("fingerprint") != value}
+    changed = {key: value for key, value in stale.items() if state.get("requested", {}).get(key) != value}
+    if changed != state.get("candidate", {}):
+        state.update(candidate=changed, since=now)
+        write(path, state)
+    if not changed or now - state["since"] < REFRESH_DEBOUNCE_SECONDS:
+        return
+    root = directory / "wake"
+    with wake._locked(root):
+        pending = next((notice for _, notice in wake._documents(root / "inbox")
+                        if notice and notice.get("kind") == "report-refresh" and not notice.get("notified")), None)
+        identifier = pending["id"] if pending else uuid.uuid4().hex
+        # A delivered batch is immutable: finishing it must not erase later work.
+        wake._atomic_json(root / "inbox" / f"{identifier}.json", {
+            "version": 1, "id": identifier, "watch_id": "report-refresh", "kind": "report-refresh",
+            "key": "reports", "metadata": {"task_ids": sorted(stale)},
+            "workspace_label": "Status reporter", "pane_id": None, "status": "stale",
+            "observed_at": now, "notified": False,
+            "attempts": pending.get("attempts", 0) if pending else 0,
+            "last_error": pending.get("last_error") if pending else None,
+        })
+    state.setdefault("requested", {}).update(changed)
+    state["candidate"] = {}
+    write(path, state)
+
+
 def sync(tasks_directory, tasks, agents, controller):
     if not configuration(tasks_directory)["enabled"]:
         return
@@ -198,6 +260,12 @@ def _sync(tasks_directory, tasks, agents, controller):
                 wake._atomic_json(path, notice)
     if repaired or resumed:
         wake._flush(root)
+    fingerprints = {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks}
+    acknowledge_covered(directory, fingerprints)
+    queue_refresh(directory, fingerprints, wake)
+    if target.get("agent_status") in {"idle", "done", "unknown"} and any(
+            notice and not notice.get("notified") for _, notice in wake._documents(root / "inbox")):
+        wake._notify_consumer(root, consumer)
 
 
 def launch_arguments(config):
@@ -331,7 +399,7 @@ def _enable(tasks):
     call("agent", "prompt", agent["pane_id"],
          "Read ./AGENTS.md to initialize this read-only status reporter. Run ./report.py context, "
          "summarize the current tasks, publish the reports, and stop. Future HERDR_AGENT_WAKE notices "
-         "refer to your independent inbox; handle and acknowledge them there.", timeout=10)
+         "refer to your independent inbox; publishing handles covered acknowledgments.", timeout=10)
     config["enabled"] = True
     write(config_path(tasks), config)
     from board import read_tasks
@@ -355,10 +423,17 @@ def _disable(tasks):
     config["enabled"] = False
     write(config_path(tasks), config)
     if config.get("directory"):
-        root = Path(config["directory"]) / "wake"
+        directory = Path(config["directory"])
+        root = directory / "wake"
         wake = relay()
         for _, watch in wake._documents(root / "watches"):
             relay_action(wake, "_remove", state_root=str(root), watch=watch["id"], acknowledge=False)
+        if root.is_dir():
+            with wake._locked(root):
+                for path, notice in wake._documents(root / "inbox"):
+                    if notice and notice.get("kind") == "report-refresh":
+                        path.unlink()
+        (directory / "refresh.json").unlink(missing_ok=True)
     return "Original reporting restored. Reporter tab retained; no agents interrupted."
 
 
@@ -399,6 +474,7 @@ def context(directory):
     # Capture the evidence used by this turn. A late publish cannot claim it read
     # a newer turn just because its file was written recently.
     write(directory / "context.json", {str(task["task_id"]): fingerprint(task, sources) for task, _ in tasks})
+    write(directory / "context-wakes.json", {notice["id"]: notice.get("observed_at") for notice in notices})
     return result
 
 
@@ -430,6 +506,9 @@ def publish(directory, records):
     now = time.time()
     reports.update({key: dict(value, updated_at=now) for key, value in validated.items()})
     write(directory / "reports.json", reports)
+    # Persist the result before consuming its captured hints. A crash leaves
+    # recoverable work, and the agent never needs to copy opaque wake IDs.
+    acknowledge_covered(directory, expected, read(directory / "context-wakes.json", {}))
 
 
 def decorate(tasks_directory, tasks, agents, controller, rows):

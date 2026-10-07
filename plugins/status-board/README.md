@@ -128,7 +128,9 @@ Private setup is saved in `reporter.json` beside the task directory. The default
   --directory /absolute/private-reporter --herdr-skill /absolute/installed/herdr
 ```
 
-The board registers independent watches for the controller and assigned task roles as it refreshes. Existing watches continue while the board is closed; registering new task roles requires the board to be running. Reporter activity is excluded. Reports bind to observed task/agent fingerprints; later work or changed intent invalidates them. Stale, missing, blocked, or unavailable reporting falls back to ordinary status, labeling retained context as previous information.
+The board registers independent watches for the controller and assigned task roles as it refreshes. Existing watches continue while the board is closed; registering new task roles requires the board to be running. Reporter activity is excluded. Reports bind to observed task/agent fingerprints; later work or changed intent invalidates them. While open, the board also coalesces stale or missing snapshots into a refresh after five seconds of stability, once per changed snapshot—not periodic agent audits. Publishing automatically acknowledges covered notices in the reporter's own inbox. Stale, missing, blocked, or unavailable reporting falls back to ordinary status, labeling retained context as previous information.
+
+Keep current PR URLs in the task record's `pull_requests` collection, as in the [task template](../../skills/orchestrating-development/assets/task-record.yaml). The board does not mine historical result notes for links.
 
 Herdr restores the reporter's native conversation after restart; the board saves that identity and repairs its own relay registration and watches, even while the orchestrator is unavailable. Unacknowledged notices are replayed once after the reporter reconnects. Neither agent has recovery duties. If automatic restoration fails, open **Status reporter** and resume the saved conversation. Harnesses without native session identity need manual recovery. If the wake plugin is disabled, enable it again before retrying.
 

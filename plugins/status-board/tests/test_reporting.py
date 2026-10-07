@@ -182,6 +182,163 @@ class ReportingTests(unittest.TestCase):
             reporting.publish(self.directory, [dict(self.record(), recent_work="\x1b[2J")])
         self.assertEqual((self.directory / "reports.json").read_bytes(), before)
 
+    def notice(self, identifier, key="example", observed=1, **extra):
+        value = dict(id=identifier, key=key, observed_at=observed, notified=True,
+                     watch_id=key, metadata={}, **extra)
+        path = self.directory / "wake/inbox" / f"{identifier}.json"
+        reporting.write(path, value)
+        return path, value
+
+    def test_publish_automatically_acks_only_covered_captured_notices(self):
+        first, _ = self.notice("a" * 32)
+        controller, _ = self.notice("b" * 32, key="controller")
+        newer, _ = self.notice("c" * 32)
+        other, _ = self.notice("d" * 32, key="other")
+        reporting.write(self.directory / "context-wakes.json", {"a" * 32: 1, "b" * 32: 1, "d" * 32: 1})
+        # The other task is not covered; its wake and the controller batch survive.
+        record = self.record()
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"], "other": "missing"})
+        reporting.publish(self.directory, [record])
+        self.assertFalse(first.exists())
+        self.assertTrue(controller.exists())
+        self.assertTrue(newer.exists())
+        self.assertTrue(other.exists())
+        reporting.write(self.directory / "context.json", {"example": record["fingerprint"]})
+        reporting.publish(self.directory, [record])
+        self.assertFalse(controller.exists())
+        self.assertTrue(newer.exists())
+
+    def test_publish_does_not_ack_a_notice_coalesced_after_context(self):
+        path, _ = self.notice("a" * 32, observed=2)
+        reporting.write(self.directory / "context-wakes.json", {"a" * 32: 1})
+        self.publish()
+        self.assertTrue(path.exists())
+
+    def test_invalid_publication_does_not_ack(self):
+        path, _ = self.notice("a" * 32)
+        reporting.write(self.directory / "context-wakes.json", {"a" * 32: 1})
+        reporting.write(self.directory / "context.json", {"example": self.record()["fingerprint"]})
+        with self.assertRaises(ValueError):
+            reporting.publish(self.directory, [dict(self.record(), fingerprint="wrong")])
+        self.assertTrue(path.exists())
+
+    def test_sync_ack_recovery_retains_a_newer_turn(self):
+        old, _ = self.notice("a" * 32)
+        self.publish()
+        stamp = reporting.read(self.directory / "reports.json")["example"]["updated_at"]
+        new, _ = self.notice("b" * 32, observed=stamp + 1)
+        reporting.acknowledge_covered(self.directory, {"example": self.record()["fingerprint"]})
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_refresh_debounces_and_coalesces_without_repeating_same_snapshot(self):
+        root = self.directory / "wake"
+        root.mkdir()
+        wake = reporting.relay()
+        fingerprints = {"example": "first"}
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=10)
+        reporting.queue_refresh(self.directory, {"example": "second"}, wake, now=12)
+        reporting.queue_refresh(self.directory, {"example": "second"}, wake, now=16)
+        self.assertFalse(wake._documents(root / "inbox"))
+        reporting.queue_refresh(self.directory, {"example": "second"}, wake, now=17)
+        first_path, first = wake._documents(root / "inbox")[0]
+        reporting.queue_refresh(self.directory, {"example": "second"}, wake, now=100)
+        self.assertEqual(wake._documents(root / "inbox"), [(first_path, first)])
+        reporting.queue_refresh(self.directory, {"example": "third", "another": "new"}, wake, now=101)
+        reporting.queue_refresh(self.directory, {"example": "third", "another": "new"}, wake, now=106)
+        path, notice = wake._documents(root / "inbox")[0]
+        self.assertEqual(path, first_path)
+        self.assertEqual(notice["metadata"]["task_ids"], ["another", "example"])
+        notice["notified"] = True
+        reporting.write(path, notice)
+        reporting.queue_refresh(self.directory, {"example": "fourth"}, wake, now=107)
+        reporting.queue_refresh(self.directory, {"example": "fourth"}, wake, now=112)
+        self.assertEqual(len(wake._documents(root / "inbox")), 2)
+        self.assertEqual(reporting.read(path), notice)
+
+    def test_current_reports_never_queue_a_refresh(self):
+        self.publish()
+        root = self.directory / "wake"
+        root.mkdir()
+        wake = reporting.relay()
+        fingerprints = {"example": self.record()["fingerprint"]}
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=10)
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=1000)
+        self.assertFalse(wake._documents(root / "inbox"))
+
+    def test_real_relay_recovers_a_late_task_edit_and_an_orphaned_controller_notice(self):
+        """Reproduce the observed publish/update race without touching live agents."""
+        self.configure()
+        self.publish()
+        reporting.write(self.tasks / "task.json", self.task)
+        reporting.write(self.directory / "connection.json", {"tasks": str(self.tasks), "socket": os.environ["HERDR_SOCKET_PATH"]})
+        wake = reporting.relay()
+        plugin = self.root / "plugin"
+        plugin.mkdir()
+        root = self.directory / "wake"
+        submitted = []
+
+        def herdr(*args):
+            if args[:2] == ("agent", "list"):
+                return {"result": {"agents": self.agents}}, None
+            if args[:2] == ("agent", "get"):
+                return {"result": {"agent": next(a for a in self.agents if a["pane_id"] == args[2])}}, None
+            if args[:2] == ("agent", "prompt"):
+                submitted.append(args)
+                return {"result": {"type": "agent_prompted"}}, None
+            raise AssertionError(args)
+
+        with patch.object(wake, "_config_dir", return_value=plugin), patch.object(wake, "_herdr", side_effect=herdr), patch.object(
+                wake, "_ensure_timer"), patch.object(wake.time, "sleep"), patch.object(reporting, "relay", return_value=wake), patch.object(
+                reporting, "call", return_value={"agents": self.agents}), patch.object(reporting.time, "time", return_value=10):
+            reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.notice("a" * 32, key="controller")  # Wrong manual ACK left yesterday's delivery outstanding.
+            self.task["state"]["summary"] = "Review complete"
+            reporting.write(self.tasks / "task.json", self.task)
+            self.observer["agent_status"] = "working"
+            reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            with patch.object(reporting.time, "time", return_value=15):
+                reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.assertFalse(submitted)
+            self.observer["agent_status"] = "idle"
+            with patch.object(reporting.time, "time", return_value=16):
+                reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.assertEqual(len(submitted), 1)
+            self.assertIn('"kind":"report-refresh"', submitted[0][3])
+            reporting.context(self.directory)
+            record = self.record()
+            self.task["state"]["summary"] = "Owner decision recorded during reporting"
+            reporting.write(self.tasks / "task.json", self.task)
+            reporting.publish(self.directory, [record])
+            self.assertFalse(wake._documents(root / "inbox"))  # Captured IDs were ACKed by the helper.
+            with patch.object(reporting.time, "time", return_value=20):
+                reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            with patch.object(reporting.time, "time", return_value=25):
+                reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.assertEqual(len(submitted), 2)  # The late edit receives one additional refresh.
+            for now in (30, 35, 40):
+                with patch.object(reporting.time, "time", return_value=now):
+                    reporting.sync(self.tasks, [(self.task, 0)], self.agents, self.controller)
+            self.assertEqual(len(submitted), 2)
+            self.assertTrue(all(args[2] == self.observer["pane_id"] for args in submitted))
+
+    def test_disable_cancels_pending_refreshes_and_reenable_can_request_again(self):
+        self.configure()
+        root = self.directory / "wake"
+        root.mkdir()
+        wake = reporting.relay()
+        fingerprints = {"example": "new"}
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=10)
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=15)
+        with patch.object(reporting, "relay", return_value=wake):
+            reporting.disable(self.tasks)
+        self.assertFalse(wake._documents(root / "inbox"))
+        self.assertFalse((self.directory / "refresh.json").exists())
+        self.configure()
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=20)
+        reporting.queue_refresh(self.directory, fingerprints, wake, now=25)
+        self.assertEqual(len(wake._documents(root / "inbox")), 1)
+
     def test_report_lists_survive_publish_and_display_without_multiline_table_labels(self):
         self.configure()
         record = dict(self.record(), summary="Proposal\nready",
