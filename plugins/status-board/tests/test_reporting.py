@@ -656,14 +656,27 @@ class ReportingTests(unittest.TestCase):
                 "foreground_processes": [{"argv": ["/installed/bin/codex", "resume", session]}]}
         agents = [self.controller, restored, self.author]
         with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(reporting, "call", side_effect=[
-                {"agents": agents}, {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]}, {}, {"agents": agents}]) as call, patch.object(
+                {"agents": agents}, {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]}, {"agents": agents}]) as call, patch.object(
                 reporting.agent_binding.subprocess, "run", return_value=Mock(stdout=json.dumps({"result": {"process_info": info}}))), patch.object(
                 reporting, "relay"), patch.object(reporting, "relay_action"), patch.object(reporting, "_sync"):
             reporting.enable(self.tasks)
         self.assertTrue(reporting.configuration(self.tasks)["enabled"])
         self.assertEqual(reporting.configuration(self.tasks)["terminal"], "restored-terminal")
         self.assertEqual((self.directory / "binding.json").read_bytes(), original_binding)
-        self.assertEqual([entry.args[:2] for entry in call.call_args_list], [("agent", "list"), ("plugin", "list"), ("agent", "prompt"), ("agent", "list")])
+        self.assertEqual([entry.args[:2] for entry in call.call_args_list], [("agent", "list"), ("plugin", "list"), ("agent", "list")])
+
+    def test_reenable_existing_busy_reporter_never_prompts_or_answers_its_dialog(self):
+        for status in ("working", "blocked"):
+            config = self.configure()
+            config.update(enabled=False, pane=self.observer["pane_id"], terminal=self.observer["terminal_id"])
+            reporting.write(reporting.config_path(self.tasks), config)
+            agents = [self.controller, dict(self.observer, agent_status=status), self.author]
+            with self.subTest(status=status), patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(
+                    reporting, "call", side_effect=[{"agents": agents}, {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]}, {"agents": agents}]) as call, patch.object(
+                    reporting, "relay"), patch.object(reporting, "relay_action"), patch.object(reporting, "_sync"):
+                reporting.enable(self.tasks)
+            self.assertTrue(reporting.configuration(self.tasks)["enabled"])
+            self.assertNotIn(("agent", "prompt"), [entry.args[:2] for entry in call.call_args_list])
 
     def test_relaunch_timeout_reuses_the_started_agent_on_retry(self):
         config = self.configure()

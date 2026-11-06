@@ -109,6 +109,8 @@ class BindingTests(unittest.TestCase):
         with patch.object(binding.subprocess, "run", side_effect=PermissionError("denied")), self.assertRaises(binding.ControllerUnavailable):
             binding.resolve(saved, [live])
         self.assertEqual(saved, before)
+        with patch.object(binding.subprocess, "run", side_effect=PermissionError("denied")), self.assertRaises(binding.ControllerUnavailable):
+            binding.resolve(saved, [dict(live, agent_session=saved["session"])])
 
     def test_misattributed_reporter_metadata_cannot_redirect_to_the_orchestrator(self):
         saved, live, info = self.resumed()

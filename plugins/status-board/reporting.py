@@ -366,12 +366,14 @@ def _enable(tasks):
     directory = prepare_directory(tasks, config)
     config.update(directory=str(directory), socket=os.environ["HERDR_SOCKET_PATH"])
     name = "reporter_" + hashlib.sha256(str(tasks).encode()).hexdigest()[:12]
+    reconnected = False
     # Save the pane before launching: a startup timeout may leave a live process.
     # Re-enabling never blindly creates another tab or replays agent start.
     if config.get("pane"):
         if (directory / "binding.json").exists() and not config.get("starting"):
             try:
                 agent = reporter_agent(directory, agents)
+                reconnected = True
             except agent_binding.ControllerUnavailable:
                 pane = call("pane", "get", config["pane"])["pane"]
                 info = call("pane", "process-info", "--pane", config["pane"])["process_info"]
@@ -388,7 +390,7 @@ def _enable(tasks):
                              "--", *arguments, timeout=40)["agent"]
         else:
             agent = call("agent", "get", config["pane"])["agent"]
-        if agent.get("agent_status") in {"working", "blocked"}:
+        if not reconnected and agent.get("agent_status") in {"working", "blocked"}:
             raise ValueError("Inspect the existing reporter tab and let its current turn/setup finish before enabling")
         binding = directory / "binding.json"
         if not binding.exists() or config.get("starting"):
@@ -418,12 +420,13 @@ def _enable(tasks):
     wake = relay()
     relay_action(wake, "_configure", state_root=str(directory / "wake"),
                  target=None, target_binding=str(directory / "binding.json"), reminder_minutes=0)
-    # Bootstrap first, then subscribe. An ambiguous send remains inspectable;
-    # it is not automatically retried or converted into a replacement agent.
-    call("agent", "prompt", agent["pane_id"],
-         "Read ./AGENTS.md to initialize this read-only status reporter. Run ./report.py context, "
-         "summarize the current tasks, publish the reports, and stop. Future HERDR_AGENT_WAKE notices "
-         "refer to your independent inbox; publishing handles covered acknowledgments.", timeout=10)
+    if not reconnected:
+        # A verified existing reporter already knows its role. Reconnect its
+        # subscriptions without injecting another prompt or disturbing a dialog.
+        call("agent", "prompt", agent["pane_id"],
+             "Read ./AGENTS.md to initialize this read-only status reporter. Run ./report.py context, "
+             "summarize the current tasks, publish the reports, and stop. Future HERDR_AGENT_WAKE notices "
+             "refer to your independent inbox; publishing handles covered acknowledgments.", timeout=10)
     config["enabled"] = True
     write(config_path(tasks), config)
     from board import read_tasks

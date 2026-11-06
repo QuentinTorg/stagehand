@@ -142,6 +142,8 @@ If Herdr omits or misattributes a resumed Codex conversation ID, Stagehand check
 
 The private Codex reporter disables startup update prompts; update Codex outside its automated terminal. Setup preserves any existing reporter-specific configuration. Retained agent metadata never authorizes wake input to a shell or an unrelated foreground command.
 
+Re-enabling reporting reconnects a verified existing reporter even while it is working or waiting for input; it does not submit another bootstrap message or answer its dialog.
+
 Switch back to **Orchestrator** to cancel only reporter subscriptions and restore the original mode. Workers, coordinator wakes, records, and drafts are untouched. Its tab remains available; disabling does not interrupt the observer. There is no automatic restart or promotion. To apply saved launch settings, disable reporting, exit the reporter normally in its tab, and enable **Background** again; its verified shell pane is reused. For live model/reasoning changes, use the harness's native controls. If startup timed out, inspect the saved pane before retrying; the package will not create another blindly.
 
 This is an instruction-level read-only role, not an OS security boundary. Keep its agent permissions consistent with observation-only work. See the [reporter design](../../docs/04-status-reporter.md).

@@ -72,7 +72,7 @@ def resumed_session(agent, session):
             # frontend. Contradictory process evidence must not redirect wakes.
             return dict(agent, agent_session=None)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        pass
+        return dict(agent, agent_session=None)
     return agent
 
 
