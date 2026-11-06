@@ -123,3 +123,13 @@ class BindingTests(unittest.TestCase):
             self.assertEqual(resolved["pane_id"], live["pane_id"])
             with self.assertRaises(binding.ControllerUnavailable):
                 binding.resolve(saved, [neighbor])
+
+    def test_retained_metadata_never_sends_wakes_to_a_shell_or_unrelated_command(self):
+        saved, live, info = self.resumed()
+        live["agent_session"] = saved["session"]
+        alternatives = [dict(info, foreground_process_group_id=10),
+                        dict(info, foreground_processes=[{"argv": ["less", "notes.md"]}])]
+        for current in alternatives:
+            with self.subTest(info=current), patch.object(binding.subprocess, "run", return_value=Mock(
+                    stdout=json.dumps({"result": {"process_info": current}}))), self.assertRaises(binding.ControllerUnavailable):
+                binding.resolve(saved, [live])

@@ -291,7 +291,8 @@ def launch_arguments(config):
         if not config["model"] or not config["reasoning"]:
             raise ValueError("Choose a Codex model and reasoning effort")
         arguments = ["--model", config["model"], "-c",
-                     "model_reasoning_effort=" + json.dumps(config["reasoning"]), *arguments]
+                     "model_reasoning_effort=" + json.dumps(config["reasoning"]),
+                     "-c", "check_for_update_on_startup=false", *arguments]
     elif config.get("model") or config.get("reasoning"):
         raise ValueError("For other harnesses, clear Model/Reasoning and supply native launch arguments")
     return arguments
@@ -334,6 +335,12 @@ def prepare_directory(tasks, config):
         if link.exists() or link.is_symlink():
             raise ValueError(f"Preserving existing skill installation: {link}")
         link.symlink_to(skill, target_is_directory=True)
+    if config["kind"] == "codex":
+        settings = directory / ".codex/config.toml"
+        if not settings.exists():
+            # Updates belong to the human, not a menu that queued wake input
+            # could accidentally accept. Persist this across plain CLI resumes.
+            settings.write_text("# Update Codex outside the automated reporter terminal.\ncheck_for_update_on_startup = false\n")
     write(directory / "connection.json", {"tasks": str(tasks), "package": str(PACKAGE),
           "socket": os.environ.get("HERDR_SOCKET_PATH")})
     return directory

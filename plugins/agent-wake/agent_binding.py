@@ -53,12 +53,18 @@ def resumed_session(agent, session):
         info = json.loads(result.stdout)["result"]["process_info"]
         if (info.get("pane_id") != agent["pane_id"] or not info.get("foreground_process_group_id")
                 or info["foreground_process_group_id"] == info.get("shell_pid")):
-            return agent
+            return dict(agent, agent_session=None)
         matches = []
+        frontends = []
         for process in info.get("foreground_processes", []):
             argv = process.get("argv") or []
-            if len(argv) >= 3 and Path(argv[0]).name == "codex" and argv[1] == "resume":
+            if not argv or Path(argv[0]).name != "codex":
+                continue
+            frontends.append(process)
+            if len(argv) >= 3 and argv[1] == "resume":
                 matches.append(argv[2])
+        if not frontends:
+            return dict(agent, agent_session=None)
         if matches == [session["value"]]:
             return dict(agent, agent_session=dict(session))
         if matches and reported:

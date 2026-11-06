@@ -140,6 +140,8 @@ Herdr restores the reporter's native conversation after restart; the board saves
 
 If Herdr omits or misattributes a resumed Codex conversation ID, Stagehand checks it against the explicit foreground `codex resume <ID>` command. Missing metadata can recover only in the recorded pane; contradictory process evidence cannot redirect wakes to a neighbor. Helper errors include the underlying Herdr failure; a sandbox denial needs permission for the scoped helper, not a different socket or binding.
 
+The private Codex reporter disables startup update prompts; update Codex outside its automated terminal. Setup preserves any existing reporter-specific configuration. Retained agent metadata never authorizes wake input to a shell or an unrelated foreground command.
+
 Switch back to **Orchestrator** to cancel only reporter subscriptions and restore the original mode. Workers, coordinator wakes, records, and drafts are untouched. Its tab remains available; disabling does not interrupt the observer. There is no automatic restart or promotion. To apply saved launch settings, disable reporting, exit the reporter normally in its tab, and enable **Background** again; its verified shell pane is reused. For live model/reasoning changes, use the harness's native controls. If startup timed out, inspect the saved pane before retrying; the package will not create another blindly.
 
 This is an instruction-level read-only role, not an OS security boundary. Keep its agent permissions consistent with observation-only work. See the [reporter design](../../docs/04-status-reporter.md).

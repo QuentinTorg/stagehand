@@ -723,6 +723,10 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(prepared, self.directory)
         for discovery in (".codex", ".agents"):
             self.assertEqual((prepared / discovery / "skills/herdr").resolve(), skill)
+        self.assertIn("check_for_update_on_startup = false", (prepared / ".codex/config.toml").read_text())
+        (prepared / ".codex/config.toml").write_text("# Human configuration\n")
+        reporting.prepare_directory(self.tasks, config)
+        self.assertEqual((prepared / ".codex/config.toml").read_text(), "# Human configuration\n")
         self.assertIn("All workers and the orchestrator are read-only", (prepared / "AGENTS.md").read_text())
         (prepared / "AGENTS.md").write_text("Human customization")
         with self.assertRaisesRegex(ValueError, "Preserving"):
