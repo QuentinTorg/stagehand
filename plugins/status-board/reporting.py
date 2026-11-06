@@ -66,8 +66,15 @@ def locked(tasks):
 
 
 def call(*args, timeout=5):
-    result = subprocess.run([agent_binding.herdr_binary(), *args], capture_output=True,
-                            text=True, check=True, timeout=timeout)
+    try:
+        result = subprocess.run([agent_binding.herdr_binary(), *args], capture_output=True,
+                                text=True, check=True, timeout=timeout)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or str(error)).strip()[:800]
+        hint = ""
+        if any(term in detail.lower() for term in ("permission denied", "permissiondenied", "operation not permitted")):
+            hint = " Request sandbox approval to run ./report.py outside the sandbox; keep the saved socket and binding unchanged."
+        raise ValueError(f"Herdr {' '.join(args[:2])} failed: {detail}.{hint}") from error
     return json.loads(result.stdout)["result"]
 
 
@@ -108,13 +115,17 @@ def scoped_sources(tasks, agents, controller):
         workspace = task.get("workspace", {}).get("id")
         for role, name in task.get("agents", {}).items():
             recorded = (task.get("role_sessions") or {}).get(role) or {}
-            matches = [agent for agent in agents if agent.get("name") == name and
-                       agent.get("workspace_id") == workspace and
-                       (not recorded.get("pane_id", recorded.get("pane")) or
-                        recorded.get("pane_id", recorded.get("pane")) == agent.get("pane_id")) and
-                       (not recorded.get("native_session_id", recorded.get("session_id")) or
-                        recorded.get("native_session_id", recorded.get("session_id")) ==
-                        (agent.get("agent_session") or {}).get("value"))]
+            pane = recorded.get("pane_id", recorded.get("pane"))
+            session = recorded.get("native_session_id", recorded.get("session_id"))
+            matches = []
+            for agent in agents:
+                if agent.get("workspace_id") != workspace or (pane and pane != agent.get("pane_id")):
+                    continue
+                if session and pane and agent.get("name") in (None, name):
+                    agent = agent_binding.resumed_session(agent, {"agent": agent.get("agent"), "kind": "id", "value": session})
+                if ((agent.get("name") == name or (session and pane and not agent.get("name"))) and
+                        (not session or session == (agent.get("agent_session") or {}).get("value"))):
+                    matches.append(agent)
             if len(matches) == 1:
                 sources.append((str(task["task_id"]), role, matches[0]))
     return sources
@@ -645,16 +656,19 @@ def worker_main(directory, arguments):
     ack = commands.add_parser("ack")
     ack.add_argument("ids", nargs="+")
     args = parser.parse_args(arguments)
-    if args.command == "context":
-        if args.all and args.task_ids:
-            parser.error("choose task IDs or --all")
-        print(json.dumps(context(directory, args.task_ids, args.all), indent=2))
-    elif args.command == "publish":
-        publish(directory, read(args.file))
-        print("Reports published")
-    else:
-        for identifier in args.ids:
-            relay_action(relay(), "_remove", state_root=str(directory / "wake"), wake=identifier, acknowledge=True)
+    try:
+        if args.command == "context":
+            if args.all and args.task_ids:
+                parser.error("choose task IDs or --all")
+            print(json.dumps(context(directory, args.task_ids, args.all), indent=2))
+        elif args.command == "publish":
+            publish(directory, read(args.file))
+            print("Reports published")
+        else:
+            for identifier in args.ids:
+                relay_action(relay(), "_remove", state_root=str(directory / "wake"), wake=identifier, acknowledge=True)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"Reporter: {error}\n")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import agent_binding as binding
@@ -62,3 +63,63 @@ class BindingTests(unittest.TestCase):
                 binding.resolve(value, [self.agent])
         with tempfile.TemporaryDirectory() as root, self.assertRaises(ValueError):
             binding.load(Path(root) / "missing.json")
+
+    def resumed(self):
+        session = {"agent": "codex", "kind": "id", "value": "01a10c9b-357a-7240-9507-1fa934f4ba12"}
+        original = dict(self.agent, agent="codex", agent_session=session)
+        saved = binding.capture(original)
+        live = dict(original, terminal_id="new-terminal", agent_session=None)
+        info = {"pane_id": live["pane_id"], "foreground_process_group_id": 20, "shell_pid": 10,
+                "foreground_processes": [{"pid": 20, "argv": ["/installed/bin/codex", "resume", session["value"]]}]}
+        return saved, live, info
+
+    def test_missing_metadata_recovers_only_the_exact_foreground_conversation(self):
+        saved, live, info = self.resumed()
+        with patch.object(binding.subprocess, "run", return_value=Mock(stdout=json.dumps({"result": {"process_info": info}}))) as run:
+            recovered = binding.resolve(saved, [live])
+        self.assertEqual(binding.native_session(recovered), saved["session"])
+        self.assertEqual(recovered["terminal_id"], "new-terminal")
+        self.assertIsNone(live["agent_session"])
+        self.assertEqual(run.call_args.args[0][-2:], ["--pane", live["pane_id"]])
+
+    def test_missing_metadata_never_adopts_a_neighbor_or_conflicting_session(self):
+        saved, live, _ = self.resumed()
+        alternatives = [dict(live, pane_id="control:p2"), dict(live, workspace_id="other"),
+                        dict(live, agent_session=dict(saved["session"], value="other-conversation"))]
+        for agent in alternatives:
+            with self.subTest(agent=agent), patch.object(binding.subprocess, "run") as run, self.assertRaises(ValueError):
+                binding.resolve(saved, [agent])
+            run.assert_not_called()
+
+    def test_resume_fallback_rejects_shells_unrelated_commands_and_ambiguous_processes(self):
+        saved, live, info = self.resumed()
+        wrong = dict(info, foreground_processes=[{"argv": ["codex", "resume", "another-id"]}])
+        alternatives = [dict(info, foreground_process_group_id=10), dict(info, pane_id="other:p1"), wrong,
+                        dict(info, foreground_processes=[{"argv": ["codex", "resume", "--last"]}]),
+                        dict(info, foreground_processes=[{"argv": ["echo", "resume", saved["session"]["value"]]}]),
+                        dict(info, foreground_processes=info["foreground_processes"] * 2)]
+        for process_info in alternatives:
+            with self.subTest(info=process_info), patch.object(binding.subprocess, "run", return_value=Mock(
+                    stdout=json.dumps({"result": {"process_info": process_info}}))), self.assertRaises(ValueError):
+                binding.resolve(saved, [live])
+
+    def test_resume_inspection_failure_preserves_binding_and_stays_unavailable(self):
+        saved, live, _ = self.resumed()
+        before = dict(saved)
+        with patch.object(binding.subprocess, "run", side_effect=PermissionError("denied")), self.assertRaises(binding.ControllerUnavailable):
+            binding.resolve(saved, [live])
+        self.assertEqual(saved, before)
+
+    def test_misattributed_reporter_metadata_cannot_redirect_to_the_orchestrator(self):
+        saved, live, info = self.resumed()
+        neighbor = dict(live, pane_id="control:p2", agent_session=saved["session"])
+        other_info = dict(info, pane_id="control:p2", foreground_processes=[{
+            "argv": ["codex", "resume", "01a0f284-2ec9-7ec1-8ed1-10a1da64170b"]}])
+        def process(*args, **kwargs):
+            current = other_info if args[0][-1] == neighbor["pane_id"] else info
+            return Mock(stdout=json.dumps({"result": {"process_info": current}}))
+        with patch.object(binding.subprocess, "run", side_effect=process):
+            resolved = binding.resolve(saved, [neighbor, live])
+            self.assertEqual(resolved["pane_id"], live["pane_id"])
+            with self.assertRaises(binding.ControllerUnavailable):
+                binding.resolve(saved, [neighbor])

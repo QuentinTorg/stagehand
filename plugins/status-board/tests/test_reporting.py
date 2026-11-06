@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -89,6 +91,35 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual([a["pane_id"] for _, _, a in self.sources()], ["control:p1", "task:p1"])
         self.task["role_sessions"] = {"worker": {"pane": "task:p1", "native_session_id": "different-session"}}
         self.assertEqual([a["pane_id"] for _, _, a in self.sources()], ["control:p1"])
+
+    def test_scoped_sources_recover_recorded_resume_without_names_or_metadata(self):
+        session = "01a1149b-c996-7b12-b044-e161a3351f79"
+        self.task["role_sessions"] = {"worker": {"pane": "task:p1", "native_session_id": session}}
+        self.author.update(agent="codex", agent_session=None, name=None)
+        info = {"pane_id": "task:p1", "shell_pid": 10, "foreground_process_group_id": 20,
+                "foreground_processes": [{"argv": ["codex", "resume", session]}]}
+        with patch.object(reporting.agent_binding.subprocess, "run", return_value=Mock(stdout=json.dumps({"result": {"process_info": info}}))):
+            sources = self.sources()
+        self.assertEqual(sources[1][0:2], ("example", "worker"))
+        self.assertEqual(sources[1][2]["agent_session"]["value"], session)
+        info["foreground_processes"] = [{"argv": ["codex", "resume", "some-other-conversation"]}]
+        with patch.object(reporting.agent_binding.subprocess, "run", return_value=Mock(stdout=json.dumps({"result": {"process_info": info}}))):
+            self.assertEqual([a["pane_id"] for _, _, a in self.sources()], ["control:p1"])
+
+    def test_context_permission_failure_explains_recovery_without_a_traceback(self):
+        denial = subprocess.CalledProcessError(1, ["herdr", "agent", "list"], stderr="Operation not permitted (os error 1)")
+        with patch.object(reporting.subprocess, "run", side_effect=denial):
+            with self.assertRaisesRegex(ValueError, "Operation not permitted"):
+                reporting.call("agent", "list")
+            output = io.StringIO()
+            with patch.object(reporting, "context", side_effect=lambda *args: reporting.call("agent", "list")), contextlib.redirect_stderr(output):
+                with self.assertRaises(SystemExit) as error:
+                    reporting.worker_main(self.directory, ["context"])
+        self.assertEqual(error.exception.code, 1)
+        self.assertIn("Operation not permitted", output.getvalue())
+        self.assertIn("sandbox approval", output.getvalue())
+        self.assertNotIn("Traceback", output.getvalue())
+        self.assertFalse((self.directory / "context.json").exists())
 
     def test_fingerprints_bind_intent_identity_and_later_turns(self):
         initial = reporting.fingerprint(self.task, self.sources())
@@ -611,6 +642,28 @@ class ReportingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no occupied pane was changed"):
                 reporting.enable(self.tasks)
         self.assertNotIn(("agent", "start"), [entry.args[:2] for entry in call.call_args_list])
+
+    def test_reenable_recovers_the_resumed_reporter_without_launching_or_rebinding(self):
+        session = "01a10c9b-357a-7240-9507-1fa934f4ba12"
+        self.observer["agent_session"] = {"agent": "codex", "kind": "id", "value": session}
+        reporting.agent_binding.save(self.directory / "binding.json", reporting.agent_binding.capture(self.observer), replace=True)
+        original_binding = (self.directory / "binding.json").read_bytes()
+        config = self.configure()
+        config.update(enabled=False, pane=self.observer["pane_id"], terminal=self.observer["terminal_id"])
+        reporting.write(reporting.config_path(self.tasks), config)
+        restored = dict(self.observer, agent="codex", agent_session=None, name=None, terminal_id="restored-terminal")
+        info = {"pane_id": restored["pane_id"], "shell_pid": 10, "foreground_process_group_id": 20,
+                "foreground_processes": [{"argv": ["/installed/bin/codex", "resume", session]}]}
+        agents = [self.controller, restored, self.author]
+        with patch.object(reporting, "prepare_directory", return_value=self.directory), patch.object(reporting, "call", side_effect=[
+                {"agents": agents}, {"plugins": [{"plugin_id": "quentintorg.agent-wake", "enabled": True}]}, {}, {"agents": agents}]) as call, patch.object(
+                reporting.agent_binding.subprocess, "run", return_value=Mock(stdout=json.dumps({"result": {"process_info": info}}))), patch.object(
+                reporting, "relay"), patch.object(reporting, "relay_action"), patch.object(reporting, "_sync"):
+            reporting.enable(self.tasks)
+        self.assertTrue(reporting.configuration(self.tasks)["enabled"])
+        self.assertEqual(reporting.configuration(self.tasks)["terminal"], "restored-terminal")
+        self.assertEqual((self.directory / "binding.json").read_bytes(), original_binding)
+        self.assertEqual([entry.args[:2] for entry in call.call_args_list], [("agent", "list"), ("plugin", "list"), ("agent", "prompt"), ("agent", "list")])
 
     def test_relaunch_timeout_reuses_the_started_agent_on_retry(self):
         config = self.configure()

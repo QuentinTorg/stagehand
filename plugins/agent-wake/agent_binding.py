@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import shutil
+import uuid
 
 
 def herdr_binary():
@@ -37,6 +38,36 @@ def process_identity(agent):
     if info.get("pane_id") != agent["pane_id"] or not group or group == info.get("shell_pid"):
         raise ValueError("Controller frontend is not running")
     return group
+
+
+def resumed_session(agent, session):
+    """Use an explicit foreground resume to recover or check session metadata."""
+    reported = native_session(agent)
+    if (reported not in (None, session) or session.get("agent") != "codex"
+            or session.get("kind") != "id" or agent.get("agent") != "codex"):
+        return agent
+    try:
+        uuid.UUID(session["value"])
+        result = subprocess.run([herdr_binary(), "pane", "process-info", "--pane", agent["pane_id"]],
+                                capture_output=True, text=True, check=True, timeout=5)
+        info = json.loads(result.stdout)["result"]["process_info"]
+        if (info.get("pane_id") != agent["pane_id"] or not info.get("foreground_process_group_id")
+                or info["foreground_process_group_id"] == info.get("shell_pid")):
+            return agent
+        matches = []
+        for process in info.get("foreground_processes", []):
+            argv = process.get("argv") or []
+            if len(argv) >= 3 and Path(argv[0]).name == "codex" and argv[1] == "resume":
+                matches.append(argv[2])
+        if matches == [session["value"]]:
+            return dict(agent, agent_session=dict(session))
+        if matches and reported:
+            # Shared-backend hooks can attribute a conversation to the wrong
+            # frontend. Contradictory process evidence must not redirect wakes.
+            return dict(agent, agent_session=None)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass
+    return agent
 
 
 def capture(agent):
@@ -110,6 +141,17 @@ def resolve(binding, agents):
     matches = [agent for agent in agents or [] if agent.get("workspace_id") == binding["workspace_id"]
                and ((native_session(agent) == binding["session"]) if binding.get("session") else
                     (agent.get("terminal_id") == binding["terminal_id"] and agent.get("pane_id") == binding["pane_id"]))]
+    if binding.get("session"):
+        matches = [checked for agent in matches
+                   if native_session(checked := resumed_session(agent, binding["session"])) == binding["session"]]
+    if not matches and binding.get("session"):
+        # After restart Herdr can retain the pane but lose its conversation
+        # metadata. Check only that owned pane; never guess among neighbors.
+        for agent in agents or []:
+            if agent.get("workspace_id") == binding["workspace_id"] and agent.get("pane_id") == binding["pane_id"]:
+                recovered = resumed_session(agent, binding["session"])
+                if native_session(recovered) == binding["session"]:
+                    matches.append(recovered)
     if not matches:
         raise ControllerUnavailable("Waiting for the bound controller to resume; explicitly rebind for a different session")
     if len(matches) != 1 or not matches[0].get("pane_id"):
