@@ -1004,6 +1004,33 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
         self.assertEqual(send.call_args.args[2], "Please continue")
         copy.assert_not_called()
 
+    def test_preview_link_click_opens_browser_without_composing_or_sending(self):
+        from live_terminal import TerminalGrid
+        from test_live_terminal import frame
+        url = "https://github.carnegierobotics.com/team/repo/pull/42"
+        text = f"\x1b]8;;{url}\x1b\\Open PR\x1b]8;;\x1b\\"
+        for live_mode in (False, True):
+            with self.subTest(live=live_mode):
+                executor, previews = Mock(), Mock()
+                ready, response = Future(), Future()
+                ready.set_result(([], [], {"status": "idle"}))
+                response.set_result({"status": "idle", "output": text})
+                executor.submit.return_value, previews.submit.return_value = ready, response
+                live = Mock() if live_mode else None
+                if live:
+                    live.available = True
+                    live.update.return_value = {"status": "live", "message": "Live", "cells": TerminalGrid().feed(frame(text))}
+                y = 5 if live_mode else 8
+                with patch.object(board, "mouse_event", side_effect=[("select", 2, y, 0), ("release", 2, y, 0)]), patch.object(
+                    board, "open_preview_link", return_value=True
+                ) as open_link, patch.object(board, "compose") as compose, patch.object(board, "send_message") as send:
+                    self.run_display(executor, [-1] + [board.curses.KEY_MOUSE] * 2 + [ord("q")], previews=previews, live=live)
+                open_link.assert_called_once_with(url)
+                compose.assert_not_called()
+                send.assert_not_called()
+                if live:
+                    live.send_input.assert_not_called()
+
     def test_command_prefix_preserves_draft_and_never_sends(self):
         executor = Mock()
         executor.submit.return_value = Future()
@@ -1085,6 +1112,7 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
                              editor_keys=[board.curses.KEY_LEFT, board.curses.KEY_MOUSE, "X", "\r",
                                           board.curses.KEY_MOUSE, *"followup", "\r", "\x1b"])
         self.assertEqual([call.args for call in live.scroll.call_args_list], [(-3, (9, 5)), (3, (9, 5))])
+        self.assertTrue(all(call.kwargs == {"wheel": True} for call in live.scroll.call_args_list))
         self.assertEqual([call.args[2] for call in send.call_args_list], ["Xd", "followup"])
 
     def test_live_views_release_on_details_and_do_not_poll_snapshots(self):
@@ -1183,10 +1211,10 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
 
     def test_preview_drag_copies_frozen_frame_once_without_sending_input(self):
         from collections import namedtuple
-        Cell = namedtuple("Cell", "data fg bg bold italics underscore reverse")
+        Cell = namedtuple("Cell", "data fg bg bold italics underscore reverse hyperlink")
         def frame(text):
             return {"status": "live", "message": "Live", "cells": (tuple(
-                Cell(c, "default", "default", False, False, False, False) for c in text),)}
+                Cell(c, "default", "default", False, False, False, False, "https://example.com") for c in text),)}
         executor, live = Mock(), Mock()
         pending = Future()
         pending.set_result(([], [], {"status": "idle"}))
@@ -1205,11 +1233,12 @@ curses.wrapper(board.display, SimpleNamespace(tasks=Path(sys.argv[2]), offline=T
             board, "mouse_event", side_effect=mouse
         ), patch.object(board, "copy_preview_text", return_value="Copy requested") as copy, patch.object(
             board, "send_message"
-        ) as send:
+        ) as send, patch.object(board, "open_preview_link") as open_link:
             screen = self.run_display(executor, [-1, ord("c")] + [board.curses.KEY_MOUSE] * 3
                                       + [-1, 27, ord("q")], live=live)
         copy.assert_called_once_with("hello")
         send.assert_not_called()
+        open_link.assert_not_called()
         live.scroll.assert_not_called()
         output = " ".join(str(call) for call in screen.addnstr.call_args_list)
         self.assertIn("Selection", output)

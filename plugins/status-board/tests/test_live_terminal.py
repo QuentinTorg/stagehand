@@ -123,7 +123,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         view.available = False
         view.state = {"cells": ("old",), "status": "live"}
         view.scroll(100000)
-        self.assertEqual(list(view.pending_scroll), [(1000, (0, 0))])
+        self.assertEqual(list(view.pending_scroll), [(1000, (0, 0), False)])
         self.assertEqual(view.update(("new", "workspace"), (80, 20))["cells"], ())
         self.assertFalse(view.pending_scroll)
 
@@ -138,7 +138,10 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         view.scroll(-2)
         view.scroll(-3, (8, 4))
         view.scroll(3, (8, 4))
-        self.assertEqual(list(view.pending_scroll), [(-5, (40, 10)), (-3, (8, 4)), (3, (8, 4))])
+        self.assertEqual(list(view.pending_scroll), [(-5, (40, 10), False), (-3, (8, 4), False), (3, (8, 4), False)])
+        view.scroll(2, (8, 4), wheel=True)
+        view.scroll(3, (8, 4), wheel=True)
+        self.assertEqual(list(view.pending_scroll)[-2:], [(3, (8, 4), False), (5, (8, 4), True)])
         for column in range(100):
             view.scroll(-3, (column, 2))
         self.assertEqual(len(view.pending_scroll), 64)
@@ -190,8 +193,8 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 epoch = view.begin_input()
                 self.assertIsNotNone(epoch)
                 view.scroll(-3)
-                view.scroll(-2, (6, 3))
-                view.scroll(2, (999, -1))
+                view.scroll(-2, (6, 3), wheel=True)
+                view.scroll(2, (999, -1), wheel=True)
                 view.update(("author", "workspace"), (12, 4))
                 self.assertTrue(view.send_input("hello", epoch))
                 # Sixty incremental edits must all survive, without sixty
@@ -200,17 +203,29 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 for seq in range(2, 62):
                     child.stdout.feed_data((json.dumps(frame("x", seq, False)) + "\n").encode())
                 await until(lambda: sum(cell.data == "x" for row in view.state["cells"] for cell in row) == 60)
-                commands = [json.loads(call.args[0]) for call in child.stdin.write.call_args_list]
+                commands = [json.loads(line) for call in child.stdin.write.call_args_list for line in call.args[0].splitlines()]
                 self.assertIn({"type": "terminal.input", "text": "hello"}, commands)
                 scrolls = [c for c in commands if c.get("type") == "terminal.scroll"]
                 self.assertEqual(scrolls, [
                     {"type": "terminal.scroll", "direction": "up", "lines": 3, "source": "wheel", "column": 10, "row": 2},
-                    {"type": "terminal.scroll", "direction": "up", "lines": 2, "source": "wheel", "column": 6, "row": 3},
-                    {"type": "terminal.scroll", "direction": "down", "lines": 2, "source": "wheel", "column": 11, "row": 0},
+                    *[{"type": "terminal.scroll", "direction": "up", "lines": 1, "source": "wheel", "column": 6, "row": 3}] * 2,
+                    *[{"type": "terminal.scroll", "direction": "down", "lines": 1, "source": "wheel", "column": 11, "row": 0}] * 2,
                 ])
                 self.assertLess(commands.index({"type": "terminal.resize", "cols": 12, "rows": 4}),
                                 commands.index(scrolls[0]))
                 self.assertLess(sum("cells" in call.kwargs for call in publish.call_args_list), 60)
+                # Fast scrolling must preserve every notch without starving
+                # terminal input or sending an unbounded burst to Herdr.
+                child.stdin.write.reset_mock()
+                view.scroll(-130, (6, 3), wheel=True)
+                self.assertTrue(view.send_input("responsive", epoch))
+                await until(lambda: not view.pending_scroll)
+                batches = [[json.loads(line) for line in call.args[0].splitlines()]
+                           for call in child.stdin.write.call_args_list]
+                wheel_batches = [batch for batch in batches if batch[0]["type"] == "terminal.scroll"]
+                self.assertEqual([len(batch) for batch in wheel_batches], [64, 64, 2])
+                self.assertTrue(all(command["lines"] == 1 for batch in wheel_batches for command in batch))
+                self.assertEqual(batches[1], [{"type": "terminal.input", "text": "responsive"}])
                 # A switch cancels the pending identity query and releases the
                 # old attachment rather than adopting a stale query result.
                 view.update(None, (20, 5))

@@ -530,10 +530,26 @@ class PreviewSelection:
         self.lines, self.context = tuple(lines), context
         self.anchor = self.cursor = (row, column)
         self.dragging = True
+        self.moved = False
 
     def move(self, column, row, columns):
         self.cursor = (max(0, min(len(self.lines) - 1, row)),
                        max(0, min(columns - 1, column)))
+        self.moved |= self.cursor != self.anchor
+
+    def link(self):
+        # Hit-test the frozen text in terminal cells, including wide glyphs.
+        # A drag must never activate a link, even if it returns to its start.
+        if self.moved:
+            return None
+        row, column = self.anchor
+        line, position = self.lines[row], 0
+        for i, character in enumerate(line):
+            cells = cell_width(character)
+            if position <= column < position + cells:
+                return safe_link(line.styles[i].hyperlink)
+            position += cells
+        return None
 
     def span(self, row, columns):
         start, end = sorted((self.anchor, self.cursor))
@@ -1012,7 +1028,7 @@ def help_lines(width, warnings):
             "PR links: × means closed without merging; ✓ means merged. Plain links are open or status is unconfirmed.",
             "", "Open workspace / Open orchestrator switches to the native Herdr session.",
             "Use the native session for direct agent work, permissions, or the full transcript.",
-            "", "Click the box or plain-click preview text to focus the composer. Drag preview text to select and copy instead.",
+            "", "Click preview links to open them; other preview clicks focus the composer. Drag text to select and copy instead.",
             "Enter: send by default; enable Enter inserts newline for newline instead. Ctrl-G or Send: submit. Ctrl-J: newline. Esc or click away: save without sending.",
             "Clear removes only the current draft. Each task/recipient and general chat has a separate draft.",
             "", "Set aside / Return to active: organize this board without stopping or dispatching agents.",
@@ -1240,6 +1256,17 @@ def open_pr(url):
             return webbrowser.open(url, new=2)
     except (ValueError, webbrowser.Error):
         pass
+    return False
+
+
+def open_preview_link(url):
+    # Only explicit human clicks open these targets; never forward arbitrary
+    # preview clicks into an agent's approval dialogs or other terminal controls.
+    if safe_link(url):
+        try:
+            return webbrowser.open(url, new=2)
+        except (OSError, ValueError, webbrowser.Error):
+            pass
     return False
 
 
@@ -2563,6 +2590,9 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                         selection.dragging = False
                         if selection.anchor != selection.cursor:
                             notice = copy_preview_text(selection.text(width - 3))
+                        elif target := selection.link():
+                            selection = None
+                            notice = "" if open_preview_link(target) else "Could not open link; try Alt-click or copy its address."
                         else:
                             selection = None
                             editor = compose(screen, args, message_target, inline=True, input_reader=input_reader, drafts=drafts)
@@ -2589,7 +2619,7 @@ def display_loop(screen, args, executor, previews, live=None, drafts=None, pr_st
                         selected = max(0, min(len(rows) - 1, selected + delta))
                     elif (live_state is not None and 1 <= x < width - 2
                           and title_y < y <= title_y + detail_height):
-                        live.scroll(delta, (x - 1, y - title_y - 1))
+                        live.scroll(delta, (x - 1, y - title_y - 1), wheel=True)
                     elif viewing_controller and not utility_view:
                         controller_offset = max(0, active_offset + delta)
                     elif not utility_view and not info:

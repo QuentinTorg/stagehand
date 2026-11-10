@@ -164,7 +164,7 @@ class LivePreview:
             self._invalidate_input()
             self.generation += 1
 
-    def scroll(self, delta, position=None):
+    def scroll(self, delta, position=None, *, wheel=False):
         with self.lock:
             if not delta or self.state["status"] != "live":
                 return
@@ -173,11 +173,11 @@ class LivePreview:
             if position is None:
                 position = (self.size[0] // 2, self.size[1] // 2)
             if self.pending_scroll:
-                previous, previous_position = self.pending_scroll[-1]
-                if previous_position == position and (previous < 0) == (delta < 0):
+                previous, previous_position, previous_wheel = self.pending_scroll[-1]
+                if previous_position == position and previous_wheel == wheel and (previous < 0) == (delta < 0):
                     self.pending_scroll.pop()
                     delta += previous
-            self.pending_scroll.append((max(-1000, min(1000, delta)), position))
+            self.pending_scroll.append((max(-1000, min(1000, delta)), position, wheel))
 
     def close(self):
         self.stopping.set()
@@ -280,15 +280,25 @@ class LivePreview:
                         with self.lock:
                             scrolled = False
                             if generation == self.generation and self.state["status"] == "live":
-                                while self.pending_scroll:
-                                    delta, (column, row) = self.pending_scroll.popleft()
+                                budget = 64
+                                while self.pending_scroll and budget:
+                                    delta, (column, row), wheel = self.pending_scroll.popleft()
+                                    count = min(abs(delta), budget) if wheel else 1
+                                    if wheel and count < abs(delta):
+                                        remainder = delta + count if delta < 0 else delta - count
+                                        self.pending_scroll.appendleft((remainder, (column, row), wheel))
+                                    budget -= count
                                     # Clamp to the dimensions sent to Herdr if a
                                     # resize occurred while the wheel was queued.
                                     value = {"type": "terminal.scroll", "direction": "up" if delta < 0 else "down",
-                                             "lines": abs(delta), "source": "wheel",
+                                             "lines": 1 if wheel else abs(delta), "source": "wheel",
                                              "column": max(0, min(size[0] - 1, column)),
                                              "row": max(0, min(size[1] - 1, row))}
-                                    process.stdin.write((json.dumps(value) + "\n").encode())
+                                    # Herdr's mouse-report route emits one event
+                                    # per command, ignoring `lines`. Coalesce UI
+                                    # redraws, not the source's wheel gestures.
+                                    data = (json.dumps(value) + "\n").encode()
+                                    process.stdin.write(data * count)
                                     scrolled = True
                         if scrolled:
                             await asyncio.wait_for(process.stdin.drain(), .5)

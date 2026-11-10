@@ -1,4 +1,4 @@
-"""Link targets follow rendered text; activation stays with the host terminal."""
+"""Link targets follow rendered text for both board and host activation."""
 
 import io
 import os
@@ -7,7 +7,7 @@ import select
 import subprocess
 import sys
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import board
@@ -21,6 +21,32 @@ def osc(url):
 
 
 class LinkTests(unittest.TestCase):
+    def test_click_hit_testing_uses_terminal_cells_and_never_opens_after_drag(self):
+        url = "https://example.com/pull/1"
+        line = board.StyledText("界e\u0301 link", [board.TerminalStyle()] * 4 + [board.TerminalStyle(hyperlink=url)] * 4)
+        for column in (4, 5, 6, 7):
+            selection = board.PreviewSelection([line], "view", column, 0)
+            self.assertEqual(selection.link(), url)
+        for column in (0, 1, 2, 3, 8):
+            self.assertIsNone(board.PreviewSelection([line], "view", column, 0).link())
+        selection.move(1, 0, 20)
+        selection.move(7, 0, 20)
+        self.assertIsNone(selection.link())
+        wide = board.StyledText("界", [board.TerminalStyle(hyperlink=url)])
+        self.assertEqual(board.PreviewSelection([wide], "view", 1, 0).link(), url)
+
+    def test_browser_activation_rejects_terminal_commands_and_reports_failure(self):
+        with patch.object(board.webbrowser, "open", return_value=True) as browser:
+            for url in ("https://example.com", "http://example.com", "file:///tmp/test.cc", "mailto:a@example.com"):
+                self.assertTrue(board.open_preview_link(url))
+                browser.assert_called_with(url, new=2)
+            browser.reset_mock()
+            for url in (None, "javascript:alert(1)", "command:run", "https://host/\x1b[2J"):
+                self.assertFalse(board.open_preview_link(url))
+            browser.assert_not_called()
+            browser.side_effect = OSError("No browser available")
+            self.assertFalse(board.open_preview_link("https://example.com"))
+
     def test_fragmented_utf8_and_control_strings(self):
         text, links = [], []
         stream = LinkStream(text.append, links.append)
