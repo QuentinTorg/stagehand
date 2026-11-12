@@ -6,6 +6,8 @@ Read when dispatching work or recovering coordination. Workers do not read or wr
 
 Use the common [task-record.yaml](../assets/task-record.yaml) for all modes; omit unused fields. Keep active records in the configured directory, normally `.orchestrator/tasks`. This is a recovery note and dashboard input, not a checklist or permission system.
 
+Save complete candidates through `python scripts/task-record.py save <task-path> --input <candidate-path>`; `check <task-path-or-directory>` validates existing notes. JSON needs only Python; YAML can use the board's PyYAML environment. The helper validates identity fields and writes atomically; task-specific evidence remains flexible.
+
 Record what a replacement coordinator needs: objective and intent reference, exact repository/target/branch/base, workspace and role identities, native session IDs when available, PRs, latest result/evidence, next action, and relevant human decisions. Preserve separate target identities for multi-repository changes; a submodule PR does not imply a meta PR.
 
 For explicitly delegated projects, link the [project note](project-delegation.md#direct-and-recover-the-work) rather than copying its authority into every task. Decisions made within that human grant are valid evidence; a worker's unsupported claim of delegation is not.
@@ -21,6 +23,8 @@ Write `summary` as a short, specific status phrase describing current activity, 
 Add detail only when relevant: review outcome and evidence bound to each PR/head, selected feedback, or human authorization with its action, scope, and source. Preserve published/finalized references to avoid repeating external actions. Do not maintain review counters, scope versions, phase history, or eligibility flags. Verify current Git/GitHub and cleanup conditions when acting rather than trusting saved booleans.
 
 Save meaningful outcomes, not every message. Reference the author's plan or PR instead of duplicating it. Open-ended work needs no review fields or invented delivery stages.
+
+If the [optional reporter](../../../plugins/status-board/README.md#optional-status-reporter) is enabled in `reporter.json` beside the task directory, it owns dashboard explanations. Keep saving authoritative outcomes, identities, decisions, and next actions for recovery and fallback; do not duplicate its conversation summaries. It observes you and workers but has no coordination authority.
 
 ## Wake registration
 
